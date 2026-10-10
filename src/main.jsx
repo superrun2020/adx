@@ -33,6 +33,16 @@ async function api(path, options = {}) {
 const money = value => `$${Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const number = value => Number(value || 0).toLocaleString('zh-CN');
 
+class PageErrorBoundary extends React.Component {
+  state = { error: null };
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error) { console.error('page_render_failed', error); }
+  render() {
+    if (this.state.error) return <Card title="页面加载失败" extra={<Button onClick={() => window.location.reload()}>刷新页面</Button>}><Alert type="error" showIcon message="页面组件发生异常" description="请刷新后重试；如果仍然失败，请把此页面截图和浏览器控制台错误发给技术人员。" /></Card>;
+    return this.props.children;
+  }
+}
+
 function Login({ onLogin }) {
   const [busy, setBusy] = useState(false);
   const submit = async values => {
@@ -97,10 +107,10 @@ function DataImport() {
 }
 
 function AdminUsers(){
-  const[items,setItems]=useState([]),[open,setOpen]=useState(false);const[form]=Form.useForm();const load=()=>api('/api/admin/users').then(r=>setItems(r.items));useEffect(()=>{load().catch(e=>message.error(e.message))},[]);
+  const[items,setItems]=useState([]),[open,setOpen]=useState(false),[loading,setLoading]=useState(true);const[form]=Form.useForm();const load=async()=>{setLoading(true);try{setItems((await api('/api/admin/users')).items)}catch(e){message.error(`管理员账户加载失败：${e.message}`)}finally{setLoading(false)}};useEffect(()=>{load()},[]);
   const save=async v=>{await api('/api/admin/users',{method:'POST',body:JSON.stringify(v)});message.success('管理员已创建');setOpen(false);load()};
   const reset=r=>Modal.confirm({title:`重置 ${r.name} 的密码`,content:<Input.Password id="admin-new-password" placeholder="至少10位"/>,onOk:async()=>{const password=document.getElementById('admin-new-password')?.value||'';await api(`/api/admin/users/${r.id}/password`,{method:'POST',body:JSON.stringify({password})});message.success('密码已更新')}});
-  return <Space direction="vertical" size={16} className="page-stack"><div className="page-heading"><div><Title level={2}>管理员账户</Title><Text type="secondary">管理后台账号与渠道账号分开维护</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={()=>setOpen(true)}>新增管理员</Button></div><Card><Table rowKey="id" dataSource={items} columns={[{title:'姓名',dataIndex:'name'},{title:'邮箱',dataIndex:'email'},{title:'状态',dataIndex:'status'},{title:'创建时间',dataIndex:'createdAt'},{title:'操作',render:(_,r)=><Button type="link" onClick={()=>reset(r)}>重置密码</Button>}]}/></Card><Drawer title="新增管理员" open={open} onClose={()=>setOpen(false)} width={480}><Form form={form} layout="vertical" onFinish={save}><Form.Item name="name" label="姓名" rules={[{required:true}]}><Input/></Form.Item><Form.Item name="email" label="登录邮箱" rules={[{required:true,type:'email'}]}><Input/></Form.Item><Form.Item name="password" label="初始密码" rules={[{required:true,min:10}]}><Input.Password/></Form.Item><Button type="primary" htmlType="submit">创建账户</Button></Form></Drawer></Space>;
+  return <Space direction="vertical" size={16} className="page-stack"><div className="page-heading"><div><Title level={2}>管理员账户</Title><Text type="secondary">管理后台账号与渠道账号分开维护</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={()=>setOpen(true)}>新增管理员</Button></div><Card><Table loading={loading} rowKey="id" dataSource={items} columns={[{title:'姓名',dataIndex:'name'},{title:'邮箱',dataIndex:'email'},{title:'状态',dataIndex:'status'},{title:'创建时间',dataIndex:'createdAt'},{title:'操作',render:(_,r)=><Button type="link" onClick={()=>reset(r)}>重置密码</Button>}]}/></Card><Drawer title="新增管理员" open={open} onClose={()=>setOpen(false)} width={480}><Form form={form} layout="vertical" onFinish={save}><Form.Item name="name" label="姓名" rules={[{required:true}]}><Input/></Form.Item><Form.Item name="email" label="登录邮箱" rules={[{required:true,type:'email'}]}><Input/></Form.Item><Form.Item name="password" label="初始密码" rules={[{required:true,min:10}]}><Input.Password/></Form.Item><Button type="primary" htmlType="submit">创建账户</Button></Form></Drawer></Space>;
 }
 
 function ApiDocs({ user }) { return <Space direction="vertical" size={16} className="page-stack"><div className="page-heading"><div><Title level={2}>渠道 API</Title><Text type="secondary">渠道密钥只允许读取本渠道授权数据</Text></div></div><Card><Typography><Title level={4}>认证</Title><pre>{`GET /api/public/channel/revenue\nAuthorization: Bearer YOUR_SECRET`}</pre><Title level={4}>查询参数</Title><p><code>start_date</code>、<code>end_date</code>、<code>page</code>、<code>page_size</code></p><Title level={4}>返回字段</Title><p>date、url、ad_unit、country、requests、matched_requests、impressions、clicks、revenue</p><Alert type="info" showIcon message={user.role==='admin'?'管理员可在渠道管理中轮换密钥':'当前接口只返回你的渠道数据与结算后收入'} /></Typography></Card></Space> }
@@ -115,7 +125,7 @@ function Shell({ user, onLogout }) {
     {type:'group',label:'开发能力',children:[{key:'api',icon:<ApiOutlined/>,label:'渠道 API'}]}
   ],[admin]);
   const body=view==='dashboard'?<Dashboard range={range} setRange={setRange} admin={admin}/>:view==='reports'?<Reports range={range} setRange={setRange} admin={admin}/>:view==='channels'?<Channels/>:view==='imports'?<DataImport/>:view==='admins'?<AdminUsers/>:<ApiDocs user={user}/>;
-  return <Layout className="app-shell"><Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={238}><div className="side-brand"><span>AX</span>{!collapsed&&<div><b>{admin?'AdX Control':'AdX Publisher'}</b><small>{admin?'平台管理端':'渠道工作台'}</small></div>}</div><Menu theme="dark" mode="inline" selectedKeys={[view]} items={menu} onClick={({key})=>setView(key)}/></Sider><Layout><Header><div><Text strong>{user.name||user.email}</Text><Tag color={admin?'blue':'cyan'}>{admin?'平台管理员':'渠道账号'}</Tag></div><Popconfirm title="确认退出登录？" onConfirm={onLogout}><Button icon={<LogoutOutlined/>}>退出</Button></Popconfirm></Header><Content>{body}</Content></Layout></Layout>;
+  return <Layout className="app-shell"><Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={238}><div className="side-brand"><span>AX</span>{!collapsed&&<div><b>{admin?'AdX Control':'AdX Publisher'}</b><small>{admin?'平台管理端':'渠道工作台'}</small></div>}</div><Menu theme="dark" mode="inline" selectedKeys={[view]} items={menu} onClick={({key})=>setView(key)}/></Sider><Layout><Header><div><Text strong>{user.name||user.email}</Text><Tag color={admin?'blue':'cyan'}>{admin?'平台管理员':'渠道账号'}</Tag></div><Popconfirm title="确认退出登录？" onConfirm={onLogout}><Button icon={<LogoutOutlined/>}>退出</Button></Popconfirm></Header><Content><PageErrorBoundary key={view}>{body}</PageErrorBoundary></Content></Layout></Layout>;
 }
 
 function Root() {
