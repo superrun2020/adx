@@ -50,6 +50,16 @@ CREATE TABLE IF NOT EXISTS channel_share_rules (
   effective_from TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(channel_id,scope_type,scope_value,effective_from), FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS ad_unit_creation_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, subdomains_json TEXT NOT NULL, inventory_types_json TEXT NOT NULL,
+  sizes_json TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS managed_ad_units (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL UNIQUE COLLATE NOCASE, name TEXT NOT NULL,
+  subdomain TEXT NOT NULL, inventory_type TEXT NOT NULL, size TEXT NOT NULL, source_row_json TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'planned' CHECK(status IN ('planned','created','failed')), provider_id TEXT,
+  created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL UNIQUE COLLATE NOCASE, name TEXT NOT NULL,
   password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','channel')), channel_id INTEGER,
@@ -188,6 +198,47 @@ function channelRuleShareSql(alias = 'revenue_facts') {
 }
 function settledRevenueSql(alias = 'revenue_facts') { return `(${alias}.revenue*(${upstreamShareSql(alias)}/100.0)*(${channelRuleShareSql(alias)}/100.0))`; }
 function mappedDomainSql(alias = 'revenue_facts') { return `COALESCE((SELECT m.domain FROM ad_unit_domains m WHERE lower(m.ad_unit)=lower(${alias}.ad_unit) LIMIT 1),${alias}.domain)`; }
+
+const builderAliases = {
+  subdomain: ['subdomain','sub_domain','domain','hostname','url','site','子域名','域名'],
+  inventoryType: ['inventory_type','ad_type','placement_type','type','广告位类型','广告类型','广告位'],
+  size: ['size','sizes','ad_size','dimensions','dimension','尺寸','广告尺寸'],
+  adUnit: ['ad_unit','adunit','ad_unit_name','广告单元','广告位名称']
+};
+function firstValue(row, keys) { const entry=Object.entries(row||{}).find(([key])=>keys.some(alias=>canonicalFieldName(key)===canonicalFieldName(alias))); return entry?.[1]; }
+function splitValues(value) { return Array.isArray(value) ? value.flatMap(splitValues) : String(value??'').split(/[;,|，、\n]+/).map(v=>v.trim()).filter(Boolean); }
+function normalizeSubdomain(value) { return normalizedDomain(String(value||'')); }
+function buildAdUnits(payload, rules={}) {
+  const rows=Array.isArray(payload)?payload:Array.isArray(payload?.data)?payload.data:Array.isArray(payload?.rows)?payload.rows:[];
+  const subdomains=(rules.subdomains||[]).map(normalizeSubdomain).filter(Boolean), types=(rules.inventoryTypes||[]).map(String).filter(Boolean), sizes=(rules.sizes||[]).map(String).filter(Boolean);
+  const result=[];
+  for(const row of rows){
+    const rawSubdomains=splitValues(firstValue(row,builderAliases.subdomain)).map(normalizeSubdomain).filter(Boolean);
+    const rowTypes=splitValues(firstValue(row,builderAliases.inventoryType));
+    const rowSizes=splitValues(firstValue(row,builderAliases.size));
+    const domains=subdomains.length?subdomains:(rawSubdomains.length?rawSubdomains:['unmapped']);
+    const selectedTypes=types.length?types:(rowTypes.length?rowTypes:['standard']);
+    const selectedSizes=sizes.length?sizes:(rowSizes.length?rowSizes:['responsive']);
+    for(const subdomain of domains) for(const inventoryType of selectedTypes) for(const size of selectedSizes) {
+      const code=`${subdomain}-${inventoryType}-${size}`.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,120);
+      result.push({code,name:`${subdomain} / ${inventoryType} / ${size}`,subdomain,inventoryType,size,sourceRow:row});
+    }
+  }
+  return [...new Map(result.map(item=>[item.code,item])).values()];
+}
+
+app.post('/api/admin/ad-units/preview', requireAuth, requireAdmin, (req,res) => {
+  const items=buildAdUnits(req.body?.payload,req.body?.rules); if(!items.length)return res.status(400).json({ok:false,error:'no_ad_units_detected'});
+  const existing=new Set(db.prepare('SELECT code FROM managed_ad_units').all().map(row=>row.code.toLowerCase()));
+  res.json({ok:true,total:items.length,duplicates:items.filter(item=>existing.has(item.code)).map(item=>item.code),items:items.slice(0,500)});
+});
+app.post('/api/admin/ad-units/create', requireAuth, requireAdmin, (req,res) => {
+  const items=Array.isArray(req.body?.items)?req.body.items:buildAdUnits(req.body?.payload,req.body?.rules); if(!items.length)return res.status(400).json({ok:false,error:'no_ad_units'});
+  const insert=db.prepare('INSERT OR IGNORE INTO managed_ad_units(code,name,subdomain,inventory_type,size,source_row_json,status,created_by) VALUES(?,?,?,?,?,?,?,?)');
+  const created=transaction(()=>items.reduce((count,item)=>count+Number(insert.run(item.code,item.name,item.subdomain,item.inventoryType,item.size,JSON.stringify(item.sourceRow||{}),'planned',req.user.email).changes),0));
+  audit(req.user.email,'ad_units.create','ad_unit_batch','',JSON.stringify({requested:items.length,created}),req.ip); res.status(201).json({ok:true,created,skipped:items.length-created,status:'planned',message:'已保存本地广告单元计划，等待 GAM API 授权后执行真实创建'});
+});
+app.get('/api/admin/ad-units', requireAuth, requireAdmin, (_req,res) => res.json({ok:true,items:db.prepare('SELECT id,code,name,subdomain,inventory_type inventoryType,size,status,provider_id providerId,created_at createdAt FROM managed_ad_units ORDER BY id DESC LIMIT 1000').all()}));
 
 app.get('/api/dashboard', requireAuth, (req, res) => {
   const scope = reportScope(req), { start, end } = range(req), where = whereScope(scope, start, end);
