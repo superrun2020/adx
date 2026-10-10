@@ -35,6 +35,21 @@ CREATE TABLE IF NOT EXISTS channel_share_versions (
   effective_from TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(channel_id,effective_from), FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS upstream_accounts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, account_key TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  name TEXT NOT NULL, share_percent REAL NOT NULL DEFAULT 100 CHECK(share_percent BETWEEN 0 AND 100),
+  status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS ad_unit_domains (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ad_unit TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  domain TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS channel_share_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, channel_id INTEGER NOT NULL, scope_type TEXT NOT NULL CHECK(scope_type IN ('account','ad_unit')),
+  scope_value TEXT NOT NULL COLLATE NOCASE, share_percent REAL NOT NULL CHECK(share_percent BETWEEN 0 AND 100),
+  effective_from TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(channel_id,scope_type,scope_value,effective_from), FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL UNIQUE COLLATE NOCASE, name TEXT NOT NULL,
   password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','channel')), channel_id INTEGER,
@@ -68,6 +83,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_revenue_scope_date ON revenue_facts(channel_id, report_date);
 CREATE INDEX IF NOT EXISTS idx_revenue_domain ON revenue_facts(domain, report_date);
+CREATE INDEX IF NOT EXISTS idx_revenue_account_unit ON revenue_facts(account, ad_unit, report_date);
 `);
 if (!db.prepare("SELECT 1 FROM pragma_table_info('revenue_facts') WHERE name='raw_json'").get()) {
   db.exec("ALTER TABLE revenue_facts ADD COLUMN raw_json TEXT NOT NULL DEFAULT '{}'");
@@ -165,17 +181,24 @@ function range(req) {
 }
 function whereScope(scope, start, end) { return { sql: `report_date BETWEEN ? AND ?${scope ? ' AND channel_id=?' : ''}`, params: scope ? [start, end, scope] : [start, end] }; }
 function effectiveShareSql(alias = 'revenue_facts') { return `(SELECT v.share_percent FROM channel_share_versions v WHERE v.channel_id=${alias}.channel_id AND v.effective_from<=${alias}.report_date ORDER BY v.effective_from DESC,v.id DESC LIMIT 1)`; }
+function upstreamShareSql(alias = 'revenue_facts') { return `COALESCE((SELECT u.share_percent FROM upstream_accounts u WHERE u.account_key=${alias}.account AND u.status='active' LIMIT 1),100)`; }
+function channelRuleShareSql(alias = 'revenue_facts') {
+  const fallback = effectiveShareSql(alias);
+  return `COALESCE((SELECT r.share_percent FROM channel_share_rules r WHERE r.channel_id=${alias}.channel_id AND r.scope_type='ad_unit' AND lower(r.scope_value)=lower(${alias}.ad_unit) AND r.effective_from<=${alias}.report_date ORDER BY r.effective_from DESC,r.id DESC LIMIT 1),(SELECT r.share_percent FROM channel_share_rules r WHERE r.channel_id=${alias}.channel_id AND r.scope_type='account' AND lower(r.scope_value)=lower(${alias}.account) AND r.effective_from<=${alias}.report_date ORDER BY r.effective_from DESC,r.id DESC LIMIT 1),${fallback})`;
+}
+function settledRevenueSql(alias = 'revenue_facts') { return `(${alias}.revenue*(${upstreamShareSql(alias)}/100.0)*(${channelRuleShareSql(alias)}/100.0))`; }
+function mappedDomainSql(alias = 'revenue_facts') { return `COALESCE((SELECT m.domain FROM ad_unit_domains m WHERE lower(m.ad_unit)=lower(${alias}.ad_unit) LIMIT 1),${alias}.domain)`; }
 
 app.get('/api/dashboard', requireAuth, (req, res) => {
   const scope = reportScope(req), { start, end } = range(req), where = whereScope(scope, start, end);
   const sums = db.prepare(`SELECT COALESCE(SUM(requests),0) requests,COALESCE(SUM(matched_requests),0) matched,COALESCE(SUM(impressions),0) impressions,COALESCE(SUM(clicks),0) clicks,COALESCE(SUM(revenue),0) revenue FROM revenue_facts WHERE ${where.sql}`).get(...where.params);
   const share = scope ? Number(db.prepare('SELECT share_percent FROM channels WHERE id=?').get(scope)?.share_percent || 0) : 100;
-  const effectiveShare = effectiveShareSql('revenue_facts');
-  const factor = req.user.role === 'channel' ? effectiveShare : '1';
-  const trend = db.prepare(`SELECT report_date date,ROUND(SUM(revenue*${factor}/100.0),6) revenue FROM revenue_facts WHERE ${where.sql} GROUP BY report_date ORDER BY report_date`).all(...where.params);
-  const topUrls = db.prepare(`SELECT url,ROUND(SUM(revenue*${factor}/100.0),6) revenue FROM revenue_facts WHERE ${where.sql} GROUP BY url ORDER BY revenue DESC LIMIT 10`).all(...where.params);
+  const settled = settledRevenueSql('revenue_facts');
+  const factor = req.user.role === 'channel' ? settled : 'revenue';
+  const trend = db.prepare(`SELECT report_date date,ROUND(SUM(${factor}),6) revenue FROM revenue_facts WHERE ${where.sql} GROUP BY report_date ORDER BY report_date`).all(...where.params);
+  const topUrls = db.prepare(`SELECT ${mappedDomainSql('revenue_facts')} url,ROUND(SUM(${factor}),6) revenue FROM revenue_facts WHERE ${where.sql} GROUP BY ${mappedDomainSql('revenue_facts')} ORDER BY revenue DESC LIMIT 10`).all(...where.params);
   const lastSync = db.prepare('SELECT created_at FROM import_runs ORDER BY id DESC LIMIT 1').get()?.created_at || null;
-  const settledRevenue = db.prepare(`SELECT COALESCE(SUM(r.revenue*${effectiveShareSql('r')}/100.0),0) value FROM revenue_facts r WHERE ${where.sql.replaceAll('report_date','r.report_date').replaceAll('channel_id','r.channel_id')}`).get(...where.params).value;
+  const settledRevenue = db.prepare(`SELECT COALESCE(SUM(${settledRevenueSql('r')}),0) value FROM revenue_facts r WHERE ${where.sql.replaceAll('report_date','r.report_date').replaceAll('channel_id','r.channel_id')}`).get(...where.params).value;
   res.json({ ok: true, summary: { ...sums, revenue: req.user.role === 'channel' ? settledRevenue : sums.revenue, channelRevenue: settledRevenue, matchRate: sums.requests ? sums.matched * 100 / sums.requests : 0 }, trend, topUrls, lastSync });
 });
 
@@ -184,13 +207,34 @@ app.get('/api/reports', requireAuth, (req, res) => {
   const requested = String(req.query.dimensions || 'date,url').split(',').filter(v => dimensionMap[v]);
   const dimensions = requested.length ? requested : ['date'];
   const scope = reportScope(req), { start, end } = range(req), where = whereScope(scope, start, end);
-  const select = dimensions.map(v => `${dimensionMap[v]} AS ${v}`).join(',');
-  const group = dimensions.map(v => dimensionMap[v]).join(',');
-  const effectiveShare = effectiveShareSql('revenue_facts');
-  const rows = db.prepare(`SELECT ${select},SUM(requests) requests,SUM(matched_requests) matchedRequests,SUM(impressions) impressions,SUM(clicks) clicks,ROUND(SUM(revenue),6) revenue,ROUND(SUM(revenue*${effectiveShare}/100.0),6) settledRevenue FROM revenue_facts WHERE ${where.sql} GROUP BY ${group} ORDER BY report_date DESC,revenue DESC LIMIT 5000`).all(...where.params);
+  const select = dimensions.map(v => v === 'url' ? `${mappedDomainSql('revenue_facts')} AS url` : `${dimensionMap[v]} AS ${v}`).join(',');
+  const group = dimensions.map(v => v === 'url' ? mappedDomainSql('revenue_facts') : dimensionMap[v]).join(',');
+  const settled = settledRevenueSql('revenue_facts');
+  const rows = db.prepare(`SELECT ${select},SUM(requests) requests,SUM(matched_requests) matchedRequests,SUM(impressions) impressions,SUM(clicks) clicks,ROUND(SUM(revenue),6) revenue,ROUND(SUM(revenue*${upstreamShareSql('revenue_facts')}/100.0),6) upstreamRevenue,ROUND(SUM(${settled}),6) settledRevenue,ROUND(AVG(${upstreamShareSql('revenue_facts')}),2) upstreamSharePercent,ROUND(AVG(${channelRuleShareSql('revenue_facts')}),2) channelSharePercent FROM revenue_facts WHERE ${where.sql} GROUP BY ${group} ORDER BY report_date DESC,revenue DESC LIMIT 5000`).all(...where.params);
   const share = scope ? Number(db.prepare('SELECT share_percent FROM channels WHERE id=?').get(scope)?.share_percent || 0) : 100;
-  res.json({ ok: true, items: rows.map(r => { const settled=scope?r.revenue*share/100:r.settledRevenue; const {settledRevenue:_,...publicRow}=r; return { ...publicRow, revenue:req.user.role==='channel'?settled:r.revenue, channelRevenue:settled, matchRate:r.requests?r.matchedRequests*100/r.requests:0 }; }) });
+  res.json({ ok: true, items: rows.map(r => { const settled=scope?r.settledRevenue:r.settledRevenue; const {settledRevenue:_,...publicRow}=r; return { ...publicRow, revenue:req.user.role==='channel'?settled:r.revenue, upstreamRevenue:req.user.role==='channel'?undefined:r.upstreamRevenue, channelRevenue:settled, matchRate:r.requests?r.matchedRequests*100/r.requests:0 }; }) });
 });
+
+app.get('/api/admin/upstream-accounts', requireAuth, requireAdmin, (_req,res) => res.json({ ok:true, items:db.prepare('SELECT id,account_key accountKey,name,share_percent sharePercent,status,created_at createdAt,updated_at updatedAt FROM upstream_accounts ORDER BY account_key').all() }));
+app.post('/api/admin/upstream-accounts', requireAuth, requireAdmin, (req,res) => {
+  const accountKey=String(req.body?.accountKey||'').trim(), name=String(req.body?.name||accountKey).trim(), share=Number(req.body?.sharePercent);
+  if(!accountKey||!name||!Number.isFinite(share)||share<0||share>100)return res.status(400).json({ok:false,error:'invalid_upstream_account'});
+  try { const r=db.prepare('INSERT INTO upstream_accounts(account_key,name,share_percent,status) VALUES(?,?,?,?)').run(accountKey,name,share,'active'); audit(req.user.email,'upstream_account.create','upstream_account',r.lastInsertRowid,JSON.stringify({accountKey,name,share}),req.ip); res.status(201).json({ok:true,item:db.prepare('SELECT id,account_key accountKey,name,share_percent sharePercent,status FROM upstream_accounts WHERE id=?').get(r.lastInsertRowid)}); } catch { res.status(409).json({ok:false,error:'account_exists'}); }
+});
+app.put('/api/admin/upstream-accounts/:id', requireAuth, requireAdmin, (req,res) => {
+  const id=Number(req.params.id), name=String(req.body?.name||'').trim(), share=Number(req.body?.sharePercent), status=req.body?.status==='disabled'?'disabled':'active';
+  if(!Number.isSafeInteger(id)||!name||!Number.isFinite(share)||share<0||share>100)return res.status(400).json({ok:false,error:'invalid_upstream_account'});
+  const before=db.prepare('SELECT * FROM upstream_accounts WHERE id=?').get(id); if(!before)return res.status(404).json({ok:false,error:'upstream_account_not_found'});
+  db.prepare('UPDATE upstream_accounts SET name=?,share_percent=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(name,share,status,id); const after=db.prepare('SELECT id,account_key accountKey,name,share_percent sharePercent,status FROM upstream_accounts WHERE id=?').get(id); audit(req.user.email,'upstream_account.update','upstream_account',id,JSON.stringify({before,after}),req.ip); res.json({ok:true,item:after});
+});
+app.get('/api/admin/ad-unit-domains', requireAuth, requireAdmin, (_req,res) => res.json({ok:true,items:db.prepare('SELECT id,ad_unit adUnit,domain,created_by createdBy,created_at createdAt,updated_at updatedAt FROM ad_unit_domains ORDER BY ad_unit').all()}));
+app.post('/api/admin/ad-unit-domains', requireAuth, requireAdmin, (req,res) => {
+  const adUnit=String(req.body?.adUnit||'').trim(), domain=normalizedDomain(req.body?.domain); if(!adUnit||!domain)return res.status(400).json({ok:false,error:'invalid_ad_unit_domain'});
+  try { const r=db.prepare('INSERT INTO ad_unit_domains(ad_unit,domain,created_by) VALUES(?,?,?)').run(adUnit,domain,req.user.email); audit(req.user.email,'ad_unit_domain.create','ad_unit_domain',r.lastInsertRowid,JSON.stringify({adUnit,domain}),req.ip); res.status(201).json({ok:true,item:db.prepare('SELECT id,ad_unit adUnit,domain FROM ad_unit_domains WHERE id=?').get(r.lastInsertRowid)}); } catch { res.status(409).json({ok:false,error:'ad_unit_exists'}); }
+});
+app.put('/api/admin/ad-unit-domains/:id', requireAuth, requireAdmin, (req,res) => { const id=Number(req.params.id), domain=normalizedDomain(req.body?.domain); if(!Number.isSafeInteger(id)||!domain)return res.status(400).json({ok:false,error:'invalid_ad_unit_domain'}); const before=db.prepare('SELECT * FROM ad_unit_domains WHERE id=?').get(id); if(!before)return res.status(404).json({ok:false,error:'ad_unit_domain_not_found'}); db.prepare('UPDATE ad_unit_domains SET domain=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(domain,id); const after=db.prepare('SELECT id,ad_unit adUnit,domain FROM ad_unit_domains WHERE id=?').get(id); audit(req.user.email,'ad_unit_domain.update','ad_unit_domain',id,JSON.stringify({before,after}),req.ip); res.json({ok:true,item:after}); });
+app.get('/api/admin/share-rules', requireAuth, requireAdmin, (req,res) => { const channelId=Number(req.query.channelId||0); const where=channelId?'WHERE r.channel_id=?':''; res.json({ok:true,items:db.prepare(`SELECT r.id,r.channel_id channelId,c.name channelName,r.scope_type scopeType,r.scope_value scopeValue,r.share_percent sharePercent,r.effective_from effectiveFrom,r.created_by createdBy FROM channel_share_rules r JOIN channels c ON c.id=r.channel_id ${where} ORDER BY r.effective_from DESC,r.id DESC`).all(...(channelId?[channelId]:[]))}); });
+app.post('/api/admin/share-rules', requireAuth, requireAdmin, (req,res) => { const channelId=Number(req.body?.channelId), scopeType=String(req.body?.scopeType||''), scopeValue=String(req.body?.scopeValue||'').trim(), share=Number(req.body?.sharePercent), effectiveFrom=String(req.body?.effectiveFrom||new Date().toISOString().slice(0,10)); if(!Number.isSafeInteger(channelId)||!['account','ad_unit'].includes(scopeType)||!scopeValue||!Number.isFinite(share)||share<0||share>100||!validDate(effectiveFrom)||!db.prepare('SELECT id FROM channels WHERE id=?').get(channelId))return res.status(400).json({ok:false,error:'invalid_share_rule'}); try { const r=db.prepare('INSERT INTO channel_share_rules(channel_id,scope_type,scope_value,share_percent,effective_from,created_by) VALUES(?,?,?,?,?,?)').run(channelId,scopeType,scopeValue,share,effectiveFrom,req.user.email); audit(req.user.email,'share_rule.create','share_rule',r.lastInsertRowid,JSON.stringify({channelId,scopeType,scopeValue,share,effectiveFrom}),req.ip); res.status(201).json({ok:true,id:r.lastInsertRowid}); } catch { res.status(409).json({ok:false,error:'share_rule_exists'}); } });
 
 app.get('/api/admin/channels', requireAuth, requireAdmin, (_req, res) => {
   const items = db.prepare(`SELECT c.id,c.name,c.email,c.share_percent sharePercent,c.status,c.created_at createdAt,
@@ -316,7 +360,7 @@ app.get('/api/public/channel/revenue', (req,res)=>{
   const start=validDate(req.query.start_date)?req.query.start_date:new Date(Date.now()-2*86400000).toISOString().slice(0,10), end=validDate(req.query.end_date)?req.query.end_date:new Date().toISOString().slice(0,10); const page=Math.max(1,Number(req.query.page||1)),pageSize=Math.min(5000,Math.max(1,Number(req.query.page_size||500))); if(Date.parse(end)-Date.parse(start)>90*86400000)return res.status(400).json({code:400,msg:'日期跨度不能超过90天'});
   const total=db.prepare('SELECT COUNT(*) n FROM revenue_facts WHERE channel_id=? AND report_date BETWEEN ? AND ?').get(channel.id,start,end).n;
   const shareSql = effectiveShareSql('revenue_facts');
-  const rows=db.prepare(`SELECT report_date date,url,ad_unit,country,requests,matched_requests,impressions,clicks,ROUND(revenue*${shareSql}/100.0,6) revenue FROM revenue_facts WHERE channel_id=? AND report_date BETWEEN ? AND ? ORDER BY url,ad_unit LIMIT ? OFFSET ?`).all(channel.id,start,end,pageSize,(page-1)*pageSize);
+  const rows=db.prepare(`SELECT report_date date,${mappedDomainSql('revenue_facts')} url,ad_unit,country,account,requests,matched_requests,impressions,clicks,ROUND(${settledRevenueSql('revenue_facts')},6) revenue FROM revenue_facts WHERE channel_id=? AND report_date BETWEEN ? AND ? ORDER BY url,ad_unit LIMIT ? OFFSET ?`).all(channel.id,start,end,pageSize,(page-1)*pageSize);
   audit(channel.email,'api.revenue','channel',channel.id,JSON.stringify({start,end,page,pageSize}),'api'); res.json({code:0,msg:'ok',data:rows,meta:{total,page,page_size:pageSize}});
 });
 

@@ -123,3 +123,20 @@ test('administrator dashboard uses each channel share for settlement totals', as
   assert.equal(dashboard.body.summary.revenue, 20);
   assert.equal(dashboard.body.summary.channelRevenue, 15);
 });
+
+test('upstream account and ad unit rules calculate layered settlement and mapped domain', async () => {
+  cookie = '';
+  const login = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: 'admin@example.test', password: 'AdminPass123!' }) });
+  cookie = login.response.headers.get('set-cookie').split(';')[0];
+  const channelId = (await request('/api/admin/channels')).body.items[0].id;
+  assert.equal((await request('/api/admin/upstream-accounts', { method: 'POST', body: JSON.stringify({ accountKey: 'acct-layered', name: '上游账户', sharePercent: 60 }) })).response.status, 201);
+  assert.equal((await request('/api/admin/ad-unit-domains', { method: 'POST', body: JSON.stringify({ adUnit: 'unit-layered', domain: 'https://mapped.example.com/path' }) })).response.status, 201);
+  assert.equal((await request('/api/admin/share-rules', { method: 'POST', body: JSON.stringify({ channelId, scopeType: 'ad_unit', scopeValue: 'unit-layered', sharePercent: 50, effectiveFrom: '2026-10-10' }) })).response.status, 201);
+  const imported = await request('/api/admin/imports', { method: 'POST', body: JSON.stringify({ channelId, fileName: 'layered.json', payload: [{ date: '2026-10-10', account: 'acct-layered', ad_unit: 'unit-layered', url: '', revenue: 100 }] }) });
+  assert.equal(imported.body.accepted, 1);
+  const report = await request('/api/reports?start=2026-10-10&end=2026-10-10&dimensions=adUnit,url');
+  assert.equal(report.body.items[0].url, 'mapped.example.com');
+  assert.equal(report.body.items[0].revenue, 100);
+  assert.equal(report.body.items[0].upstreamRevenue, 60);
+  assert.equal(report.body.items[0].channelRevenue, 30);
+});
