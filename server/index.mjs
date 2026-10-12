@@ -31,7 +31,7 @@ function transaction(fn) {
 db.exec(`
 CREATE TABLE IF NOT EXISTS channels (
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  share_percent REAL NOT NULL DEFAULT 100 CHECK(share_percent BETWEEN 0 AND 100), status TEXT NOT NULL DEFAULT 'active',
+  share_percent REAL NOT NULL DEFAULT 100 CHECK(share_percent BETWEEN 0 AND 100), status TEXT NOT NULL DEFAULT 'active', api_secret_ciphertext TEXT,
   api_secret_hash TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS channel_share_versions (
@@ -121,6 +121,7 @@ CREATE INDEX IF NOT EXISTS idx_revenue_scope_date ON revenue_facts(channel_id, r
 CREATE INDEX IF NOT EXISTS idx_revenue_domain ON revenue_facts(domain, report_date);
 CREATE INDEX IF NOT EXISTS idx_revenue_account_unit ON revenue_facts(account, ad_unit, report_date);
 `);
+try { db.exec('ALTER TABLE channels ADD COLUMN api_secret_ciphertext TEXT'); } catch (error) { if (!String(error.message).includes('duplicate column')) throw error; }
 for (const column of ['description','adsense_enabled','placement','target_window','label']) {
   if (!db.prepare(`SELECT 1 FROM pragma_table_info('managed_ad_units') WHERE name=?`).get(column)) db.exec(`ALTER TABLE managed_ad_units ADD COLUMN ${column} ${column==='adsense_enabled'?'INTEGER NOT NULL DEFAULT 0':'TEXT NOT NULL DEFAULT \'\''}`);
 }
@@ -458,12 +459,13 @@ app.post('/api/admin/channels', requireAuth, requireAdmin, (req, res) => {
   const name = String(req.body?.name || '').trim(), email = normalizeEmail(req.body?.email), password = String(req.body?.password || ''), share = Number(req.body?.sharePercent);
   if (!name || !email || password.length < 10 || !Number.isFinite(share) || share < 0 || share > 100) return res.status(400).json({ ok: false, error: 'invalid_channel' });
   const tx = () => transaction(() => {
-    const result = db.prepare('INSERT INTO channels(name,email,share_percent,status) VALUES(?,?,?,?)').run(name, email, share, req.body?.status === 'disabled' ? 'disabled' : 'active');
+    const secret = `adx_${crypto.randomBytes(24).toString('base64url')}`;
+    const result = db.prepare('INSERT INTO channels(name,email,share_percent,status,api_secret_hash,api_secret_ciphertext) VALUES(?,?,?,?,?,?)').run(name, email, share, req.body?.status === 'disabled' ? 'disabled' : 'active', sha256(secret), encryptCredential({ secret }));
     db.prepare("INSERT INTO channel_share_versions(channel_id,share_percent,effective_from,created_by) VALUES(?,?,?,?)").run(result.lastInsertRowid, share, '1900-01-01', req.user.email);
     db.prepare("INSERT INTO users(email,name,password_hash,role,channel_id,status) VALUES(?,?,?,'channel',?,?)").run(email, name, passwordHash(password), result.lastInsertRowid, req.body?.status === 'disabled' ? 'disabled' : 'active');
-    return Number(result.lastInsertRowid);
+    return { id: Number(result.lastInsertRowid), secret };
   });
-  try { const id = tx(); audit(req.user.email, 'channel.create', 'channel', id, JSON.stringify({ name, email, share }), req.ip); res.status(201).json({ ok: true, channel: db.prepare('SELECT id,name,email,share_percent sharePercent,status FROM channels WHERE id=?').get(id) }); }
+  try { const created = tx(); audit(req.user.email, 'channel.create', 'channel', created.id, JSON.stringify({ name, email, share }), req.ip); res.status(201).json({ ok: true, channel: db.prepare('SELECT id,name,email,share_percent sharePercent,status FROM channels WHERE id=?').get(created.id), secret: created.secret }); }
   catch (error) { res.status(error.code === 'ERR_SQLITE_CONSTRAINT_UNIQUE' ? 409 : 500).json({ ok: false, error: error.code === 'ERR_SQLITE_CONSTRAINT_UNIQUE' ? 'email_exists' : 'save_failed' }); }
 });
 app.put('/api/admin/channels/:id', requireAuth, requireAdmin, (req, res) => {
@@ -484,9 +486,16 @@ app.post('/api/admin/channels/:id/password', requireAuth, requireAdmin, (req, re
 });
 app.post('/api/admin/channels/:id/api-secret', requireAuth, requireAdmin, (req, res) => {
   const id = Number(req.params.id), secret = `adx_${crypto.randomBytes(24).toString('base64url')}`;
-  const result = db.prepare('UPDATE channels SET api_secret_hash=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(sha256(secret), id);
+  const result = db.prepare('UPDATE channels SET api_secret_hash=?,api_secret_ciphertext=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(sha256(secret), encryptCredential({ secret }), id);
   if (!result.changes) return res.status(404).json({ ok: false, error: 'channel_not_found' });
   audit(req.user.email, 'channel.api_secret_rotate', 'channel', id, '', req.ip); res.json({ ok: true, secret });
+});
+app.get('/api/channel/api-secret', requireAuth, (req, res) => {
+  if (req.user.role !== 'channel' || !req.user.channel_id) return res.status(403).json({ ok: false, error: 'channel_only' });
+  const row = db.prepare('SELECT api_secret_ciphertext FROM channels WHERE id=?').get(req.user.channel_id);
+  if (!row?.api_secret_ciphertext) return res.status(404).json({ ok: false, error: 'api_secret_not_generated' });
+  const value = decryptCredential(row.api_secret_ciphertext);
+  res.json({ ok: true, secret: value.secret });
 });
 
 app.get('/api/admin/users', requireAuth, requireAdmin, (_req, res) => res.json({ ok: true, items: db.prepare("SELECT id,email,name,status,created_at createdAt FROM users WHERE role='admin' ORDER BY id").all() }));

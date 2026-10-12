@@ -6,7 +6,7 @@ import {
   Tag, Typography, message
 } from 'antd';
 import {
-  ApiOutlined, BarChartOutlined, DashboardOutlined, DollarOutlined, KeyOutlined,
+  ApiOutlined, BarChartOutlined, CopyOutlined, DashboardOutlined, DollarOutlined, KeyOutlined,
   LogoutOutlined, PlusOutlined, ReloadOutlined, SafetyOutlined, TeamOutlined,
   UploadOutlined, UserSwitchOutlined
 } from '@ant-design/icons';
@@ -154,7 +154,12 @@ function AdminUsers(){
   return <Space direction="vertical" size={16} className="page-stack"><div className="page-heading"><div><Title level={2}>管理员账户</Title><Text type="secondary">管理后台账号与渠道账号分开维护</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={()=>setOpen(true)}>新增管理员</Button></div><Card><Table loading={loading} rowKey="id" dataSource={items} columns={[{title:'姓名',dataIndex:'name'},{title:'邮箱',dataIndex:'email'},{title:'状态',dataIndex:'status'},{title:'创建时间',dataIndex:'createdAt'},{title:'操作',render:(_,r)=><Button type="link" onClick={()=>reset(r)}>重置密码</Button>}]}/></Card><Drawer title="新增管理员" open={open} onClose={()=>setOpen(false)} width={480}><Form form={form} layout="vertical" onFinish={save}><Form.Item name="name" label="姓名" rules={[{required:true}]}><Input/></Form.Item><Form.Item name="email" label="登录邮箱" rules={[{required:true,type:'email'}]}><Input/></Form.Item><Form.Item name="password" label="初始密码" rules={[{required:true,min:10}]}><Input.Password/></Form.Item><Button type="primary" htmlType="submit">创建账户</Button></Form></Drawer></Space>;
 }
 
-function ApiDocs({ user }) { return <Space direction="vertical" size={16} className="page-stack"><div className="page-heading"><div><Title level={2}>渠道 API</Title><Text type="secondary">渠道密钥只允许读取本渠道授权数据</Text></div></div><Card title="认证方式"><Title level={4}>请求地址</Title><pre>{`GET /api/public/channel/revenue\nAuthorization: Bearer YOUR_SECRET`}</pre><Title level={4}>查询参数</Title><Space wrap><Tag>start_date</Tag><Tag>end_date</Tag><Tag>page</Tag><Tag>page_size</Tag></Space><Title level={4} style={{marginTop:20}}>返回字段</Title><Text>date、url、ad_unit、country、requests、matched_requests、impressions、clicks、revenue</Text><Alert style={{marginTop:20}} type="info" showIcon message={user?.role==='admin'?'管理员可在渠道管理中轮换密钥':'当前接口只返回你的渠道数据与结算后收入'} /></Card></Space> }
+function ApiDocs({ user }) {
+  const [secret,setSecret]=useState(''),[loading,setLoading]=useState(false);
+  useEffect(()=>{if(user?.role!=='channel')return;setLoading(true);api('/api/channel/api-secret').then(r=>setSecret(r.secret||'')).catch(e=>message.error(`API 密钥加载失败：${e.message}`)).finally(()=>setLoading(false))},[user]);
+  const copy=async()=>{try{await navigator.clipboard.writeText(secret);message.success('API 密钥已复制')}catch{message.error('复制失败，请手动复制')}};
+  return <Space direction="vertical" size={16} className="page-stack"><div className="page-heading"><div><Title level={2}>渠道 API</Title><Text type="secondary">渠道密钥只允许读取本渠道授权数据</Text></div></div><Card title="专用 API Key">{user?.role==='channel'?<Space direction="vertical" style={{width:'100%'}}><Text type="secondary">这是当前渠道专用的 API Key，仅能查询本渠道结算数据。</Text><Input.Password value={secret} readOnly loading={loading} addonAfter={<Button type="text" icon={<CopyOutlined/>} disabled={!secret} onClick={copy}>复制</Button>} placeholder="尚未生成，请联系管理员"/></Space>:<Alert type="info" showIcon message="管理员请在渠道管理中创建或轮换渠道 API Key"/>}</Card><Card title="认证方式"><Title level={4}>请求地址</Title><pre>{`GET /api/public/channel/revenue\nAuthorization: Bearer YOUR_SECRET`}</pre><Title level={4}>查询参数</Title><Space wrap><Tag>start_date</Tag><Tag>end_date</Tag><Tag>page</Tag><Tag>page_size</Tag></Space><Title level={4} style={{marginTop:20}}>返回字段</Title><Text>date、url、ad_unit、country、requests、matched_requests、impressions、clicks、revenue</Text><Alert style={{marginTop:20}} type="info" showIcon message={user?.role==='admin'?'管理员可在渠道管理中轮换密钥':'当前接口只返回你的渠道数据与结算后收入'} /></Card></Space>
+}
 
 function Shell({ user, onLogout }) {
   const [view,setView]=useState('dashboard'); const [collapsed,setCollapsed]=useState(false); const [range,setRange]=useState([dayjs().startOf('month'),dayjs()]);
