@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS channel_share_versions (
 );
 CREATE TABLE IF NOT EXISTS upstream_accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT, account_key TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  name TEXT NOT NULL, share_percent REAL NOT NULL DEFAULT 100 CHECK(share_percent BETWEEN 0 AND 100),
+  name TEXT NOT NULL, soap_account_id INTEGER, share_percent REAL NOT NULL DEFAULT 100 CHECK(share_percent BETWEEN 0 AND 100),
   status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS ad_unit_domains (
@@ -49,6 +49,14 @@ CREATE TABLE IF NOT EXISTS channel_share_rules (
   scope_value TEXT NOT NULL COLLATE NOCASE, share_percent REAL NOT NULL CHECK(share_percent BETWEEN 0 AND 100),
   effective_from TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(channel_id,scope_type,scope_value,effective_from), FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS channel_domain_share_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, upstream_account_id INTEGER NOT NULL, channel_id INTEGER NOT NULL,
+  domain TEXT NOT NULL COLLATE NOCASE, share_percent REAL NOT NULL CHECK(share_percent BETWEEN 0 AND 100),
+  effective_from TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(upstream_account_id,channel_id,domain,effective_from),
+  FOREIGN KEY(upstream_account_id) REFERENCES upstream_accounts(id) ON DELETE CASCADE,
+  FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS ad_unit_creation_rules (
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, subdomains_json TEXT NOT NULL, inventory_types_json TEXT NOT NULL,
@@ -102,6 +110,7 @@ CREATE INDEX IF NOT EXISTS idx_revenue_scope_date ON revenue_facts(channel_id, r
 CREATE INDEX IF NOT EXISTS idx_revenue_domain ON revenue_facts(domain, report_date);
 CREATE INDEX IF NOT EXISTS idx_revenue_account_unit ON revenue_facts(account, ad_unit, report_date);
 `);
+if (!db.prepare("SELECT 1 FROM pragma_table_info('upstream_accounts') WHERE name='soap_account_id'").get()) db.exec('ALTER TABLE upstream_accounts ADD COLUMN soap_account_id INTEGER');
 if (!db.prepare("SELECT 1 FROM pragma_table_info('revenue_facts') WHERE name='raw_json'").get()) {
   db.exec("ALTER TABLE revenue_facts ADD COLUMN raw_json TEXT NOT NULL DEFAULT '{}'");
 }
@@ -352,11 +361,11 @@ app.get('/api/reports', requireAuth, (req, res) => {
   res.json({ ok: true, items: rows.map(r => { const settled=scope?r.settledRevenue:r.settledRevenue; const {settledRevenue:_,...publicRow}=r; return { ...publicRow, revenue:req.user.role==='channel'?settled:r.revenue, upstreamRevenue:req.user.role==='channel'?undefined:r.upstreamRevenue, channelRevenue:settled, matchRate:r.requests?r.matchedRequests*100/r.requests:0 }; }) });
 });
 
-app.get('/api/admin/upstream-accounts', requireAuth, requireAdmin, (_req,res) => res.json({ ok:true, items:db.prepare('SELECT id,account_key accountKey,name,share_percent sharePercent,status,created_at createdAt,updated_at updatedAt FROM upstream_accounts ORDER BY account_key').all() }));
+app.get('/api/admin/upstream-accounts', requireAuth, requireAdmin, (_req,res) => res.json({ ok:true, items:db.prepare('SELECT u.id,u.account_key accountKey,u.name,u.soap_account_id soapAccountId,s.name soapAccountName,s.network_code networkCode,u.share_percent sharePercent,u.status,u.created_at createdAt,u.updated_at updatedAt FROM upstream_accounts u LEFT JOIN soap_accounts s ON s.id=u.soap_account_id ORDER BY u.account_key').all() }));
 app.post('/api/admin/upstream-accounts', requireAuth, requireAdmin, (req,res) => {
-  const accountKey=String(req.body?.accountKey||'').trim(), name=String(req.body?.name||accountKey).trim(), share=Number(req.body?.sharePercent);
-  if(!accountKey||!name||!Number.isFinite(share)||share<0||share>100)return res.status(400).json({ok:false,error:'invalid_upstream_account'});
-  try { const r=db.prepare('INSERT INTO upstream_accounts(account_key,name,share_percent,status) VALUES(?,?,?,?)').run(accountKey,name,share,'active'); audit(req.user.email,'upstream_account.create','upstream_account',r.lastInsertRowid,JSON.stringify({accountKey,name,share}),req.ip); res.status(201).json({ok:true,item:db.prepare('SELECT id,account_key accountKey,name,share_percent sharePercent,status FROM upstream_accounts WHERE id=?').get(r.lastInsertRowid)}); } catch { res.status(409).json({ok:false,error:'account_exists'}); }
+  const accountKey=String(req.body?.accountKey||'').trim(), name=String(req.body?.name||accountKey).trim(), share=Number(req.body?.sharePercent), soapAccountId=Number(req.body?.soapAccountId)||null;
+  if(!accountKey||!name||!Number.isFinite(share)||share<0||share>100||(soapAccountId&&!db.prepare('SELECT id FROM soap_accounts WHERE id=?').get(soapAccountId)))return res.status(400).json({ok:false,error:'invalid_upstream_account'});
+  try { const r=db.prepare('INSERT INTO upstream_accounts(account_key,name,soap_account_id,share_percent,status) VALUES(?,?,?,?,?)').run(accountKey,name,soapAccountId,share,'active'); audit(req.user.email,'upstream_account.create','upstream_account',r.lastInsertRowid,JSON.stringify({accountKey,name,soapAccountId,share}),req.ip); res.status(201).json({ok:true,item:db.prepare('SELECT id,account_key accountKey,name,soap_account_id soapAccountId,share_percent sharePercent,status FROM upstream_accounts WHERE id=?').get(r.lastInsertRowid)}); } catch { res.status(409).json({ok:false,error:'account_exists'}); }
 });
 app.put('/api/admin/upstream-accounts/:id', requireAuth, requireAdmin, (req,res) => {
   const id=Number(req.params.id), name=String(req.body?.name||'').trim(), share=Number(req.body?.sharePercent), status=req.body?.status==='disabled'?'disabled':'active';
@@ -372,6 +381,8 @@ app.post('/api/admin/ad-unit-domains', requireAuth, requireAdmin, (req,res) => {
 app.put('/api/admin/ad-unit-domains/:id', requireAuth, requireAdmin, (req,res) => { const id=Number(req.params.id), domain=normalizedDomain(req.body?.domain); if(!Number.isSafeInteger(id)||!domain)return res.status(400).json({ok:false,error:'invalid_ad_unit_domain'}); const before=db.prepare('SELECT * FROM ad_unit_domains WHERE id=?').get(id); if(!before)return res.status(404).json({ok:false,error:'ad_unit_domain_not_found'}); db.prepare('UPDATE ad_unit_domains SET domain=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(domain,id); const after=db.prepare('SELECT id,ad_unit adUnit,domain FROM ad_unit_domains WHERE id=?').get(id); audit(req.user.email,'ad_unit_domain.update','ad_unit_domain',id,JSON.stringify({before,after}),req.ip); res.json({ok:true,item:after}); });
 app.get('/api/admin/share-rules', requireAuth, requireAdmin, (req,res) => { const channelId=Number(req.query.channelId||0); const where=channelId?'WHERE r.channel_id=?':''; res.json({ok:true,items:db.prepare(`SELECT r.id,r.channel_id channelId,c.name channelName,r.scope_type scopeType,r.scope_value scopeValue,r.share_percent sharePercent,r.effective_from effectiveFrom,r.created_by createdBy FROM channel_share_rules r JOIN channels c ON c.id=r.channel_id ${where} ORDER BY r.effective_from DESC,r.id DESC`).all(...(channelId?[channelId]:[]))}); });
 app.post('/api/admin/share-rules', requireAuth, requireAdmin, (req,res) => { const channelId=Number(req.body?.channelId), scopeType=String(req.body?.scopeType||''), scopeValue=String(req.body?.scopeValue||'').trim(), share=Number(req.body?.sharePercent), effectiveFrom=String(req.body?.effectiveFrom||new Date().toISOString().slice(0,10)); if(!Number.isSafeInteger(channelId)||!['account','ad_unit'].includes(scopeType)||!scopeValue||!Number.isFinite(share)||share<0||share>100||!validDate(effectiveFrom)||!db.prepare('SELECT id FROM channels WHERE id=?').get(channelId))return res.status(400).json({ok:false,error:'invalid_share_rule'}); try { const r=db.prepare('INSERT INTO channel_share_rules(channel_id,scope_type,scope_value,share_percent,effective_from,created_by) VALUES(?,?,?,?,?,?)').run(channelId,scopeType,scopeValue,share,effectiveFrom,req.user.email); audit(req.user.email,'share_rule.create','share_rule',r.lastInsertRowid,JSON.stringify({channelId,scopeType,scopeValue,share,effectiveFrom}),req.ip); res.status(201).json({ok:true,id:r.lastInsertRowid}); } catch { res.status(409).json({ok:false,error:'share_rule_exists'}); } });
+app.get('/api/admin/domain-share-rules', requireAuth, requireAdmin, (_req,res) => res.json({ok:true,items:db.prepare('SELECT r.id,r.upstream_account_id upstreamAccountId,u.name upstreamAccountName,r.channel_id channelId,c.name channelName,r.domain,r.share_percent sharePercent,r.effective_from effectiveFrom FROM channel_domain_share_rules r JOIN upstream_accounts u ON u.id=r.upstream_account_id JOIN channels c ON c.id=r.channel_id ORDER BY r.effective_from DESC,r.id DESC').all()}));
+app.post('/api/admin/domain-share-rules', requireAuth, requireAdmin, (req,res) => { const upstreamAccountId=Number(req.body?.upstreamAccountId),channelId=Number(req.body?.channelId),domain=normalizedDomain(req.body?.domain),share=Number(req.body?.sharePercent),effectiveFrom=String(req.body?.effectiveFrom||new Date().toISOString().slice(0,10)); if(!Number.isSafeInteger(upstreamAccountId)||!Number.isSafeInteger(channelId)||!domain||!Number.isFinite(share)||share<0||share>100||!validDate(effectiveFrom)||!db.prepare('SELECT id FROM upstream_accounts WHERE id=?').get(upstreamAccountId)||!db.prepare('SELECT id FROM channels WHERE id=?').get(channelId))return res.status(400).json({ok:false,error:'invalid_domain_share_rule'}); try { const r=db.prepare('INSERT INTO channel_domain_share_rules(upstream_account_id,channel_id,domain,share_percent,effective_from,created_by) VALUES(?,?,?,?,?,?)').run(upstreamAccountId,channelId,domain,share,effectiveFrom,req.user.email); audit(req.user.email,'domain_share_rule.create','domain_share_rule',r.lastInsertRowid,JSON.stringify({upstreamAccountId,channelId,domain,share,effectiveFrom}),req.ip); res.status(201).json({ok:true,id:r.lastInsertRowid}); } catch { res.status(409).json({ok:false,error:'domain_share_rule_exists'}); } });
 
 app.get('/api/admin/channels', requireAuth, requireAdmin, (_req, res) => {
   const items = db.prepare(`SELECT c.id,c.name,c.email,c.share_percent sharePercent,c.status,c.created_at createdAt,
