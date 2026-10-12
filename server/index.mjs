@@ -415,6 +415,8 @@ app.get('/api/reports', requireAuth, (req, res) => {
   const dimensions = requested.length ? requested : ['date'];
   const scope = reportScope(req), { start, end } = range(req), where = whereScope(scope, start, end);
   const filters = [], filterParams = [];
+  if (req.user.role === 'admin' && Number(req.query.channelId)) { filters.push('channel_id=?'); filterParams.push(Number(req.query.channelId)); }
+  if (String(req.query.upstreamAccount || '').trim()) { filters.push('lower(account)=lower(?)'); filterParams.push(String(req.query.upstreamAccount).trim()); }
   if (String(req.query.account || '').trim()) { filters.push('lower(account)=lower(?)'); filterParams.push(String(req.query.account).trim()); }
   if (String(req.query.adUnit || '').trim()) { filters.push('lower(ad_unit)=lower(?)'); filterParams.push(String(req.query.adUnit).trim()); }
   if (String(req.query.domain || '').trim()) { filters.push(`lower(${mappedDomainSql('revenue_facts')})=lower(?)`); filterParams.push(normalizedDomain(req.query.domain)); }
