@@ -407,7 +407,7 @@ app.get('/api/dashboard', requireAuth, (req, res) => {
   const trend = db.prepare(`SELECT report_date date,ROUND(SUM(${factor}),6) revenue FROM revenue_facts WHERE ${where.sql} GROUP BY report_date ORDER BY report_date`).all(...where.params);
   const topUrls = db.prepare(`SELECT ${mappedDomainSql('revenue_facts')} url,ROUND(SUM(${factor}),6) revenue FROM revenue_facts WHERE ${where.sql} GROUP BY ${mappedDomainSql('revenue_facts')} ORDER BY revenue DESC LIMIT 10`).all(...where.params);
   const lastSync = db.prepare('SELECT created_at FROM import_runs ORDER BY id DESC LIMIT 1').get()?.created_at || null;
-  const settledRevenue = db.prepare(`SELECT COALESCE(SUM(${settledRevenueSql('r')}),0) value FROM revenue_facts r WHERE ${where.sql.replaceAll('report_date','r.report_date').replaceAll('channel_id','r.channel_id')}`).get(...where.params).value;
+  const settledRevenue = db.prepare(`SELECT COALESCE(SUM(${settledRevenueSql('revenue_facts')}),0) value FROM revenue_facts WHERE ${where.sql}`).get(...where.params).value;
   res.json({ ok: true, summary: { ...sums, revenue: req.user.role === 'channel' ? settledRevenue : sums.revenue, channelRevenue: settledRevenue, matchRate: sums.requests ? sums.matched * 100 / sums.requests : 0 }, trend, topUrls, lastSync });
 });
 
