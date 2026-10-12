@@ -91,6 +91,13 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, actor_email TEXT NOT NULL, action TEXT NOT NULL, target_type TEXT NOT NULL,
   target_id TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT '', ip TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS soap_accounts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, network_code TEXT NOT NULL UNIQUE,
+  credential_ciphertext TEXT NOT NULL, api_version TEXT NOT NULL DEFAULT 'v202602',
+  status TEXT NOT NULL DEFAULT 'untested', last_test_at TEXT, last_test_status TEXT,
+  last_test_summary TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE INDEX IF NOT EXISTS idx_revenue_scope_date ON revenue_facts(channel_id, report_date);
 CREATE INDEX IF NOT EXISTS idx_revenue_domain ON revenue_facts(domain, report_date);
 CREATE INDEX IF NOT EXISTS idx_revenue_account_unit ON revenue_facts(account, ad_unit, report_date);
@@ -114,6 +121,52 @@ function passwordMatches(password, encoded = '') {
 function audit(actor, action, targetType, targetId = '', detail = '', ip = '') {
   db.prepare('INSERT INTO audit_logs(actor_email,action,target_type,target_id,detail,ip) VALUES(?,?,?,?,?,?)')
     .run(actor || '', action, targetType, String(targetId), String(detail).slice(0, 2000), String(ip).slice(0, 80));
+}
+
+const credentialKey = (() => {
+  const configured = String(process.env.ADX_CREDENTIAL_KEY || '');
+  if (configured.length >= 32) return crypto.createHash('sha256').update(configured).digest();
+  if (production) throw new Error('ADX_CREDENTIAL_KEY_REQUIRED');
+  return crypto.createHash('sha256').update('local-development-only').digest();
+})();
+function encryptCredential(value) {
+  const iv = crypto.randomBytes(12), cipher = crypto.createCipheriv('aes-256-gcm', credentialKey, iv);
+  const ciphertext = Buffer.concat([cipher.update(JSON.stringify(value), 'utf8'), cipher.final()]);
+  return [iv.toString('base64url'), cipher.getAuthTag().toString('base64url'), ciphertext.toString('base64url')].join('.');
+}
+function decryptCredential(encoded) {
+  const [ivText, tagText, dataText] = String(encoded).split('.');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', credentialKey, Buffer.from(ivText, 'base64url'));
+  decipher.setAuthTag(Buffer.from(tagText, 'base64url'));
+  return JSON.parse(Buffer.concat([decipher.update(Buffer.from(dataText, 'base64url')), decipher.final()]).toString('utf8'));
+}
+function xmlEscape(value) { return String(value).replace(/[<&>"']/g, char => ({'<':'&lt;','&':'&amp;','>':'&gt;','"':'&quot;',"'":'&apos;'}[char])); }
+function soapText(xml, tag) { return String(xml).match(new RegExp(`<[^>]*${tag}[^>]*>([^<]*)</[^>]*${tag}>`))?.[1] || ''; }
+async function issueServiceToken(credentials) {
+  const now = Math.floor(Date.now() / 1000);
+  const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
+  const payload = Buffer.from(JSON.stringify({ iss: credentials.client_email, scope: 'https://www.googleapis.com/auth/dfp', aud: credentials.token_uri, iat: now, exp: now + 3600 })).toString('base64url');
+  const unsigned = `${header}.${payload}`;
+  const signature = crypto.sign('RSA-SHA256', Buffer.from(unsigned), credentials.private_key).toString('base64url');
+  const tokenResponse = await fetch(credentials.token_uri || 'https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: `${unsigned}.${signature}` }) });
+  const body = await tokenResponse.json().catch(() => ({}));
+  if (!tokenResponse.ok || !body.access_token) throw new Error(`oauth_${tokenResponse.status}_${body.error || 'failed'}`);
+  return body.access_token;
+}
+async function testSoapAccount(account) {
+  const credentials = decryptCredential(account.credential_ciphertext);
+  if (!credentials.client_email || !credentials.private_key) throw new Error('invalid_service_account_json');
+  const version = /^v\d{6}$/.test(account.api_version) ? account.api_version : 'v202602';
+  const token = await issueServiceToken(credentials);
+  const endpoint = `https://ads.google.com/apis/ads/publisher/${version}/NetworkService`;
+  const ns = `https://www.google.com/apis/ads/publisher/${version}`;
+  const soap = `<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:tns="${ns}"><soap:Header><tns:RequestHeader><tns:networkCode>${xmlEscape(account.network_code)}</tns:networkCode><tns:applicationName>AdX Control</tns:applicationName></tns:RequestHeader></soap:Header><soap:Body><tns:getCurrentNetwork/></soap:Body></soap:Envelope>`;
+  const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'text/xml; charset=utf-8', Authorization: `Bearer ${token}` }, body: soap });
+  const text = await response.text();
+  if (!response.ok || /<soap:Fault|<Fault/.test(text)) throw new Error(`soap_${response.status}_${soapText(text, 'faultstring') || soapText(text, 'ApiVersionError') || 'request_failed'}`);
+  const network = { id: soapText(text, 'id'), displayName: soapText(text, 'displayName'), networkCode: soapText(text, 'networkCode'), currencyCode: soapText(text, 'currencyCode'), timeZone: soapText(text, 'timeZone') };
+  if (!network.networkCode) throw new Error('soap_network_not_found');
+  return { version, network };
 }
 
 const adminEmail = normalizeEmail(process.env.ADX_ADMIN_EMAIL);
@@ -239,6 +292,34 @@ app.post('/api/admin/ad-units/create', requireAuth, requireAdmin, (req,res) => {
   audit(req.user.email,'ad_units.create','ad_unit_batch','',JSON.stringify({requested:items.length,created}),req.ip); res.status(201).json({ok:true,created,skipped:items.length-created,status:'planned',message:'已保存本地广告单元计划，等待 GAM API 授权后执行真实创建'});
 });
 app.get('/api/admin/ad-units', requireAuth, requireAdmin, (_req,res) => res.json({ok:true,items:db.prepare('SELECT id,code,name,subdomain,inventory_type inventoryType,size,status,provider_id providerId,created_at createdAt FROM managed_ad_units ORDER BY id DESC LIMIT 1000').all()}));
+
+app.get('/api/admin/soap-accounts', requireAuth, requireAdmin, (_req, res) => res.json({ ok: true, items: db.prepare(`SELECT id,name,network_code networkCode,api_version apiVersion,status,last_test_at lastTestAt,last_test_status lastTestStatus,last_test_summary lastTestSummary,created_at createdAt FROM soap_accounts ORDER BY id DESC`).all() }));
+app.post('/api/admin/soap-accounts', requireAuth, requireAdmin, async (req, res) => {
+  const name = String(req.body?.name || '').trim(), networkCode = String(req.body?.networkCode || '').trim(), apiVersion = String(req.body?.apiVersion || 'v202602').trim();
+  const credentials = req.body?.credentials;
+  if (!name || !/^\d{6,}$/.test(networkCode) || !/^v\d{6}$/.test(apiVersion) || !credentials || typeof credentials !== 'object') return res.status(400).json({ ok: false, error: 'invalid_soap_account' });
+  if (!credentials.client_email || !credentials.private_key) return res.status(400).json({ ok: false, error: 'invalid_service_account_json' });
+  try {
+    const result = db.prepare(`INSERT INTO soap_accounts(name,network_code,credential_ciphertext,api_version,created_by) VALUES(?,?,?,?,?) ON CONFLICT(network_code) DO UPDATE SET name=excluded.name,credential_ciphertext=excluded.credential_ciphertext,api_version=excluded.api_version,updated_at=CURRENT_TIMESTAMP`).run(name, networkCode, encryptCredential(credentials), apiVersion, req.user.email);
+    audit(req.user.email, 'soap_account.save', 'soap_account', result.lastInsertRowid || db.prepare('SELECT id FROM soap_accounts WHERE network_code=?').get(networkCode).id, JSON.stringify({ name, networkCode, apiVersion }), req.ip);
+    res.json({ ok: true, item: db.prepare(`SELECT id,name,network_code networkCode,api_version apiVersion,status,last_test_at lastTestAt,last_test_status lastTestStatus,last_test_summary lastTestSummary FROM soap_accounts WHERE network_code=?`).get(networkCode) });
+  } catch (error) { res.status(409).json({ ok: false, error: 'soap_account_save_failed', detail: error.message }); }
+});
+app.post('/api/admin/soap-accounts/:id/test', requireAuth, requireAdmin, async (req, res) => {
+  const id = Number(req.params.id), account = db.prepare('SELECT * FROM soap_accounts WHERE id=?').get(id);
+  if (!account) return res.status(404).json({ ok: false, error: 'soap_account_not_found' });
+  try {
+    const result = await testSoapAccount(account);
+    db.prepare(`UPDATE soap_accounts SET api_version=?,status='active',last_test_at=CURRENT_TIMESTAMP,last_test_status='success',last_test_summary=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(result.version, `连接成功：${result.network.displayName || result.network.networkCode} / ${result.network.currencyCode || ''}`, id);
+    audit(req.user.email, 'soap_account.test', 'soap_account', id, JSON.stringify({ status: 'success', version: result.version, network: result.network }), req.ip);
+    res.json({ ok: true, status: 'success', version: result.version, network: result.network });
+  } catch (error) {
+    const summary = String(error.message || 'soap_test_failed').slice(0, 500);
+    db.prepare(`UPDATE soap_accounts SET status='error',last_test_at=CURRENT_TIMESTAMP,last_test_status='failed',last_test_summary=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(summary, id);
+    audit(req.user.email, 'soap_account.test', 'soap_account', id, JSON.stringify({ status: 'failed', error: summary }), req.ip);
+    res.status(502).json({ ok: false, error: 'soap_test_failed', detail: summary });
+  }
+});
 
 app.get('/api/dashboard', requireAuth, (req, res) => {
   const scope = reportScope(req), { start, end } = range(req), where = whereScope(scope, start, end);
