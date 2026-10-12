@@ -130,6 +130,9 @@ if (!db.prepare("SELECT 1 FROM pragma_table_info('revenue_facts') WHERE name='ra
   db.exec("ALTER TABLE revenue_facts ADD COLUMN raw_json TEXT NOT NULL DEFAULT '{}'");
 }
 db.exec("INSERT OR IGNORE INTO channel_share_versions(channel_id,share_percent,effective_from,created_by) SELECT id,share_percent,'1900-01-01','migration' FROM channels");
+db.exec("CREATE TABLE IF NOT EXISTS upstream_share_versions (id INTEGER PRIMARY KEY AUTOINCREMENT, upstream_account_id INTEGER NOT NULL, share_percent REAL NOT NULL CHECK(share_percent BETWEEN 0 AND 100), effective_from TEXT NOT NULL, created_by TEXT NOT NULL, UNIQUE(upstream_account_id,effective_from), FOREIGN KEY(upstream_account_id) REFERENCES upstream_accounts(id) ON DELETE CASCADE)");
+db.exec("INSERT OR IGNORE INTO upstream_share_versions(upstream_account_id,share_percent,effective_from,created_by) SELECT id,100,'1900-01-01','migration' FROM upstream_accounts");
+db.exec("INSERT OR IGNORE INTO upstream_share_versions(upstream_account_id,share_percent,effective_from,created_by) SELECT id,share_percent,'2026-10-11','migration' FROM upstream_accounts");
 
 const normalizeEmail = v => String(v || '').trim().toLowerCase();
 const sha256 = value => crypto.createHash('sha256').update(String(value)).digest('hex');
@@ -315,7 +318,7 @@ function range(req) {
 }
 function whereScope(scope, start, end) { return { sql: `report_date BETWEEN ? AND ?${scope ? ' AND channel_id=?' : ''}`, params: scope ? [start, end, scope] : [start, end] }; }
 function effectiveShareSql(alias = 'revenue_facts') { return `(SELECT v.share_percent FROM channel_share_versions v WHERE v.channel_id=${alias}.channel_id AND v.effective_from<=${alias}.report_date ORDER BY v.effective_from DESC,v.id DESC LIMIT 1)`; }
-function upstreamShareSql(alias = 'revenue_facts') { return `COALESCE((SELECT u.share_percent FROM upstream_accounts u WHERE u.account_key=${alias}.account AND u.status='active' LIMIT 1),100)`; }
+function upstreamShareSql(alias = 'revenue_facts') { return `COALESCE((SELECT v.share_percent FROM upstream_share_versions v JOIN upstream_accounts u ON u.id=v.upstream_account_id WHERE u.account_key=${alias}.account AND u.status='active' AND v.effective_from<=${alias}.report_date ORDER BY v.effective_from DESC,v.id DESC LIMIT 1),(SELECT u.share_percent FROM upstream_accounts u WHERE u.account_key=${alias}.account AND u.status='active' LIMIT 1),100)`; }
 function channelRuleShareSql(alias = 'revenue_facts') {
   const fallback = effectiveShareSql(alias);
   const domain = mappedDomainSql(alias);
