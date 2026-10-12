@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,6 +17,7 @@ const adminHost = String(process.env.ADX_ADMIN_HOST || 'adx.geekforest.ai').toLo
 const publisherHost = String(process.env.ADX_PUBLISHER_HOST || 'adxpub.geekforest.ai').toLowerCase();
 const production = process.env.NODE_ENV === 'production';
 const app = express();
+const execFileAsync = promisify(execFile);
 app.set('trust proxy', 'loopback');
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 const db = new DatabaseSync(dbPath);
@@ -193,9 +196,46 @@ async function soapRequest(account, service, body) { const credentials=decryptCr
 function dateXml(date) { const d=new Date(`${date}T00:00:00Z`); return `<tns:year>${d.getUTCFullYear()}</tns:year><tns:month>${d.getUTCMonth()+1}</tns:month><tns:day>${d.getUTCDate()}</tns:day>`; }
 function csvRows(text) { const clean=text.replace(/^\uFEFF/,'').trim(); const lines=clean.split(/\r?\n/).filter(Boolean); if(lines.length<2)return []; const split=s=>s.split('\t').map(v=>v.replace(/^"|"$/g,'').trim()); const headers=split(lines[0]).map(v=>v.toLowerCase()); return lines.slice(1).map(line=>{const cells=split(line),row={}; headers.forEach((h,i)=>row[h]=cells[i]||''); return row}); }
 function decodeReportBody(buffer) { let body=Buffer.from(buffer); if(body[0]===0x1f&&body[1]===0x8b) body=zlib.gunzipSync(body); if(body[0]===0x3c&&body.toString('utf8',0,200).toLowerCase().includes('<html')) throw new Error('report_download_html_error'); const text=body.toString('utf8'); if(!text.trim())throw new Error('report_download_empty'); return text; }
+function reportProxyUrl() {
+  const direct=String(process.env.ADX_REPORT_PROXY||'').trim();
+  if (direct) return direct;
+  const host=String(process.env.ADX_REPORT_PROXY_HOST||'').trim();
+  if (!host) return '';
+  const protocol=String(process.env.ADX_REPORT_PROXY_PROTOCOL||'socks5h').trim();
+  const port=String(process.env.ADX_REPORT_PROXY_PORT||'1080').trim();
+  const user=String(process.env.ADX_REPORT_PROXY_USER||'');
+  const password=String(process.env.ADX_REPORT_PROXY_PASSWORD||'');
+  return `${protocol}://${user?`${encodeURIComponent(user)}:${encodeURIComponent(password)}@`:''}${host}:${port}`;
+}
+async function downloadReport(url) { const proxy=reportProxyUrl(); if(!proxy){ const response=await fetch(url); if(!response.ok)throw new Error(`report_download_http_${response.status}`); return Buffer.from(await response.arrayBuffer()); } const parsed=new URL(proxy); if(!['socks5:','socks5h:'].includes(parsed.protocol))throw new Error('unsupported_report_proxy'); const {stdout}=await execFileAsync('curl',['-fsSL','--max-time','180','--socks5-hostname',`${parsed.hostname}:${parsed.port||1080}`,...(parsed.username?[ '--proxy-user',`${decodeURIComponent(parsed.username)}:${decodeURIComponent(parsed.password)}`]:[]),url],{maxBuffer:100*1024*1024}); return Buffer.from(stdout); }
 function reportValue(row, names) { const key=Object.keys(row).find(k=>names.some(n=>k.includes(n))); return key===undefined?'':row[key]; }
 function parseReportRows(rows, channelId, sourceFile) { return rows.map(row=>{ const date=reportValue(row,['date']),hour=Number(reportValue(row,['hour'])); const revenueRaw=reportValue(row,['ad_exchange_revenue','revenue']); const amount=Number(revenueRaw.replace(/[^0-9.-]/g,'')); return {channelId,reportDate:String(date).slice(0,10),hour:Number.isInteger(hour)?hour:-1,url:reportValue(row,['site','url']),domain:normalizedDomain(reportValue(row,['site','url'])),account:'',adUnit:reportValue(row,['ad_unit_name','ad unit']),country:reportValue(row,['country_code','country']),requests:Number(reportValue(row,['ad_exchange_total_requests','total_requests'])||0),matched:Number(reportValue(row,['ad_exchange_responses_served','responses_served'])||0),impressions:Number(reportValue(row,['ad_exchange_impressions','impressions'])||0),clicks:Number(reportValue(row,['ad_exchange_clicks','clicks'])||0),revenue:Number.isFinite(amount)?amount:0,sourceFile,rawJson:JSON.stringify(row)}; }).filter(x=>validDate(x.reportDate)&&[x.requests,x.matched,x.impressions,x.clicks,x.revenue].every(Number.isFinite)); }
-async function syncSoapAccount(account) { const channel=db.prepare('SELECT id FROM channels WHERE status=\'active\' ORDER BY id LIMIT 1').get(); if(!channel)throw new Error('no_active_channel'); const historyStart=validDate(process.env.ADX_HISTORY_START_DATE)?process.env.ADX_HISTORY_START_DATE:''; const end=historyStart?new Date(`${new Date(Date.now()-86400000).toISOString().slice(0,10)}T23:00:00Z`):new Date(Date.now()-60*60*1000),start=historyStart?new Date(`${historyStart}T00:00:00Z`):new Date(end.getTime()-60*60*1000),date=start.toISOString().slice(0,10),endDate=end.toISOString().slice(0,10),hour=historyStart?-1:start.getUTCHours(); const run=db.prepare('INSERT INTO soap_sync_runs(soap_account_id,channel_id,window_start,window_end,status) VALUES(?,?,?,?,?)').run(account.id,channel.id,start.toISOString(),end.toISOString(),'running'); const runId=Number(run.lastInsertRowid); try { const query=`<tns:runReportJob><tns:reportJob><tns:reportQuery><tns:dimensions>DATE</tns:dimensions><tns:dimensions>HOUR</tns:dimensions><tns:dimensions>SITE</tns:dimensions><tns:dimensions>COUNTRY_CODE</tns:dimensions><tns:dimensions>AD_UNIT_NAME</tns:dimensions><tns:dimensions>AD_UNIT_ID</tns:dimensions><tns:columns>AD_EXCHANGE_TOTAL_REQUESTS</tns:columns><tns:columns>AD_EXCHANGE_RESPONSES_SERVED</tns:columns><tns:columns>AD_EXCHANGE_IMPRESSIONS</tns:columns><tns:columns>AD_EXCHANGE_CLICKS</tns:columns><tns:columns>AD_EXCHANGE_REVENUE</tns:columns><tns:startDate>${dateXml(date)}</tns:startDate><tns:endDate>${dateXml(endDate)}</tns:endDate><tns:dateRangeType>CUSTOM_DATE</tns:dateRangeType><tns:reportCurrency>USD</tns:reportCurrency><tns:timeZoneType>PUBLISHER</tns:timeZoneType></tns:reportQuery></tns:reportJob></tns:runReportJob>`; let result=await soapRequest(account,'ReportService',query),jobId=soapText(result.text,'id'); if(!jobId)throw new Error('report_job_id_missing'); let status='IN_PROGRESS'; for(let i=0;i<40&&status==='IN_PROGRESS';i++){await new Promise(r=>setTimeout(r,1500)); const s=await soapRequest(account,'ReportService',`<tns:getReportJobStatus><tns:reportJobId>${jobId}</tns:reportJobId></tns:getReportJobStatus>`); status=soapText(s.text,'rval');} if(status!=='COMPLETED')throw new Error(`report_status_${status}`); const d=await soapRequest(account,'ReportService',`<tns:getReportDownloadURL><tns:reportJobId>${jobId}</tns:reportJobId><tns:exportFormat>TSV</tns:exportFormat></tns:getReportDownloadURL>`),url=soapText(d.text,'rval'); if(!url)throw new Error('report_download_url_missing'); const download=await fetch(url); if(!download.ok)throw new Error(`report_download_http_${download.status}`); const file=decodeReportBody(await download.arrayBuffer()),rawRows=csvRows(file),facts=parseReportRows(rawRows,channel.id,`soap:${account.network_code}:${date}_${endDate}`); const insert=db.prepare(`INSERT INTO revenue_facts(channel_id,report_date,hour,url,domain,account,ad_unit,country,requests,matched_requests,impressions,clicks,revenue,source_file,raw_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(channel_id,report_date,hour,url,account,ad_unit,country) DO UPDATE SET requests=excluded.requests,matched_requests=excluded.matched_requests,impressions=excluded.impressions,clicks=excluded.clicks,revenue=excluded.revenue,domain=excluded.domain,source_file=excluded.source_file,raw_json=excluded.raw_json,imported_at=CURRENT_TIMESTAMP`); transaction(()=>facts.forEach(f=>insert.run(f.channelId,f.reportDate,f.hour,f.url,f.domain,f.account,f.adUnit,f.country,f.requests,f.matched,f.impressions,f.clicks,f.revenue,f.sourceFile,f.rawJson))); db.prepare('UPDATE soap_sync_runs SET status=\'success\',rows_read=?,rows_written=?,finished_at=CURRENT_TIMESTAMP WHERE id=?').run(rawRows.length,facts.length,runId); return {runId,rows:facts.length,date,endDate,hour}; } catch(error){db.prepare('UPDATE soap_sync_runs SET status=\'failed\',error=?,finished_at=CURRENT_TIMESTAMP WHERE id=?').run(String(error.message).slice(0,1000),runId);throw error;} }
+async function syncSoapAccount(account) {
+  const channel=db.prepare("SELECT id FROM channels WHERE status='active' ORDER BY id LIMIT 1").get();
+  if(!channel) throw new Error('no_active_channel');
+  const historyStart=validDate(process.env.ADX_HISTORY_START_DATE)?process.env.ADX_HISTORY_START_DATE:'';
+  const end=historyStart?new Date(`${new Date(Date.now()-86400000).toISOString().slice(0,10)}T23:00:00Z`):new Date(Date.now()-60*60*1000);
+  const start=historyStart?new Date(`${historyStart}T00:00:00Z`):new Date(end.getTime()-60*60*1000);
+  const date=start.toISOString().slice(0,10),endDate=end.toISOString().slice(0,10),hour=historyStart?-1:start.getUTCHours();
+  const run=db.prepare('INSERT INTO soap_sync_runs(soap_account_id,channel_id,window_start,window_end,status) VALUES(?,?,?,?,?)').run(account.id,channel.id,start.toISOString(),end.toISOString(),'running');
+  const runId=Number(run.lastInsertRowid);
+  try {
+    const v=account.api_version;
+    const query=`<tns:runReportJob><tns:reportJob><tns:reportQuery><tns:dimensions>DATE</tns:dimensions><tns:dimensions>HOUR</tns:dimensions><tns:dimensions>SITE</tns:dimensions><tns:dimensions>COUNTRY_CODE</tns:dimensions><tns:dimensions>AD_UNIT_NAME</tns:dimensions><tns:dimensions>AD_UNIT_ID</tns:dimensions><tns:columns>AD_EXCHANGE_TOTAL_REQUESTS</tns:columns><tns:columns>AD_EXCHANGE_RESPONSES_SERVED</tns:columns><tns:columns>AD_EXCHANGE_IMPRESSIONS</tns:columns><tns:columns>AD_EXCHANGE_CLICKS</tns:columns><tns:columns>AD_EXCHANGE_REVENUE</tns:columns><tns:startDate>${dateXml(date)}</tns:startDate><tns:endDate>${dateXml(endDate)}</tns:endDate><tns:dateRangeType>CUSTOM_DATE</tns:dateRangeType><tns:reportCurrency>USD</tns:reportCurrency><tns:timeZoneType>PUBLISHER</tns:timeZoneType></tns:reportQuery></tns:reportJob></tns:runReportJob>`;
+    const result=await soapRequest(account,'ReportService',query),jobId=soapText(result.text,'id');
+    if(!jobId) throw new Error('report_job_id_missing');
+    let status='IN_PROGRESS';
+    for(let i=0;i<40&&status==='IN_PROGRESS';i++){ await new Promise(r=>setTimeout(r,1500)); const s=await soapRequest(account,'ReportService',`<tns:getReportJobStatus><tns:reportJobId>${jobId}</tns:reportJobId></tns:getReportJobStatus>`); status=soapText(s.text,'rval'); }
+    if(status!=='COMPLETED') throw new Error(`report_status_${status}`);
+    const d=await soapRequest(account,'ReportService',`<tns:getReportDownloadURL><tns:reportJobId>${jobId}</tns:reportJobId><tns:exportFormat>TSV</tns:exportFormat></tns:getReportDownloadURL>`),url=soapText(d.text,'rval');
+    if(!url) throw new Error('report_download_url_missing');
+    const file=decodeReportBody(await downloadReport(url)),rows=csvRows(file),facts=parseReportRows(rows,channel.id,`soap:${account.network_code}:${date}_${endDate}`);
+    const insert=db.prepare(`INSERT INTO revenue_facts(channel_id,report_date,hour,url,domain,account,ad_unit,country,requests,matched_requests,impressions,clicks,revenue,source_file,raw_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(channel_id,report_date,hour,url,account,ad_unit,country) DO UPDATE SET requests=excluded.requests,matched_requests=excluded.matched_requests,impressions=excluded.impressions,clicks=excluded.clicks,revenue=excluded.revenue,domain=excluded.domain,source_file=excluded.source_file,raw_json=excluded.raw_json,imported_at=CURRENT_TIMESTAMP`);
+    transaction(()=>facts.forEach(f=>insert.run(f.channelId,f.reportDate,f.hour,f.url,f.domain,f.account,f.adUnit,f.country,f.requests,f.matched,f.impressions,f.clicks,f.revenue,f.sourceFile,f.rawJson)));
+    db.prepare('UPDATE soap_sync_runs SET status=\'success\',rows_read=?,rows_written=?,finished_at=CURRENT_TIMESTAMP WHERE id=?').run(rows.length,facts.length,runId);
+    return {runId,rows:facts.length,date,endDate,hour};
+  } catch(error) { db.prepare('UPDATE soap_sync_runs SET status=\'failed\',error=?,finished_at=CURRENT_TIMESTAMP WHERE id=?').run(String(error.message).slice(0,1000),runId); throw error; }
+}
 
 const adminEmail = normalizeEmail(process.env.ADX_ADMIN_EMAIL);
 const adminPassword = String(process.env.ADX_ADMIN_PASSWORD || '');
