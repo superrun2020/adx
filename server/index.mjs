@@ -258,6 +258,11 @@ app.get('/api/reports', requireAuth, (req, res) => {
   const requested = String(req.query.dimensions || 'date,url').split(',').filter(v => dimensionMap[v]);
   const dimensions = requested.length ? requested : ['date'];
   const scope = reportScope(req), { start, end } = range(req), where = whereScope(scope, start, end);
+  const filters = [], filterParams = [];
+  if (String(req.query.account || '').trim()) { filters.push('lower(account)=lower(?)'); filterParams.push(String(req.query.account).trim()); }
+  if (String(req.query.adUnit || '').trim()) { filters.push('lower(ad_unit)=lower(?)'); filterParams.push(String(req.query.adUnit).trim()); }
+  if (String(req.query.domain || '').trim()) { filters.push(`lower(${mappedDomainSql('revenue_facts')})=lower(?)`); filterParams.push(normalizedDomain(req.query.domain)); }
+  if (filters.length) { where.sql += ` AND ${filters.join(' AND ')}`; where.params.push(...filterParams); }
   const select = dimensions.map(v => v === 'url' ? `${mappedDomainSql('revenue_facts')} AS url` : `${dimensionMap[v]} AS ${v}`).join(',');
   const group = dimensions.map(v => v === 'url' ? mappedDomainSql('revenue_facts') : dimensionMap[v]).join(',');
   const settled = settledRevenueSql('revenue_facts');
