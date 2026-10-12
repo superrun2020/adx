@@ -165,7 +165,7 @@ function decryptCredential(encoded) {
   return JSON.parse(Buffer.concat([decipher.update(Buffer.from(dataText, 'base64url')), decipher.final()]).toString('utf8'));
 }
 function xmlEscape(value) { return String(value).replace(/[<&>"']/g, char => ({'<':'&lt;','&':'&amp;','>':'&gt;','"':'&quot;',"'":'&apos;'}[char])); }
-function soapText(xml, tag) { return String(xml).match(new RegExp(`<[^>]*${tag}[^>]*>([^<]*)</[^>]*${tag}>`))?.[1] || ''; }
+function soapText(xml, tag) { const value=String(xml).match(new RegExp(`<[^>]*${tag}[^>]*>([^<]*)</[^>]*${tag}>`))?.[1] || ''; return value.replaceAll('&amp;','&').replaceAll('&lt;','<').replaceAll('&gt;','>').replaceAll('&quot;','"').replaceAll('&apos;',"'"); }
 async function issueServiceToken(credentials) {
   const now = Math.floor(Date.now() / 1000);
   const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
