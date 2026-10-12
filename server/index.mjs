@@ -110,6 +110,9 @@ CREATE INDEX IF NOT EXISTS idx_revenue_scope_date ON revenue_facts(channel_id, r
 CREATE INDEX IF NOT EXISTS idx_revenue_domain ON revenue_facts(domain, report_date);
 CREATE INDEX IF NOT EXISTS idx_revenue_account_unit ON revenue_facts(account, ad_unit, report_date);
 `);
+for (const column of ['description','adsense_enabled','placement','target_window','label']) {
+  if (!db.prepare(`SELECT 1 FROM pragma_table_info('managed_ad_units') WHERE name=?`).get(column)) db.exec(`ALTER TABLE managed_ad_units ADD COLUMN ${column} ${column==='adsense_enabled'?'INTEGER NOT NULL DEFAULT 0':'TEXT NOT NULL DEFAULT \'\''}`);
+}
 if (!db.prepare("SELECT 1 FROM pragma_table_info('upstream_accounts') WHERE name='soap_account_id'").get()) db.exec('ALTER TABLE upstream_accounts ADD COLUMN soap_account_id INTEGER');
 if (!db.prepare("SELECT 1 FROM pragma_table_info('revenue_facts') WHERE name='raw_json'").get()) {
   db.exec("ALTER TABLE revenue_facts ADD COLUMN raw_json TEXT NOT NULL DEFAULT '{}'");
@@ -265,7 +268,8 @@ const builderAliases = {
   subdomain: ['subdomain','sub_domain','domain','hostname','url','site','子域名','域名'],
   inventoryType: ['inventory_type','ad_type','placement_type','type','广告位类型','广告类型','广告位'],
   size: ['size','sizes','ad_size','dimensions','dimension','尺寸','广告尺寸'],
-  adUnit: ['ad_unit','adunit','ad_unit_name','广告单元','广告位名称']
+  adUnit: ['ad_unit','adunit','ad_unit_name','广告单元','广告位名称'],
+  name: ['name','名称','广告单元名称'], description: ['description','说明','描述'], adsenseEnabled: ['adsense_enabled','已启用 adsense','启用 adsense'], placement: ['placement','刊登位置'], targetWindow: ['target_window','目标视窗','目标窗口'], label: ['label','标签']
 };
 function firstValue(row, keys) { const entry=Object.entries(row||{}).find(([key])=>keys.some(alias=>canonicalFieldName(key)===canonicalFieldName(alias))); return entry?.[1]; }
 function splitValues(value) { return Array.isArray(value) ? value.flatMap(splitValues) : String(value??'').split(/[;,|，、\n]+/).map(v=>v.trim()).filter(Boolean); }
@@ -283,7 +287,8 @@ function buildAdUnits(payload, rules={}) {
     const selectedSizes=sizes.length?sizes:(rowSizes.length?rowSizes:['responsive']);
     for(const subdomain of domains) for(const inventoryType of selectedTypes) for(const size of selectedSizes) {
       const code=`${subdomain}-${inventoryType}-${size}`.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,120);
-      result.push({code,name:`${subdomain} / ${inventoryType} / ${size}`,subdomain,inventoryType,size,sourceRow:row});
+      const sourceName=String(firstValue(row,builderAliases.name)||'').trim();
+      result.push({code,name:sourceName||`${subdomain} / ${inventoryType} / ${size}`,subdomain,inventoryType,size,description:String(firstValue(row,builderAliases.description)||''),adsenseEnabled:['true','1','yes','是'].includes(String(firstValue(row,builderAliases.adsenseEnabled)||'').toLowerCase()),placement:String(firstValue(row,builderAliases.placement)||''),targetWindow:String(firstValue(row,builderAliases.targetWindow)||''),label:String(firstValue(row,builderAliases.label)||''),sourceRow:row});
     }
   }
   return [...new Map(result.map(item=>[item.code,item])).values()];
@@ -296,11 +301,11 @@ app.post('/api/admin/ad-units/preview', requireAuth, requireAdmin, (req,res) => 
 });
 app.post('/api/admin/ad-units/create', requireAuth, requireAdmin, (req,res) => {
   const items=Array.isArray(req.body?.items)?req.body.items:buildAdUnits(req.body?.payload,req.body?.rules); if(!items.length)return res.status(400).json({ok:false,error:'no_ad_units'});
-  const insert=db.prepare('INSERT OR IGNORE INTO managed_ad_units(code,name,subdomain,inventory_type,size,source_row_json,status,created_by) VALUES(?,?,?,?,?,?,?,?)');
-  const created=transaction(()=>items.reduce((count,item)=>count+Number(insert.run(item.code,item.name,item.subdomain,item.inventoryType,item.size,JSON.stringify(item.sourceRow||{}),'planned',req.user.email).changes),0));
+  const insert=db.prepare('INSERT OR IGNORE INTO managed_ad_units(code,name,subdomain,inventory_type,size,description,adsense_enabled,placement,target_window,label,source_row_json,status,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)');
+  const created=transaction(()=>items.reduce((count,item)=>count+Number(insert.run(item.code,item.name,item.subdomain,item.inventoryType,item.size,item.description||'',item.adsenseEnabled?1:0,item.placement||'',item.targetWindow||'',item.label||'',JSON.stringify(item.sourceRow||{}),'planned',req.user.email).changes),0));
   audit(req.user.email,'ad_units.create','ad_unit_batch','',JSON.stringify({requested:items.length,created}),req.ip); res.status(201).json({ok:true,created,skipped:items.length-created,status:'planned',message:'已保存本地广告单元计划，等待 GAM API 授权后执行真实创建'});
 });
-app.get('/api/admin/ad-units', requireAuth, requireAdmin, (_req,res) => res.json({ok:true,items:db.prepare('SELECT id,code,name,subdomain,inventory_type inventoryType,size,status,provider_id providerId,created_at createdAt FROM managed_ad_units ORDER BY id DESC LIMIT 1000').all()}));
+app.get('/api/admin/ad-units', requireAuth, requireAdmin, (_req,res) => res.json({ok:true,items:db.prepare('SELECT id,code,name,subdomain,inventory_type inventoryType,size,description,adsense_enabled adsenseEnabled,placement,target_window targetWindow,label,status,provider_id providerId,created_at createdAt FROM managed_ad_units ORDER BY id DESC LIMIT 1000').all()}));
 
 app.get('/api/admin/soap-accounts', requireAuth, requireAdmin, (_req, res) => res.json({ ok: true, items: db.prepare(`SELECT id,name,network_code networkCode,api_version apiVersion,status,last_test_at lastTestAt,last_test_status lastTestStatus,last_test_summary lastTestSummary,created_at createdAt FROM soap_accounts ORDER BY id DESC`).all() }));
 app.post('/api/admin/soap-accounts', requireAuth, requireAdmin, async (req, res) => {
