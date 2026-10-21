@@ -82,6 +82,13 @@ CREATE TABLE IF NOT EXISTS sessions (
   token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS report_api_keys (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, key_prefix TEXT NOT NULL UNIQUE,
+  key_hash TEXT NOT NULL UNIQUE, scope TEXT NOT NULL DEFAULT 'account_reports_read',
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','revoked')),
+  created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  revoked_at TEXT
+);
 CREATE TABLE IF NOT EXISTS channel_domains (
   id INTEGER PRIMARY KEY AUTOINCREMENT, channel_id INTEGER NOT NULL, domain TEXT NOT NULL UNIQUE COLLATE NOCASE,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
@@ -286,6 +293,18 @@ function requireAuth(req, res, next) {
 }
 function requireAdmin(req, res, next) { return req.user?.role === 'admin' ? next() : res.status(403).json({ ok: false, error: 'forbidden' }); }
 const userJson = row => ({ id: row.id, email: row.email, name: row.name, role: row.role, channelId: row.channel_id || null });
+
+function reportApiKeyFrom(req) {
+  return String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+}
+function requireAccountReportKey(req, res, next) {
+  const secret = reportApiKeyFrom(req);
+  if (!secret) return res.status(401).json({ ok: false, error: 'report_api_key_required' });
+  const row = db.prepare("SELECT id,scope,status FROM report_api_keys WHERE key_hash=?").get(sha256(secret));
+  if (!row || row.status !== 'active' || row.scope !== 'account_reports_read') return res.status(401).json({ ok: false, error: 'invalid_report_api_key' });
+  req.reportApiKey = row;
+  next();
+}
 
 app.post('/api/auth/login', (req, res) => {
   const email = normalizeEmail(req.body?.email), password = String(req.body?.password || '');
@@ -503,6 +522,59 @@ app.get('/api/admin/reports/accounts', requireAuth, requireAdmin, (req, res) => 
       channelEcpm: Number(row.impressions) ? Number(row.channelRevenue) * 1000 / Number(row.impressions) : 0
     }))
   });
+});
+
+app.get('/api/admin/report-api-keys', requireAuth, requireAdmin, (_req, res) => {
+  res.json({ ok: true, items: db.prepare(`SELECT id,name,key_prefix keyPrefix,scope,status,created_by createdBy,created_at createdAt,revoked_at revokedAt FROM report_api_keys ORDER BY id DESC`).all() });
+});
+app.post('/api/admin/report-api-keys', requireAuth, requireAdmin, (req, res) => {
+  const name = String(req.body?.name || '').trim().slice(0, 120);
+  if (!name) return res.status(400).json({ ok: false, error: 'key_name_required' });
+  const secret = `adx_account_${crypto.randomBytes(32).toString('base64url')}`;
+  const prefix = secret.slice(0, 24);
+  const result = db.prepare(`INSERT INTO report_api_keys(name,key_prefix,key_hash,created_by) VALUES(?,?,?,?)`).run(name, prefix, sha256(secret), req.user.email);
+  audit(req.user.email, 'report_api_key.create', 'report_api_key', result.lastInsertRowid, JSON.stringify({ name, scope: 'account_reports_read' }), req.ip);
+  res.status(201).json({ ok: true, item: { id: Number(result.lastInsertRowid), name, keyPrefix: prefix, scope: 'account_reports_read', status: 'active' }, key: secret });
+});
+app.post('/api/admin/report-api-keys/:id/revoke', requireAuth, requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id)) return res.status(400).json({ ok: false, error: 'invalid_key_id' });
+  const result = db.prepare("UPDATE report_api_keys SET status='revoked',revoked_at=CURRENT_TIMESTAMP WHERE id=? AND status='active'").run(id);
+  if (!result.changes) return res.status(404).json({ ok: false, error: 'active_key_not_found' });
+  audit(req.user.email, 'report_api_key.revoke', 'report_api_key', id, '', req.ip);
+  res.json({ ok: true, revoked: true });
+});
+
+app.get('/api/public/account/revenue', requireAccountReportKey, (req, res) => {
+  const { start, end } = range(req);
+  const filters = ['rf.report_date BETWEEN ? AND ?'];
+  const params = [start, end];
+  const account = String(req.query.account || req.query.upstreamAccount || '').trim();
+  if (account) { filters.push('lower(rf.account)=lower(?)'); params.push(account); }
+  const channelId = Number(req.query.channelId || 0);
+  if (channelId) { filters.push('rf.channel_id=?'); params.push(channelId); }
+  const where = filters.join(' AND ');
+  const settled = settledRevenueSql('rf');
+  const rows = db.prepare(`
+    SELECT rf.report_date date,rf.account account,COALESCE(NULLIF(MAX(ua.name),''),rf.account) accountName,
+      SUM(rf.requests) requests,SUM(rf.matched_requests) matchedRequests,SUM(rf.impressions) impressions,
+      SUM(rf.clicks) clicks,ROUND(SUM(rf.revenue),6) revenue,
+      ROUND(SUM(rf.revenue*(${upstreamShareSql('rf')}/100.0)),6) upstreamRevenue,
+      ROUND(SUM(${settled}),6) channelRevenue
+    FROM revenue_facts rf
+    LEFT JOIN upstream_accounts ua ON lower(ua.account_key)=lower(rf.account) AND ua.status='active'
+    WHERE ${where}
+    GROUP BY rf.report_date,rf.account
+    ORDER BY rf.report_date DESC,revenue DESC
+    LIMIT 10000
+  `).all(...params);
+  res.json({ ok: true, range: { start, end }, items: rows.map(row => ({
+    ...row,
+    matchRate: Number(row.requests) ? Number(row.matchedRequests) * 100 / Number(row.requests) : 0,
+    ecpm: Number(row.impressions) ? Number(row.revenue) * 1000 / Number(row.impressions) : 0,
+    upstreamEcpm: Number(row.impressions) ? Number(row.upstreamRevenue) * 1000 / Number(row.impressions) : 0,
+    channelEcpm: Number(row.impressions) ? Number(row.channelRevenue) * 1000 / Number(row.impressions) : 0
+  })) });
 });
 
 app.get('/api/admin/upstream-accounts', requireAuth, requireAdmin, (_req,res) => res.json({ ok:true, items:db.prepare('SELECT u.id,u.account_key accountKey,u.name,u.soap_account_id soapAccountId,s.name soapAccountName,s.network_code networkCode,u.share_percent sharePercent,u.status,u.created_at createdAt,u.updated_at updatedAt FROM upstream_accounts u LEFT JOIN soap_accounts s ON s.id=u.soap_account_id ORDER BY u.account_key').all() }));
