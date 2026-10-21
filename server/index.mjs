@@ -451,7 +451,7 @@ app.get('/api/reports', requireAuth, (req, res) => {
   const settled = settledRevenueSql('revenue_facts');
   const rows = db.prepare(`SELECT ${select},SUM(requests) requests,SUM(matched_requests) matchedRequests,SUM(impressions) impressions,SUM(clicks) clicks,ROUND(SUM(revenue),6) revenue,ROUND(SUM(revenue*${upstreamShareSql('revenue_facts')}/100.0),6) upstreamRevenue,ROUND(SUM(${settled}),6) settledRevenue,ROUND(AVG(${upstreamShareSql('revenue_facts')}),2) upstreamSharePercent,ROUND(AVG(${channelRuleShareSql('revenue_facts')}),2) channelSharePercent FROM revenue_facts WHERE ${where.sql} GROUP BY ${group} ORDER BY report_date DESC,revenue DESC LIMIT 5000`).all(...where.params);
   const share = scope ? Number(db.prepare('SELECT share_percent FROM channels WHERE id=?').get(scope)?.share_percent || 0) : 100;
-  res.json({ ok: true, items: rows.map(r => { const settled=scope?r.settledRevenue:r.settledRevenue; const visibleRevenue=req.user.role==='channel'?settled:r.revenue; const {settledRevenue:_,...publicRow}=r; const info=domainInfo(r.url||domainFromAdUnit(r.adUnit)); return { ...publicRow, url:publicRow.url||info.domain, mainDomain:info.mainDomain, domainType:info.domainType, revenue:visibleRevenue, ecpm:r.impressions?Number((visibleRevenue*1000/r.impressions).toFixed(6)):0, upstreamRevenue:req.user.role==='channel'?undefined:r.upstreamRevenue, channelRevenue:settled, matchRate:r.requests?r.matchedRequests*100/r.requests:0 }; }) });
+  res.json({ ok: true, items: rows.map(r => { const settled=scope?r.settledRevenue:r.settledRevenue; const visibleRevenue=req.user.role==='channel'?settled:r.revenue; const {settledRevenue:_,...publicRow}=r; const info=domainInfo(r.url||domainFromAdUnit(r.adUnit)); return { ...publicRow, url:publicRow.url||info.domain, mainDomain:info.mainDomain, domainType:info.domainType, revenue:visibleRevenue, ecpm:r.impressions?Number((visibleRevenue*1000/r.impressions).toFixed(6)):0, upstreamRevenue:req.user.role==='channel'?undefined:r.upstreamRevenue, channelRevenue:settled, grossProfit:req.user.role==='admin'?Number(r.upstreamRevenue||0)*0.85-Number(settled||0):undefined, matchRate:r.requests?r.matchedRequests*100/r.requests:0 }; }) });
 });
 
 // Account-level report for the admin console. Keep settlement calculations on
@@ -519,7 +519,8 @@ app.get('/api/admin/reports/accounts', requireAuth, requireAdmin, (req, res) => 
       matchRate: Number(row.requests) ? Number(row.matchedRequests) * 100 / Number(row.requests) : 0,
       ecpm: Number(row.impressions) ? Number(row.revenue) * 1000 / Number(row.impressions) : 0,
       upstreamEcpm: Number(row.impressions) ? Number(row.upstreamRevenue) * 1000 / Number(row.impressions) : 0,
-      channelEcpm: Number(row.impressions) ? Number(row.channelRevenue) * 1000 / Number(row.impressions) : 0
+      channelEcpm: Number(row.impressions) ? Number(row.channelRevenue) * 1000 / Number(row.impressions) : 0,
+      grossProfit: Number(row.upstreamRevenue || 0) * 0.85 - Number(row.channelRevenue || 0)
     }))
   });
 });
@@ -573,7 +574,8 @@ app.get('/api/public/account/revenue', requireAccountReportKey, (req, res) => {
     matchRate: Number(row.requests) ? Number(row.matchedRequests) * 100 / Number(row.requests) : 0,
     ecpm: Number(row.impressions) ? Number(row.revenue) * 1000 / Number(row.impressions) : 0,
     upstreamEcpm: Number(row.impressions) ? Number(row.upstreamRevenue) * 1000 / Number(row.impressions) : 0,
-    channelEcpm: Number(row.impressions) ? Number(row.channelRevenue) * 1000 / Number(row.impressions) : 0
+    channelEcpm: Number(row.impressions) ? Number(row.channelRevenue) * 1000 / Number(row.impressions) : 0,
+    grossProfit: Number(row.upstreamRevenue || 0) * 0.85 - Number(row.channelRevenue || 0)
   })) });
 });
 
