@@ -435,6 +435,76 @@ app.get('/api/reports', requireAuth, (req, res) => {
   res.json({ ok: true, items: rows.map(r => { const settled=scope?r.settledRevenue:r.settledRevenue; const visibleRevenue=req.user.role==='channel'?settled:r.revenue; const {settledRevenue:_,...publicRow}=r; const info=domainInfo(r.url||domainFromAdUnit(r.adUnit)); return { ...publicRow, url:publicRow.url||info.domain, mainDomain:info.mainDomain, domainType:info.domainType, revenue:visibleRevenue, ecpm:r.impressions?Number((visibleRevenue*1000/r.impressions).toFixed(6)):0, upstreamRevenue:req.user.role==='channel'?undefined:r.upstreamRevenue, channelRevenue:settled, matchRate:r.requests?r.matchedRequests*100/r.requests:0 }; }) });
 });
 
+// Account-level report for the admin console. Keep settlement calculations on
+// the server so callers never need to infer the upstream deduction.
+app.get('/api/admin/reports/accounts', requireAuth, requireAdmin, (req, res) => {
+  const { start, end } = range(req);
+  const filters = ['rf.report_date BETWEEN ? AND ?'];
+  const params = [start, end];
+  const channelId = Number(req.query.channelId || 0);
+  if (channelId) {
+    filters.push('rf.channel_id=?');
+    params.push(channelId);
+  }
+  const account = String(req.query.account || req.query.upstreamAccount || '').trim();
+  if (account) {
+    filters.push('lower(rf.account)=lower(?)');
+    params.push(account);
+  }
+  const adUnit = String(req.query.adUnit || '').trim();
+  if (adUnit) {
+    filters.push('lower(rf.ad_unit)=lower(?)');
+    params.push(adUnit);
+  }
+  const domain = String(req.query.domain || '').trim();
+  if (domain) {
+    filters.push(`lower(${mappedDomainSql('rf')})=lower(?)`);
+    params.push(normalizedDomain(domain));
+  }
+  const channel = String(req.query.channel || '').trim();
+  if (channel) {
+    filters.push('lower(c.name)=lower(?)');
+    params.push(channel);
+  }
+  const where = filters.join(' AND ');
+  const settled = settledRevenueSql('rf');
+  const rows = db.prepare(`
+    SELECT
+      rf.account AS account,
+      COALESCE(NULLIF(MAX(ua.name), ''), rf.account) AS accountName,
+      COUNT(DISTINCT rf.channel_id) AS channelCount,
+      COUNT(DISTINCT rf.ad_unit) AS adUnitCount,
+      COUNT(DISTINCT ${mappedDomainSql('rf')}) AS domainCount,
+      SUM(rf.requests) AS requests,
+      SUM(rf.matched_requests) AS matchedRequests,
+      SUM(rf.impressions) AS impressions,
+      SUM(rf.clicks) AS clicks,
+      ROUND(SUM(rf.revenue), 6) AS revenue,
+      ROUND(SUM(rf.revenue * (${upstreamShareSql('rf')}/100.0)), 6) AS upstreamRevenue,
+      ROUND(SUM(${settled}), 6) AS channelRevenue,
+      ROUND(AVG(${upstreamShareSql('rf')}), 2) AS upstreamSharePercent,
+      ROUND(AVG(${channelRuleShareSql('rf')}), 2) AS channelSharePercent
+    FROM revenue_facts rf
+    LEFT JOIN upstream_accounts ua ON lower(ua.account_key)=lower(rf.account) AND ua.status='active'
+    LEFT JOIN channels c ON c.id=rf.channel_id
+    WHERE ${where}
+    GROUP BY rf.account
+    ORDER BY revenue DESC, rf.account
+    LIMIT 5000
+  `).all(...params);
+  res.json({
+    ok: true,
+    range: { start, end },
+    items: rows.map(row => ({
+      ...row,
+      matchRate: Number(row.requests) ? Number(row.matchedRequests) * 100 / Number(row.requests) : 0,
+      ecpm: Number(row.impressions) ? Number(row.revenue) * 1000 / Number(row.impressions) : 0,
+      upstreamEcpm: Number(row.impressions) ? Number(row.upstreamRevenue) * 1000 / Number(row.impressions) : 0,
+      channelEcpm: Number(row.impressions) ? Number(row.channelRevenue) * 1000 / Number(row.impressions) : 0
+    }))
+  });
+});
+
 app.get('/api/admin/upstream-accounts', requireAuth, requireAdmin, (_req,res) => res.json({ ok:true, items:db.prepare('SELECT u.id,u.account_key accountKey,u.name,u.soap_account_id soapAccountId,s.name soapAccountName,s.network_code networkCode,u.share_percent sharePercent,u.status,u.created_at createdAt,u.updated_at updatedAt FROM upstream_accounts u LEFT JOIN soap_accounts s ON s.id=u.soap_account_id ORDER BY u.account_key').all() }));
 app.post('/api/admin/upstream-accounts', requireAuth, requireAdmin, (req,res) => {
   const accountKey=String(req.body?.accountKey||'').trim(), name=String(req.body?.name||accountKey).trim(), share=Number(req.body?.sharePercent), soapAccountId=Number(req.body?.soapAccountId)||null;
