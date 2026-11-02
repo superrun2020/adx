@@ -1,0 +1,95 @@
+const API_ROOT = 'https://admanager.googleapis.com/v1/';
+const NETWORK_CODE = /^\d{6,}$/;
+const AD_UNIT_NAME = /^networks\/(\d+)\/adUnits\/(\d+)$/;
+
+function networkCode(value) {
+  const code = String(value || '').trim();
+  if (!NETWORK_CODE.test(code)) throw new Error('invalid_network_code');
+  return code;
+}
+
+export function adUnitResource(value, network) {
+  const name = String(value || '').trim();
+  const match = AD_UNIT_NAME.exec(name);
+  if (!match || match[1] !== networkCode(network)) throw new Error('invalid_parent_ad_unit');
+  return name;
+}
+
+export function buildGamAdUnit(plan, network, parent) {
+  const parentAdUnit = adUnitResource(parent, network);
+  const displayName = String(plan?.name || '').trim();
+  const adUnitCode = String(plan?.code || '').trim();
+  if (!displayName || displayName.length > 255 || !adUnitCode) throw new Error('invalid_ad_unit_plan');
+
+  const rawSize = String(plan?.size || '').trim();
+  const fixed = /^(\d{1,4})\s*[xX×]\s*(\d{1,4})$/.exec(rawSize);
+  let size;
+  if (fixed) {
+    const width = Number(fixed[1]), height = Number(fixed[2]);
+    if (!width || !height) throw new Error('invalid_ad_unit_size');
+    size = { width, height, sizeType: 'PIXEL' };
+  } else if (rawSize.toLowerCase() === 'fluid') {
+    size = { width: 1, height: 1, sizeType: 'FLUID' };
+  } else {
+    throw new Error('unsupported_ad_unit_size_use_WxH_or_fluid');
+  }
+
+  const adUnit = {
+    parentAdUnit, displayName, adUnitCode,
+    adUnitSizes: [{ size, environmentType: 'BROWSER' }]
+  };
+  const description = String(plan?.description || '').trim();
+  if (description) adUnit.description = description;
+  if (plan?.adsense_enabled === 1 || plan?.adsenseEnabled === true) adUnit.appliedAdsenseEnabled = true;
+  const targetWindow = String(plan?.target_window ?? plan?.targetWindow ?? '').trim().toUpperCase();
+  if (targetWindow === 'TOP' || targetWindow === '_TOP') adUnit.appliedTargetWindow = 'TOP';
+  if (targetWindow === 'BLANK' || targetWindow === '_BLANK') adUnit.appliedTargetWindow = 'BLANK';
+  return adUnit;
+}
+
+export async function gamApiRequest(network, token, relativePath, { method = 'GET', query = {}, body, fetchImpl = fetch } = {}) {
+  const code = networkCode(network);
+  if (!token) throw new Error('missing_gam_access_token');
+  if (relativePath !== 'networks/' + code && !String(relativePath).startsWith('networks/' + code + '/')) {
+    throw new Error('invalid_gam_resource');
+  }
+  const url = new URL(relativePath, API_ROOT);
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
+  }
+  const response = await fetchImpl(url, {
+    method,
+    headers: { Authorization: 'Bearer ' + token, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+    signal: AbortSignal.timeout(30000)
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = String(payload?.error?.message || payload?.error?.status || 'request_failed').slice(0, 400);
+    throw new Error('gam_http_' + response.status + ': ' + detail);
+  }
+  return payload;
+}
+
+function request(network, token, suffix, options) {
+  const code = networkCode(network);
+  return gamApiRequest(code, token, 'networks/' + code + '/adUnits' + suffix, options);
+}
+
+export function listGamAdUnits(network, token, { pageToken = '', filter = '', pageSize = 100 } = {}, fetchImpl) {
+  return request(network, token, '', { query: { pageSize, pageToken, filter }, fetchImpl });
+}
+
+export function getGamAdUnit(network, token, name, fetchImpl) {
+  const resource = adUnitResource(name, network);
+  return request(network, token, '/' + resource.split('/').at(-1), { fetchImpl });
+}
+
+export async function findGamAdUnitByCode(network, token, code, fetchImpl) {
+  const result = await listGamAdUnits(network, token, { filter: 'adUnitCode = ' + JSON.stringify(String(code)), pageSize: 100 }, fetchImpl);
+  return (result.adUnits || []).find(unit => unit.adUnitCode === code) || null;
+}
+
+export function createGamAdUnit(network, token, adUnit, fetchImpl) {
+  return request(network, token, '', { method: 'POST', body: adUnit, fetchImpl });
+}

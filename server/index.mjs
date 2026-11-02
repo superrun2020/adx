@@ -1,13 +1,12 @@
 import 'dotenv/config';
 import crypto from 'node:crypto';
-import zlib from 'node:zlib';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { registerGamRoutes } from './gam-routes.mjs';
+import { createGamSync } from './gam-sync.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -17,7 +16,6 @@ const adminHost = String(process.env.ADX_ADMIN_HOST || 'adx.geekforest.ai').toLo
 const publisherHost = String(process.env.ADX_PUBLISHER_HOST || 'adxpub.geekforest.ai').toLowerCase();
 const production = process.env.NODE_ENV === 'production';
 const app = express();
-const execFileAsync = promisify(execFile);
 app.set('trust proxy', 'loopback');
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 const db = new DatabaseSync(dbPath);
@@ -112,7 +110,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 CREATE TABLE IF NOT EXISTS soap_accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, network_code TEXT NOT NULL UNIQUE,
-  credential_ciphertext TEXT NOT NULL, api_version TEXT NOT NULL DEFAULT 'v202602',
+  credential_ciphertext TEXT NOT NULL, api_version TEXT NOT NULL DEFAULT 'v1',
   status TEXT NOT NULL DEFAULT 'untested', last_test_at TEXT, last_test_status TEXT,
   last_test_summary TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -132,6 +130,26 @@ try { db.exec('ALTER TABLE channels ADD COLUMN api_secret_ciphertext TEXT'); } c
 for (const column of ['description','adsense_enabled','placement','target_window','label']) {
   if (!db.prepare(`SELECT 1 FROM pragma_table_info('managed_ad_units') WHERE name=?`).get(column)) db.exec(`ALTER TABLE managed_ad_units ADD COLUMN ${column} ${column==='adsense_enabled'?'INTEGER NOT NULL DEFAULT 0':'TEXT NOT NULL DEFAULT \'\''}`);
 }
+for (const [column, definition] of Object.entries({
+  gam_network_code: 'TEXT', gam_parent_ad_unit: 'TEXT', publish_error: "TEXT NOT NULL DEFAULT ''",
+  published_at: 'TEXT'
+})) {
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('managed_ad_units') WHERE name=?").get(column)) {
+    db.exec('ALTER TABLE managed_ad_units ADD COLUMN ' + column + ' ' + definition);
+  }
+}
+const firstRestMigration = !db.prepare("SELECT 1 FROM pragma_table_info('soap_accounts') WHERE name='rest_report_name'").get();
+for (const [column, definition] of Object.entries({
+  rest_report_name: "TEXT NOT NULL DEFAULT ''", rest_channel_id: 'INTEGER',
+  rest_upstream_account_id: 'INTEGER', rest_money_divisor: 'INTEGER',
+  rest_sync_enabled: 'INTEGER NOT NULL DEFAULT 0', rest_last_preview_at: 'TEXT',
+  rest_last_preview_rows: 'INTEGER NOT NULL DEFAULT 0', rest_network_timezone: "TEXT NOT NULL DEFAULT ''"
+})) {
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('soap_accounts') WHERE name=?").get(column)) {
+    db.exec('ALTER TABLE soap_accounts ADD COLUMN ' + column + ' ' + definition);
+  }
+}
+if (firstRestMigration) db.exec("UPDATE soap_accounts SET status='untested',last_test_at=NULL,last_test_status=NULL,last_test_summary='请重新测试 REST 连接'");
 if (!db.prepare("SELECT 1 FROM pragma_table_info('upstream_accounts') WHERE name='soap_account_id'").get()) db.exec('ALTER TABLE upstream_accounts ADD COLUMN soap_account_id INTEGER');
 if (!db.prepare("SELECT 1 FROM pragma_table_info('revenue_facts') WHERE name='raw_json'").get()) {
   db.exec("ALTER TABLE revenue_facts ADD COLUMN raw_json TEXT NOT NULL DEFAULT '{}'");
@@ -174,86 +192,33 @@ function decryptCredential(encoded) {
   decipher.setAuthTag(Buffer.from(tagText, 'base64url'));
   return JSON.parse(Buffer.concat([decipher.update(Buffer.from(dataText, 'base64url')), decipher.final()]).toString('utf8'));
 }
-function xmlEscape(value) { return String(value).replace(/[<&>"']/g, char => ({'<':'&lt;','&':'&amp;','>':'&gt;','"':'&quot;',"'":'&apos;'}[char])); }
-function soapText(xml, tag) { const value=String(xml).match(new RegExp(`<[^>]*${tag}[^>]*>([^<]*)</[^>]*${tag}>`))?.[1] || ''; return value.replaceAll('&amp;','&').replaceAll('&lt;','<').replaceAll('&gt;','>').replaceAll('&quot;','"').replaceAll('&apos;',"'"); }
-async function issueServiceToken(credentials) {
+async function issueServiceToken(credentials, scope = 'https://www.googleapis.com/auth/admanager') {
   const now = Math.floor(Date.now() / 1000);
   const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
-  const payload = Buffer.from(JSON.stringify({ iss: credentials.client_email, scope: 'https://www.googleapis.com/auth/dfp', aud: credentials.token_uri, iat: now, exp: now + 3600 })).toString('base64url');
+  const tokenUri = credentials.token_uri || 'https://oauth2.googleapis.com/token';
+  if (tokenUri !== 'https://oauth2.googleapis.com/token') throw new Error('invalid_service_account_token_uri');
+  const payload = Buffer.from(JSON.stringify({ iss: credentials.client_email, scope, aud: tokenUri, iat: now, exp: now + 3600 })).toString('base64url');
   const unsigned = `${header}.${payload}`;
   const signature = crypto.sign('RSA-SHA256', Buffer.from(unsigned), credentials.private_key).toString('base64url');
-  const tokenResponse = await fetch(credentials.token_uri || 'https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: `${unsigned}.${signature}` }) });
+  const tokenResponse = await fetch(tokenUri, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: `${unsigned}.${signature}` }) });
   const body = await tokenResponse.json().catch(() => ({}));
   if (!tokenResponse.ok || !body.access_token) throw new Error(`oauth_${tokenResponse.status}_${body.error || 'failed'}`);
   return body.access_token;
 }
-async function testSoapAccount(account) {
+async function gamTokenFor(account) {
   const credentials = decryptCredential(account.credential_ciphertext);
   if (!credentials.client_email || !credentials.private_key) throw new Error('invalid_service_account_json');
-  const version = /^v\d{6}$/.test(account.api_version) ? account.api_version : 'v202602';
-  const token = await issueServiceToken(credentials);
-  const endpoint = `https://ads.google.com/apis/ads/publisher/${version}/NetworkService`;
-  const ns = `https://www.google.com/apis/ads/publisher/${version}`;
-  const soap = `<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:tns="${ns}"><soap:Header><tns:RequestHeader><tns:networkCode>${xmlEscape(account.network_code)}</tns:networkCode><tns:applicationName>AdX Control</tns:applicationName></tns:RequestHeader></soap:Header><soap:Body><tns:getCurrentNetwork/></soap:Body></soap:Envelope>`;
-  const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'text/xml; charset=utf-8', Authorization: `Bearer ${token}` }, body: soap });
-  const text = await response.text();
-  if (!response.ok || /<soap:Fault|<Fault/.test(text)) throw new Error(`soap_${response.status}_${soapText(text, 'faultstring') || soapText(text, 'ApiVersionError') || 'request_failed'}`);
-  const network = { id: soapText(text, 'id'), displayName: soapText(text, 'displayName'), networkCode: soapText(text, 'networkCode'), currencyCode: soapText(text, 'currencyCode'), timeZone: soapText(text, 'timeZone') };
-  if (!network.networkCode) throw new Error('soap_network_not_found');
-  return { version, network };
+  return issueServiceToken(credentials);
 }
-function soapEnvelope(version, networkCode, body) { const ns=`https://www.google.com/apis/ads/publisher/${version}`; return `<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:tns="${ns}"><soap:Header><tns:RequestHeader><tns:networkCode>${xmlEscape(networkCode)}</tns:networkCode><tns:applicationName>AdX Control</tns:applicationName></tns:RequestHeader></soap:Header><soap:Body>${body}</soap:Body></soap:Envelope>`; }
-async function soapRequest(account, service, body) { const credentials=decryptCredential(account.credential_ciphertext),version=account.api_version,token=await issueServiceToken(credentials),ns=`https://www.google.com/apis/ads/publisher/${version}`,response=await fetch(`https://ads.google.com/apis/ads/publisher/${version}/${service}`,{method:'POST',headers:{'Content-Type':'text/xml; charset=utf-8',Authorization:`Bearer ${token}`},body:soapEnvelope(version,account.network_code,body)}); const text=await response.text(); if(!response.ok||/<soap:Fault|<Fault/.test(text))throw new Error(`soap_${response.status}_${soapText(text,'faultstring')||'request_failed'}`); return {text,ns,version}; }
-function dateXml(date) { const d=new Date(`${date}T00:00:00Z`); return `<tns:year>${d.getUTCFullYear()}</tns:year><tns:month>${d.getUTCMonth()+1}</tns:month><tns:day>${d.getUTCDate()}</tns:day>`; }
-function csvRows(text) { const clean=text.replace(/^\uFEFF/,'').trim(); const lines=clean.split(/\r?\n/).filter(Boolean); if(lines.length<2)return []; const split=s=>{const delimiter=s.includes('\t')?'\t':','; return s.split(delimiter).map(v=>v.replace(/^"|"$/g,'').trim());}; const headerIndex=lines.findIndex(line=>{const headers=split(line).map(v=>v.toLowerCase()); return headers.some(v=>v.includes('date'))&&headers.some(v=>v.includes('ad exchange'));}); if(headerIndex<0)return []; const headers=split(lines[headerIndex]).map(v=>v.toLowerCase()); return lines.slice(headerIndex+1).map(line=>{const cells=split(line),row={}; headers.forEach((h,i)=>row[h]=cells[i]||''); return row}); }
-function decodeReportBody(buffer) { let body=Buffer.from(buffer); if(body[0]===0x1f&&body[1]===0x8b) body=zlib.gunzipSync(body); if(body[0]===0x3c&&body.toString('utf8',0,200).toLowerCase().includes('<html')) throw new Error('report_download_html_error'); const text=body.toString('utf8'); if(!text.trim())throw new Error('report_download_empty'); return text; }
-function reportProxyUrl() {
-  const direct=String(process.env.ADX_REPORT_PROXY||'').trim();
-  if (direct) return direct;
-  const host=String(process.env.ADX_REPORT_PROXY_HOST||'').trim();
-  if (!host) return '';
-  const protocol=String(process.env.ADX_REPORT_PROXY_PROTOCOL||'socks5h').trim();
-  const port=String(process.env.ADX_REPORT_PROXY_PORT||'1080').trim();
-  const user=String(process.env.ADX_REPORT_PROXY_USER||'');
-  const password=String(process.env.ADX_REPORT_PROXY_PASSWORD||'');
-  return `${protocol}://${user?`${encodeURIComponent(user)}:${encodeURIComponent(password)}@`:''}${host}:${port}`;
-}
-async function downloadReport(url) { const proxy=reportProxyUrl(); if(!proxy){ const response=await fetch(url); if(!response.ok)throw new Error(`report_download_http_${response.status}`); return Buffer.from(await response.arrayBuffer()); } const parsed=new URL(proxy); if(!['socks5:','socks5h:'].includes(parsed.protocol))throw new Error('unsupported_report_proxy'); try { const {stdout}=await execFileAsync('curl',['-fsSL','--compressed','--max-time','180','--socks5-hostname',`${parsed.hostname}:${parsed.port||1080}`,...(parsed.username?[ '--proxy-user',`${decodeURIComponent(parsed.username)}:${decodeURIComponent(parsed.password)}`]:[]),url],{encoding:'buffer',maxBuffer:100*1024*1024}); return Buffer.from(stdout); } catch { throw new Error('report_download_proxy_failed'); } }
-function reportValue(row, names) { const key=Object.keys(row).find(k=>names.some(n=>k.includes(n))); return key===undefined?'':row[key]; }
-function reportDateValue(value) { const raw=String(value||'').trim(); if(/^\d{4}-\d{2}-\d{2}/.test(raw))return raw.slice(0,10); const match=raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/); if(!match)return raw.slice(0,10); const year=match[3].length===2?`20${match[3]}`:match[3]; return `${year}-${match[1].padStart(2,'0')}-${match[2].padStart(2,'0')}`; }
 function domainFromAdUnit(value) { const raw=String(value||''); const labelled=raw.match(/(?:^|[_-])lb-((?:[a-z0-9](?:[a-z0-9-]*\.)+)[a-z]{2,})(?=$|[-_])/i); if(labelled)return normalizedDomain(labelled[1]); const match=raw.match(/(?:^|[-_])((?:[a-z0-9](?:[a-z0-9-]*\.)+)[a-z]{2,})(?=$|[-_])/i); return match?normalizedDomain(match[1]):''; }
-function parseReportRows(rows, channelId, sourceFile, accountKey='') { return rows.map(row=>{ const date=reportDateValue(reportValue(row,['date'])),hour=Number(reportValue(row,['hour'])); const revenueKey=Object.keys(row).find(k=>['ad_exchange_line_item_level_revenue','ad exchange line item level revenue','ad_exchange_revenue','revenue'].some(n=>k.includes(n)))||''; const revenueRaw=String(revenueKey?row[revenueKey]:''); const numericRevenue=Number(revenueRaw.replace(/[^0-9.-]/g,'')); const amount=Number.isFinite(numericRevenue)?(/micro/i.test(revenueKey)?numericRevenue/1000000:numericRevenue):0; const adUnit=reportValue(row,['ad_unit_name','ad unit']); const reportUrl=String(reportValue(row,['site','url'])||'').trim(); const url=reportUrl||domainFromAdUnit(adUnit); return {channelId,reportDate:date,hour:Number.isInteger(hour)?hour:-1,url,domain:normalizedDomain(url),account:String(accountKey),adUnit,country:reportValue(row,['country_code','country']),requests:Number(reportValue(row,['ad_exchange_total_requests','ad exchange ad requests','total_ad_requests','total_requests'])||0),matched:Number(reportValue(row,['ad_exchange_responses_served','ad exchange responses served','matched_requests','responses_served'])||0),impressions:Number(reportValue(row,['ad_exchange_line_item_level_impressions','ad exchange line item level impressions','ad_exchange_impressions','ad exchange impressions'])||0),clicks:Number(reportValue(row,['ad_exchange_line_item_level_clicks','ad exchange line item level clicks','ad_exchange_clicks','clicks'])||0),revenue:amount,sourceFile,rawJson:JSON.stringify(row)}; }).filter(x=>validDate(x.reportDate)&&[x.requests,x.matched,x.impressions,x.clicks,x.revenue].every(Number.isFinite)); }
-async function syncSoapAccount(account) {
-  const channel=db.prepare("SELECT id FROM channels WHERE status='active' ORDER BY id LIMIT 1").get();
-  if(!channel) throw new Error('no_active_channel');
-  const historyStart=validDate(process.env.ADX_HISTORY_START_DATE)?process.env.ADX_HISTORY_START_DATE:'';
-  const end=historyStart?new Date(`${new Date(Date.now()-86400000).toISOString().slice(0,10)}T23:00:00Z`):new Date(Date.now()-60*60*1000);
-  const start=historyStart?new Date(`${historyStart}T00:00:00Z`):new Date(end.getTime()-60*60*1000);
-  const date=start.toISOString().slice(0,10),endDate=end.toISOString().slice(0,10),hour=historyStart?-1:start.getUTCHours();
-  const run=db.prepare('INSERT INTO soap_sync_runs(soap_account_id,channel_id,window_start,window_end,status) VALUES(?,?,?,?,?)').run(account.id,channel.id,start.toISOString(),end.toISOString(),'running');
-  const runId=Number(run.lastInsertRowid);
-  try {
-    const v=account.api_version;
-    const query=`<tns:runReportJob><tns:reportJob><tns:reportQuery><tns:dimensions>DATE</tns:dimensions><tns:dimensions>HOUR</tns:dimensions><tns:dimensions>SITE</tns:dimensions><tns:dimensions>COUNTRY_CODE</tns:dimensions><tns:dimensions>AD_UNIT_NAME</tns:dimensions><tns:dimensions>AD_UNIT_ID</tns:dimensions><tns:columns>AD_EXCHANGE_TOTAL_REQUESTS</tns:columns><tns:columns>AD_EXCHANGE_RESPONSES_SERVED</tns:columns><tns:columns>AD_EXCHANGE_LINE_ITEM_LEVEL_IMPRESSIONS</tns:columns><tns:columns>AD_EXCHANGE_LINE_ITEM_LEVEL_CLICKS</tns:columns><tns:columns>AD_EXCHANGE_LINE_ITEM_LEVEL_REVENUE</tns:columns><tns:columns>AD_EXCHANGE_LINE_ITEM_LEVEL_AVERAGE_ECPM</tns:columns><tns:startDate>${dateXml(date)}</tns:startDate><tns:endDate>${dateXml(endDate)}</tns:endDate><tns:dateRangeType>CUSTOM_DATE</tns:dateRangeType><tns:reportCurrency>USD</tns:reportCurrency><tns:timeZoneType>PUBLISHER</tns:timeZoneType></tns:reportQuery></tns:reportJob></tns:runReportJob>`;
-    const result=await soapRequest(account,'ReportService',query),jobId=soapText(result.text,'id');
-    if(!jobId) throw new Error('report_job_id_missing');
-    let status='IN_PROGRESS';
-    for(let i=0;i<40&&status==='IN_PROGRESS';i++){ await new Promise(r=>setTimeout(r,1500)); const s=await soapRequest(account,'ReportService',`<tns:getReportJobStatus><tns:reportJobId>${jobId}</tns:reportJobId></tns:getReportJobStatus>`); status=soapText(s.text,'rval'); }
-    if(status!=='COMPLETED') throw new Error(`report_status_${status}`);
-    const d=await soapRequest(account,'ReportService',`<tns:getReportDownloadURL><tns:reportJobId>${jobId}</tns:reportJobId><tns:exportFormat>TSV</tns:exportFormat></tns:getReportDownloadURL>`),url=soapText(d.text,'rval');
-    if(!url) throw new Error('report_download_url_missing');
-    const file=decodeReportBody(await downloadReport(url)),rows=csvRows(file); if(!rows.length) throw new Error(`report_rows_unrecognized:${Buffer.from(file.slice(0,300)).toString('base64')}`); const upstream=db.prepare("SELECT account_key FROM upstream_accounts WHERE soap_account_id=? AND status='active' ORDER BY id LIMIT 1").get(account.id); const facts=parseReportRows(rows,channel.id,`soap:${account.network_code}:${date}_${endDate}`,upstream?.account_key||account.network_code);
-    const insert=db.prepare(`INSERT INTO revenue_facts(channel_id,report_date,hour,url,domain,account,ad_unit,country,requests,matched_requests,impressions,clicks,revenue,source_file,raw_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(channel_id,report_date,hour,url,account,ad_unit,country) DO UPDATE SET requests=excluded.requests,matched_requests=excluded.matched_requests,impressions=excluded.impressions,clicks=excluded.clicks,revenue=excluded.revenue,domain=excluded.domain,source_file=excluded.source_file,raw_json=excluded.raw_json,imported_at=CURRENT_TIMESTAMP`);
-    transaction(()=>facts.forEach(f=>insert.run(f.channelId,f.reportDate,f.hour,f.url,f.domain,f.account,f.adUnit,f.country,f.requests,f.matched,f.impressions,f.clicks,f.revenue,f.sourceFile,f.rawJson)));
-    db.prepare('UPDATE soap_sync_runs SET status=\'success\',rows_read=?,rows_written=?,finished_at=CURRENT_TIMESTAMP WHERE id=?').run(rows.length,facts.length,runId);
-    return {runId,rows:facts.length,date,endDate,hour};
-  } catch(error) { db.prepare('UPDATE soap_sync_runs SET status=\'failed\',error=?,finished_at=CURRENT_TIMESTAMP WHERE id=?').run(String(error.message).slice(0,1000),runId); throw error; }
-}
+const gamSync = createGamSync({ db, transaction, tokenFor: gamTokenFor, normalizedDomain, domainFromAdUnit, audit });
 
 const adminEmail = normalizeEmail(process.env.ADX_ADMIN_EMAIL);
 const adminPassword = String(process.env.ADX_ADMIN_PASSWORD || '');
-if (production && (!adminEmail || adminPassword.length < 12 || /replace|change|example\.com/i.test(adminPassword))) throw new Error('production_admin_credentials_required');
-if (adminEmail && adminPassword.length >= 10 && !db.prepare('SELECT id FROM users WHERE email=?').get(adminEmail)) {
+const hasActiveAdmin = Boolean(db.prepare("SELECT 1 FROM users WHERE role='admin' AND status='active' LIMIT 1").get());
+const bootstrapCredentialsValid = Boolean(adminEmail && adminPassword.length >= (production ? 12 : 10) && !/replace|change|example\.com/i.test(adminPassword));
+if (production && !hasActiveAdmin && !bootstrapCredentialsValid) throw new Error('production_admin_credentials_required');
+if (!hasActiveAdmin && bootstrapCredentialsValid) {
   db.prepare("INSERT INTO users(email,name,password_hash,role,status) VALUES(?,?,?,'admin','active')")
     .run(adminEmail, '平台管理员', passwordHash(adminPassword));
 }
@@ -387,38 +352,9 @@ app.post('/api/admin/ad-units/create', requireAuth, requireAdmin, (req,res) => {
   const created=transaction(()=>items.reduce((count,item)=>count+Number(insert.run(item.code,item.name,item.subdomain,item.inventoryType,item.size,item.description||'',item.adsenseEnabled?1:0,item.placement||'',item.targetWindow||'',item.label||'',JSON.stringify(item.sourceRow||{}),'planned',req.user.email).changes),0));
   audit(req.user.email,'ad_units.create','ad_unit_batch','',JSON.stringify({requested:items.length,created}),req.ip); res.status(201).json({ok:true,created,skipped:items.length-created,status:'planned',message:'已保存本地广告单元计划，等待 GAM API 授权后执行真实创建'});
 });
-app.get('/api/admin/ad-units', requireAuth, requireAdmin, (_req,res) => res.json({ok:true,items:db.prepare('SELECT id,code,name,subdomain,inventory_type inventoryType,size,description,adsense_enabled adsenseEnabled,placement,target_window targetWindow,label,status,provider_id providerId,created_at createdAt FROM managed_ad_units ORDER BY id DESC LIMIT 1000').all()}));
+app.get('/api/admin/ad-units', requireAuth, requireAdmin, (_req,res) => res.json({ok:true,items:db.prepare('SELECT id,code,name,subdomain,inventory_type inventoryType,size,description,adsense_enabled adsenseEnabled,placement,target_window targetWindow,label,status,provider_id providerId,gam_network_code gamNetworkCode,gam_parent_ad_unit gamParentAdUnit,publish_error publishError,published_at publishedAt,created_at createdAt FROM managed_ad_units ORDER BY id DESC LIMIT 1000').all()}));
 
-app.get('/api/admin/soap-accounts', requireAuth, requireAdmin, (_req, res) => res.json({ ok: true, items: db.prepare(`SELECT id,name,network_code networkCode,api_version apiVersion,status,last_test_at lastTestAt,last_test_status lastTestStatus,last_test_summary lastTestSummary,created_at createdAt FROM soap_accounts ORDER BY id DESC`).all() }));
-app.post('/api/admin/soap-accounts', requireAuth, requireAdmin, async (req, res) => {
-  const name = String(req.body?.name || '').trim(), networkCode = String(req.body?.networkCode || '').trim(), apiVersion = String(req.body?.apiVersion || 'v202602').trim();
-  const credentials = req.body?.credentials;
-  if (!name || !/^\d{6,}$/.test(networkCode) || !/^v\d{6}$/.test(apiVersion) || !credentials || typeof credentials !== 'object') return res.status(400).json({ ok: false, error: 'invalid_soap_account' });
-  if (!credentials.client_email || !credentials.private_key) return res.status(400).json({ ok: false, error: 'invalid_service_account_json' });
-  try {
-    const result = db.prepare(`INSERT INTO soap_accounts(name,network_code,credential_ciphertext,api_version,created_by) VALUES(?,?,?,?,?) ON CONFLICT(network_code) DO UPDATE SET name=excluded.name,credential_ciphertext=excluded.credential_ciphertext,api_version=excluded.api_version,updated_at=CURRENT_TIMESTAMP`).run(name, networkCode, encryptCredential(credentials), apiVersion, req.user.email);
-    audit(req.user.email, 'soap_account.save', 'soap_account', result.lastInsertRowid || db.prepare('SELECT id FROM soap_accounts WHERE network_code=?').get(networkCode).id, JSON.stringify({ name, networkCode, apiVersion }), req.ip);
-    res.json({ ok: true, item: db.prepare(`SELECT id,name,network_code networkCode,api_version apiVersion,status,last_test_at lastTestAt,last_test_status lastTestStatus,last_test_summary lastTestSummary FROM soap_accounts WHERE network_code=?`).get(networkCode) });
-  } catch (error) { res.status(409).json({ ok: false, error: 'soap_account_save_failed', detail: error.message }); }
-});
-app.post('/api/admin/soap-accounts/:id/test', requireAuth, requireAdmin, async (req, res) => {
-  const id = Number(req.params.id), account = db.prepare('SELECT * FROM soap_accounts WHERE id=?').get(id);
-  if (!account) return res.status(404).json({ ok: false, error: 'soap_account_not_found' });
-  try {
-    const result = await testSoapAccount(account);
-    db.prepare(`UPDATE soap_accounts SET api_version=?,status='active',last_test_at=CURRENT_TIMESTAMP,last_test_status='success',last_test_summary=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(result.version, `连接成功：${result.network.displayName || result.network.networkCode} / ${result.network.currencyCode || ''}`, id);
-    audit(req.user.email, 'soap_account.test', 'soap_account', id, JSON.stringify({ status: 'success', version: result.version, network: result.network }), req.ip);
-    res.json({ ok: true, status: 'success', version: result.version, network: result.network });
-  } catch (error) {
-    const summary = String(error.message || 'soap_test_failed').slice(0, 500);
-    db.prepare(`UPDATE soap_accounts SET status='error',last_test_at=CURRENT_TIMESTAMP,last_test_status='failed',last_test_summary=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(summary, id);
-    audit(req.user.email, 'soap_account.test', 'soap_account', id, JSON.stringify({ status: 'failed', error: summary }), req.ip);
-    res.status(502).json({ ok: false, error: 'soap_test_failed', detail: summary });
-  }
-});
-app.get('/api/admin/soap-sync/runs', requireAuth, requireAdmin, (_req,res)=>res.json({ok:true,items:db.prepare('SELECT r.id,r.soap_account_id soapAccountId,s.name soapAccountName,r.window_start windowStart,r.window_end windowEnd,r.status,r.rows_read rowsRead,r.rows_written rowsWritten,r.error,r.started_at startedAt,r.finished_at finishedAt FROM soap_sync_runs r JOIN soap_accounts s ON s.id=r.soap_account_id ORDER BY r.id DESC LIMIT 100').all()}));
-let syncRunning=false;
-async function runHourlySoapSync(){ if(syncRunning)return; syncRunning=true; try { for(const account of db.prepare("SELECT * FROM soap_accounts WHERE status='active'").all()) { try { await syncSoapAccount(account); } catch(error) { console.error('soap_sync_failed',account.id,error.message); } } } finally { syncRunning=false; } }
+const { runHourlyGamSync } = registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptCredential, tokenFor: gamTokenFor, gamSync, audit });
 
 app.get('/api/dashboard', requireAuth, (req, res) => {
   const scope = reportScope(req), { start, end } = range(req), where = whereScope(scope, start, end);
@@ -579,17 +515,21 @@ app.get('/api/public/account/revenue', requireAccountReportKey, (req, res) => {
   })) });
 });
 
-app.get('/api/admin/upstream-accounts', requireAuth, requireAdmin, (_req,res) => res.json({ ok:true, items:db.prepare('SELECT u.id,u.account_key accountKey,u.name,u.soap_account_id soapAccountId,s.name soapAccountName,s.network_code networkCode,u.share_percent sharePercent,u.status,u.created_at createdAt,u.updated_at updatedAt FROM upstream_accounts u LEFT JOIN soap_accounts s ON s.id=u.soap_account_id ORDER BY u.account_key').all() }));
+app.get('/api/admin/upstream-accounts', requireAuth, requireAdmin, (_req,res) => res.json({ ok:true, items:db.prepare('SELECT u.id,u.account_key accountKey,u.name,u.soap_account_id gamAccountId,s.name gamAccountName,s.network_code networkCode,u.share_percent sharePercent,u.status,u.created_at createdAt,u.updated_at updatedAt FROM upstream_accounts u LEFT JOIN soap_accounts s ON s.id=u.soap_account_id ORDER BY u.account_key').all() }));
 app.post('/api/admin/upstream-accounts', requireAuth, requireAdmin, (req,res) => {
-  const accountKey=String(req.body?.accountKey||'').trim(), name=String(req.body?.name||accountKey).trim(), share=Number(req.body?.sharePercent), soapAccountId=Number(req.body?.soapAccountId)||null;
-  if(!accountKey||!name||!Number.isFinite(share)||share<0||share>100||(soapAccountId&&!db.prepare('SELECT id FROM soap_accounts WHERE id=?').get(soapAccountId)))return res.status(400).json({ok:false,error:'invalid_upstream_account'});
-  try { const r=db.prepare('INSERT INTO upstream_accounts(account_key,name,soap_account_id,share_percent,status) VALUES(?,?,?,?,?)').run(accountKey,name,soapAccountId,share,'active'); audit(req.user.email,'upstream_account.create','upstream_account',r.lastInsertRowid,JSON.stringify({accountKey,name,soapAccountId,share}),req.ip); res.status(201).json({ok:true,item:db.prepare('SELECT id,account_key accountKey,name,soap_account_id soapAccountId,share_percent sharePercent,status FROM upstream_accounts WHERE id=?').get(r.lastInsertRowid)}); } catch { res.status(409).json({ok:false,error:'account_exists'}); }
+  const accountKey=String(req.body?.accountKey||'').trim(), name=String(req.body?.name||accountKey).trim(), share=Number(req.body?.sharePercent), gamAccountId=Number(req.body?.gamAccountId)||null;
+  if(!accountKey||!name||!Number.isFinite(share)||share<0||share>100||(gamAccountId&&!db.prepare('SELECT id FROM soap_accounts WHERE id=?').get(gamAccountId)))return res.status(400).json({ok:false,error:'invalid_upstream_account'});
+  try { const r=db.prepare('INSERT INTO upstream_accounts(account_key,name,soap_account_id,share_percent,status) VALUES(?,?,?,?,?)').run(accountKey,name,gamAccountId,share,'active'); audit(req.user.email,'upstream_account.create','upstream_account',r.lastInsertRowid,JSON.stringify({accountKey,name,gamAccountId,share}),req.ip); res.status(201).json({ok:true,item:db.prepare('SELECT id,account_key accountKey,name,soap_account_id gamAccountId,share_percent sharePercent,status FROM upstream_accounts WHERE id=?').get(r.lastInsertRowid)}); } catch { res.status(409).json({ok:false,error:'account_exists'}); }
 });
 app.put('/api/admin/upstream-accounts/:id', requireAuth, requireAdmin, (req,res) => {
   const id=Number(req.params.id), name=String(req.body?.name||'').trim(), share=Number(req.body?.sharePercent), status=req.body?.status==='disabled'?'disabled':'active';
   if(!Number.isSafeInteger(id)||!name||!Number.isFinite(share)||share<0||share>100)return res.status(400).json({ok:false,error:'invalid_upstream_account'});
   const before=db.prepare('SELECT * FROM upstream_accounts WHERE id=?').get(id); if(!before)return res.status(404).json({ok:false,error:'upstream_account_not_found'});
-  db.prepare('UPDATE upstream_accounts SET name=?,share_percent=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(name,share,status,id); const after=db.prepare('SELECT id,account_key accountKey,name,share_percent sharePercent,status FROM upstream_accounts WHERE id=?').get(id); audit(req.user.email,'upstream_account.update','upstream_account',id,JSON.stringify({before,after}),req.ip); res.json({ok:true,item:after});
+  const gamAccountId=req.body?.gamAccountId===undefined?before.soap_account_id:(Number(req.body.gamAccountId)||null);
+  if(gamAccountId&&!db.prepare('SELECT id FROM soap_accounts WHERE id=?').get(gamAccountId))return res.status(400).json({ok:false,error:'invalid_gam_account'});
+  db.prepare('UPDATE upstream_accounts SET name=?,soap_account_id=?,share_percent=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(name,gamAccountId,share,status,id);
+  if(gamAccountId!==before.soap_account_id||status!=='active')db.prepare('UPDATE soap_accounts SET rest_sync_enabled=0 WHERE rest_upstream_account_id=?').run(id);
+  const after=db.prepare('SELECT id,account_key accountKey,name,soap_account_id gamAccountId,share_percent sharePercent,status FROM upstream_accounts WHERE id=?').get(id); audit(req.user.email,'upstream_account.update','upstream_account',id,JSON.stringify({before,after}),req.ip); res.json({ok:true,item:after});
 });
 app.get('/api/admin/ad-unit-domains', requireAuth, requireAdmin, (_req,res) => res.json({ok:true,items:db.prepare('SELECT id,ad_unit adUnit,domain,created_by createdBy,created_at createdAt,updated_at updatedAt FROM ad_unit_domains ORDER BY ad_unit').all()}));
 app.post('/api/admin/ad-unit-domains', requireAuth, requireAdmin, (req,res) => {
@@ -747,4 +687,4 @@ const dist=path.join(root,'dist'); app.use(express.static(dist,{index:false,maxA
 app.all('/api/{*path}',(_req,res)=>res.status(404).json({ok:false,error:'not_found'}));
 app.get('/{*splat}',(_req,res)=>res.sendFile(path.join(dist,'index.html')));
 app.use((error,_req,res,_next)=>{console.error('request_failed',error.message);res.status(500).json({ok:false,error:'internal_error'})});
-app.listen(port,process.env.HOST||'127.0.0.1',()=>{ console.log(`adx-channel-platform listening on ${port}`); setInterval(runHourlySoapSync,60*60*1000); if(process.env.ADX_SYNC_ON_START==='true')runHourlySoapSync(); });
+app.listen(port,process.env.HOST||'127.0.0.1',()=>{ console.log(`adx-channel-platform listening on ${port}`); setInterval(runHourlyGamSync,60*60*1000); if(process.env.ADX_SYNC_ON_START==='true')runHourlyGamSync(); });

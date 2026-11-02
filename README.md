@@ -13,6 +13,17 @@
 - 双域名入口：管理端与渠道端共享服务，但按 Host 和角色双重隔离。
 - 分成口径：管理后台保存原始收入并设置渠道分成比例；渠道页面与渠道 API 只返回 `原始收入 × 分成比例` 的结算收入。
 
+## Google Ad Manager REST 接入
+
+管理端的账户连接、报表同步和广告单元发布均使用 Google Ad Manager REST v1。服务账号需要获得目标 Network 的访问权限，OAuth scope 为 https://www.googleapis.com/auth/admanager。旧数据库中的 soap_accounts、soap_sync_runs、soap_account_id 仅作为兼容既有数据的内部表名；运行时不再发送 SOAP 请求。原有账户凭证保留，但自动入库默认关闭，须重新测试和配置。
+
+1. 在“Ad Manager REST”中保存服务账号 JSON 和 Network Code，测试连接。
+2. 在“结算配置”中建立上游账户并关联 REST 账户。
+3. 在 REST 账户中选择渠道、上游账户及金额单位，配置报表；按日期预览并核对收入及维度口径，再启用自动入库。每次重新配置都会暂停自动入库。
+4. 在“广告单元创建”中生成任务，选择 REST 账户及父广告单元资源名（格式 networks/NETWORK_CODE/adUnits/ID），逐项发布。系统会先按编码检查远端已有广告单元，再创建或记录已有资源。
+
+REST 报表固定使用 DATE、HOUR、SITE、COUNTRY_CODE、AD_UNIT_NAME 维度及 Ad Exchange 请求、响应、展示、点击、收入指标。REST 的 AD_EXCHANGE_REVENUE 与旧版 SOAP 的行项目级收入不能未经对账就认定为相同口径；应使用旧报表或 Ad Manager 控制台核对同一日期范围后再启用。金额单位可配置为美元或 micros，配置错误会使结算金额失真。自动同步只处理显式启用的账户，默认抓取 Network 时区的昨天与今天；手动同步使用页面选定的日期范围（最多 31 天）。
+
 ## JSON 格式
 
 支持根数组、`data` 数组或 `rows` 数组。当前自动识别字段：

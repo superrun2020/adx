@@ -1,0 +1,73 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { buildGamAdUnit, createGamAdUnit, findGamAdUnitByCode, getGamAdUnit } from '../server/gam-beta.mjs';
+import { buildReportDefinition, fetchRestReport, normalizeRestReportRows, validateReportDefinition } from '../server/gam-reports.mjs';
+
+const network = '123456';
+const parent = 'networks/123456/adUnits/9';
+
+function json(payload, status = 200) {
+  return new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } });
+}
+
+test('REST ad unit creation validates the plan and uses the v1 endpoint', async () => {
+  const adUnit = buildGamAdUnit({ name: 'Banner', code: 'banner-300x250', size: '300x250', description: 'Site banner', adsense_enabled: 1, target_window: '_BLANK' }, network, parent);
+  assert.equal(adUnit.parentAdUnit, parent);
+  assert.deepEqual(adUnit.adUnitSizes[0].size, { width: 300, height: 250, sizeType: 'PIXEL' });
+  assert.equal(adUnit.appliedAdsenseEnabled, true);
+  assert.throws(() => buildGamAdUnit({ name: 'X', code: 'x', size: 'unsupported' }, network, parent), /unsupported_ad_unit_size/);
+  assert.throws(() => buildGamAdUnit({ name: 'X', code: 'x', size: '300x250' }, network, 'networks/999999/adUnits/9'), /invalid_parent_ad_unit/);
+
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    calls.push({ path: url.pathname, search: url.search, method: options.method, headers: options.headers, body: options.body });
+    if (options.method === 'POST') return json({ name: 'networks/123456/adUnits/10' });
+    if (url.searchParams.has('filter')) return json({ adUnits: [{ name: 'networks/123456/adUnits/10', adUnitCode: 'banner-300x250' }] });
+    return json({ name: parent });
+  };
+  assert.equal((await getGamAdUnit(network, 'token', parent, fetchImpl)).name, parent);
+  assert.equal((await findGamAdUnitByCode(network, 'token', 'banner-300x250', fetchImpl)).adUnitCode, 'banner-300x250');
+  assert.equal((await createGamAdUnit(network, 'token', adUnit, fetchImpl)).name, 'networks/123456/adUnits/10');
+  assert.equal(calls[2].path, '/v1/networks/123456/adUnits');
+  assert.equal(calls[2].method, 'POST');
+  assert.equal(calls[2].headers.Authorization, 'Bearer token');
+  assert.deepEqual(JSON.parse(calls[2].body), adUnit);
+});
+
+test('REST report definition is fixed and mismatched columns fail closed', () => {
+  const definition = buildReportDefinition('2026-10-30', '2026-10-31');
+  assert.deepEqual(definition.dateRange.fixed.startDate, { year: 2026, month: 10, day: 30 });
+  assert.equal(definition.currencyCode, 'USD');
+  assert.equal(validateReportDefinition({ name: 'networks/123456/reports/42', reportDefinition: definition }, network), definition);
+  assert.throws(() => validateReportDefinition({ name: 'networks/123456/reports/42', reportDefinition: { ...definition, metrics: ['AD_EXCHANGE_REVENUE'] } }, network), /mismatch/);
+  assert.throws(() => buildReportDefinition('2026-11-02', '2026-10-31'), /invalid_report_range/);
+});
+
+test('REST report run polls and reads all result pages', async () => {
+  const row = {
+    dimensionValues: [
+      { stringValue: '2026-10-31' }, { intValue: '13' }, { stringValue: 'example.com' },
+      { stringValue: 'US' }, { stringValue: 'Banner' }
+    ],
+    metricValueGroups: [{ primaryValues: [
+      { intValue: '100' }, { intValue: '90' }, { intValue: '80' }, { intValue: '2' }, { doubleValue: 1250000 }
+    ] }]
+  };
+  const paths = [];
+  const fetchImpl = async (url, options) => {
+    paths.push(url.pathname + url.search);
+    if (url.pathname.endsWith(':run')) return json({ name: 'networks/123456/operations/reports/runs/1', done: false });
+    if (url.pathname.endsWith('/runs/1')) return json({ name: 'networks/123456/operations/reports/runs/1', done: true, response: { reportResult: 'networks/123456/reports/42/results/7' } });
+    if (url.searchParams.get('pageToken') === 'next') return json({ rows: [row] });
+    return json({ dateRanges: [{ startDate: { year: 2026, month: 10, day: 31 }, endDate: { year: 2026, month: 10, day: 31 } }], rows: [row], nextPageToken: 'next' });
+  };
+  const result = await fetchRestReport(network, 'token', 'networks/123456/reports/42', { fetchImpl, sleep: async () => {} });
+  assert.equal(result.rows.length, 2);
+  assert.equal(paths.length, 4);
+  assert.match(paths[3], /pageToken=next/);
+  const facts = normalizeRestReportRows(result.rows, { channelId: 1, accountKey: 'upstream-a', sourceFile: 'test', moneyDivisor: 1000000 });
+  assert.equal(facts[0].revenue, 1.25);
+  assert.equal(facts[0].hour, 13);
+  assert.equal(facts[0].requests, 100);
+  assert.throws(() => normalizeRestReportRows([{ ...row, metricValueGroups: [] }], { channelId: 1, accountKey: 'upstream-a', sourceFile: 'test', moneyDivisor: 1 }), /columns_mismatch/);
+});

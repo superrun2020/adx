@@ -97,27 +97,66 @@ function SettlementConfig() {
   return <Space direction="vertical" size={16} className="page-stack"><div className="page-heading"><div><Title level={2}>结算配置</Title><Text type="secondary">上游账户、广告单元域名和渠道下游比例分开配置，最具体规则优先</Text></div><Button icon={<ReloadOutlined/>} loading={loading} onClick={load}>刷新</Button></div>{loadError&&<Alert type="warning" showIcon message={loadError} action={<Button size="small" onClick={load}>重试</Button>}/>}<Row gutter={[16,16]}><Col xs={24} xl={8}><Card loading={loading} title="上游账户分成"><Form form={accountForm} layout="vertical" onFinish={v=>submit('/api/admin/upstream-accounts',v,accountForm)}><Form.Item name="accountKey" label="上游账户标识" rules={[{required:true}]}><Input placeholder="Ad Manager account"/></Form.Item><Form.Item name="name" label="账户名称" rules={[{required:true}]}><Input/></Form.Item><Form.Item name="sharePercent" label="上游分成比例（%）" rules={[{required:true}]}><InputNumber min={0} max={100} style={{width:'100%'}}/></Form.Item><Button type="primary" htmlType="submit">保存上游账户</Button></Form><Table size="small" pagination={{pageSize:5}} rowKey="id" dataSource={accounts} columns={[{title:'账户',dataIndex:'accountKey'},{title:'比例',dataIndex:'sharePercent',render:v=>`${v}%`}]} /></Card></Col><Col xs={24} xl={8}><Card loading={loading} title="广告单元绑定域名"><Form form={unitForm} layout="vertical" onFinish={v=>submit('/api/admin/ad-unit-domains',v,unitForm)}><Form.Item name="adUnit" label="广告单元" rules={[{required:true}]}><Input placeholder="Ad unit name or ID"/></Form.Item><Form.Item name="domain" label="域名" rules={[{required:true}]}><Input placeholder="https://example.com"/></Form.Item><Button type="primary" htmlType="submit">保存域名绑定</Button></Form><Table size="small" pagination={{pageSize:5}} rowKey="id" dataSource={units} columns={[{title:'广告单元',dataIndex:'adUnit'},{title:'域名',dataIndex:'domain'}]} /></Card></Col><Col xs={24} xl={8}><Card loading={loading} title="渠道下游比例"><Form form={ruleForm} layout="vertical" onFinish={v=>submit('/api/admin/share-rules',v,ruleForm)}><Form.Item name="channelId" label="渠道" rules={[{required:true}]}><Select options={channels.map(c=>({value:c.id,label:c.name}))}/></Form.Item><Form.Item name="scopeType" label="规则维度" initialValue="ad_unit"><Select options={[{value:'ad_unit',label:'广告单元'},{value:'account',label:'上游账户'}]}/></Form.Item><Form.Item name="scopeValue" label="匹配值" rules={[{required:true}]}><Input placeholder="广告单元或账户标识"/></Form.Item><Form.Item name="sharePercent" label="下游结算比例（%）" rules={[{required:true}]}><InputNumber min={0} max={100} style={{width:'100%'}}/></Form.Item><Form.Item name="effectiveFrom" label="生效日期" rules={[{required:true}]} initialValue={dayjs()}><DatePicker format="YYYY-MM-DD" style={{width:'100%'}}/></Form.Item><Button type="primary" htmlType="submit">保存下游规则</Button></Form><Table size="small" pagination={{pageSize:5}} rowKey="id" dataSource={rules} columns={[{title:'维度',dataIndex:'scopeType'},{title:'匹配值',dataIndex:'scopeValue'},{title:'比例',dataIndex:'sharePercent',render:v=>`${v}%`}]} /></Card></Col></Row></Space>;
 }
 
-function SettlementConfigV2() {
-  const [soap,setSoap]=useState([]),[accounts,setAccounts]=useState([]),[channels,setChannels]=useState([]),[domains,setDomains]=useState([]),[rules,setRules]=useState([]),[loading,setLoading]=useState(false);
-  const [upForm]=Form.useForm(),[downForm]=Form.useForm(); const [editingUp,setEditingUp]=useState(null),[editingDown,setEditingDown]=useState(null);
-  const load=async()=>{setLoading(true);try{const [s,a,c,d,r]=await Promise.all([api('/api/admin/soap-accounts'),api('/api/admin/upstream-accounts'),api('/api/admin/channels'),api('/api/admin/ad-unit-domains'),api('/api/admin/domain-share-rules')]);setSoap(s.items);setAccounts(a.items);setChannels(c.items);setDomains([...new Map(d.items.map(x=>[x.domain,x])).values()]);setRules(r.items)}catch(e){message.error(`结算配置加载失败：${e.message}`)}finally{setLoading(false)}};useEffect(()=>{load()},[]);
-  const saveUp=async v=>{try{await api(editingUp?`/api/admin/upstream-accounts/${editingUp.id}`:'/api/admin/upstream-accounts',{method:editingUp?'PUT':'POST',body:JSON.stringify(v)});message.success('上游结算账户已保存');upForm.resetFields();setEditingUp(null);load()}catch(e){message.error(e.message)}};
-  const saveDown=async v=>{try{const payload={...v,effectiveFrom:v.effectiveFrom?.format('YYYY-MM-DD')};await api(editingDown?`/api/admin/domain-share-rules/${editingDown.id}`:'/api/admin/domain-share-rules',{method:editingDown?'PUT':'POST',body:JSON.stringify(payload)});message.success('下游结算规则已保存');downForm.resetFields();setEditingDown(null);load()}catch(e){message.error(e.message)}};
-  const editUp=r=>{setEditingUp(r);upForm.setFieldsValue({soapAccountId:r.soapAccountId,accountKey:r.accountKey,name:r.name,sharePercent:r.sharePercent})};
-  const editDown=r=>{setEditingDown(r);downForm.setFieldsValue({upstreamAccountId:r.upstreamAccountId,channelId:r.channelId,domain:r.domain||undefined,sharePercent:r.sharePercent,effectiveFrom:dayjs(r.effectiveFrom)})};
-  return <Space direction="vertical" size={16} className="page-stack"><div className="page-heading"><div><Title level={2}>结算配置</Title><Text type="secondary">总收入按上游比例结算，再按下游比例结算；域名可选，不选表示该上游账户的通用规则</Text></div><Button icon={<ReloadOutlined/>} loading={loading} onClick={load}>刷新</Button></div><Row gutter={[16,16]}><Col xs={24} xl={10}><Card title="上游结算配置"><Form form={upForm} layout="vertical" onFinish={saveUp}><Form.Item name="soapAccountId" label="SOAP 账户邮箱 / Network Code" rules={[{required:true}]}><Select options={soap.map(x=>({value:x.id,label:`${x.name}（${x.networkCode}）`}))} placeholder="选择 SOAP 账户"/></Form.Item><Form.Item name="accountKey" label="上游账户标识" rules={[{required:true}]}><Input placeholder="广告账户或上游标识"/></Form.Item><Form.Item name="name" label="上游账户名称" rules={[{required:true}]}><Input/></Form.Item><Form.Item name="sharePercent" label="上游结算比例（%）" rules={[{required:true}]}><InputNumber min={0} max={100} precision={2} style={{width:'100%'}}/></Form.Item><Button type="primary" htmlType="submit">保存上游配置</Button></Form><Table size="small" loading={loading} rowKey="id" dataSource={accounts} columns={[{title:'上游账户',dataIndex:'name'},{title:'SOAP',dataIndex:'soapAccountName'},{title:'比例',dataIndex:'sharePercent',render:v=>`${v}%`}]} /></Card></Col><Col xs={24} xl={14}><Card title="下游结算配置"><Form form={downForm} layout="vertical" onFinish={saveDown}><Row gutter={12}><Col xs={24} md={12}><Form.Item name="upstreamAccountId" label="上游账户" rules={[{required:true}]}><Select options={accounts.map(x=>({value:x.id,label:`${x.name}（${x.accountKey}）`}))}/></Form.Item></Col><Col xs={24} md={12}><Form.Item name="channelId" label="下游渠道" rules={[{required:true}]}><Select options={channels.map(x=>({value:x.id,label:x.name}))}/></Form.Item></Col></Row><Form.Item name="domain" label="下游域名（可选）"><Select allowClear showSearch options={domains.map(x=>({value:x.domain,label:x.domain}))} placeholder="不选择表示全部域名"/></Form.Item><Row gutter={12}><Col xs={24} md={12}><Form.Item name="sharePercent" label="下游结算比例（%）" rules={[{required:true}]}><InputNumber min={0} max={100} precision={2} style={{width:'100%'}}/></Form.Item></Col><Col xs={24} md={12}><Form.Item name="effectiveFrom" label="生效日期" initialValue={dayjs()} rules={[{required:true}]}><DatePicker format="YYYY-MM-DD" style={{width:'100%'}}/></Form.Item></Col></Row><Button type="primary" htmlType="submit">保存下游规则</Button></Form><Table size="small" loading={loading} rowKey="id" dataSource={rules} columns={[{title:'上游',dataIndex:'upstreamAccountName'},{title:'下游',dataIndex:'channelName'},{title:'域名',dataIndex:'domain',render:v=>v||'全部域名'},{title:'比例',dataIndex:'sharePercent',render:v=>`${v}%`},{title:'生效日期',dataIndex:'effectiveFrom'}]} scroll={{x:700}} /></Card></Col></Row></Space>;
-}
-
 function AdUnitBuilder() {
-  const [file,setFile]=useState(null),[payload,setPayload]=useState(null),[preview,setPreview]=useState(null),[items,setItems]=useState([]),[busy,setBusy]=useState(false);
-  const [subdomains,setSubdomains]=useState([]),[types,setTypes]=useState([]),[sizes,setSizes]=useState([]);
-  const choose=async e=>{const picked=e.target.files?.[0];if(!picked)return;try{setPayload(JSON.parse(await picked.text()));setFile(picked);setPreview(null)}catch{message.error('JSON 文件无法解析')}};
-  const runPreview=async()=>{if(!payload)return message.warning('请先上传 JSON');setBusy(true);try{const r=await api('/api/admin/ad-units/preview',{method:'POST',body:JSON.stringify({payload,rules:{subdomains,inventoryTypes:types,sizes}})});setPreview(r);setItems(r.items)}catch(e){message.error(e.message)}finally{setBusy(false)}};
-  const create=async()=>{setBusy(true);try{const r=await api('/api/admin/ad-units/create',{method:'POST',body:JSON.stringify({items})});message.success(`已保存 ${r.created} 个广告单元任务，等待线上创建`);load()}catch(e){message.error(e.message)}finally{setBusy(false)}};
-  const download=()=>{const header=['代码','名称','大小','说明','已启用 AdSense','刊登位置','目标窗口','标签','状态'];const rows=items.map(x=>[x.code,x.name,x.size,x.description,x.adsenseEnabled?'是':'否',x.placement,x.targetWindow,x.label,x.status||'planned']);const csv='\ufeff'+[header,...rows].map(row=>row.map(v=>`"${String(v??'').replaceAll('"','""')}"`).join(',')).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.download='ad-units.csv';a.click();URL.revokeObjectURL(a.href)};
-  const load=()=>api('/api/admin/ad-units').then(r=>setItems(r.items)).catch(e=>message.error(e.message));useEffect(()=>{load()},[]);
-  const options=(values,setter)=><Select mode="tags" allowClear value={values} onChange={setter} style={{width:'100%'}} tokenSeparators={[',','，']} placeholder="可输入多个值" />;
-  return <Space direction="vertical" size={16} className="page-stack"><div className="page-heading"><div><Title level={2}>广告单元创建</Title><Text type="secondary">支持表格字段：代码、名称、大小、说明、AdSense、刊登位置、目标窗口、标签</Text></div></div><Alert type="info" showIcon message="先保存任务，再提交线上创建" description="当前保存的是可审计的创建任务；只有 Google Ad Manager SOAP Inventory API 返回成功后，状态才会变为已创建。"/><Card title="生成规则"><Row gutter={[16,16]}><Col xs={24} md={8}><Text strong>子域名（可多选）</Text>{options(subdomains,setSubdomains)}</Col><Col xs={24} md={8}><Text strong>广告位类型（可多选）</Text>{options(types,setTypes)}</Col><Col xs={24} md={8}><Text strong>尺寸（可多选）</Text>{options(sizes,setSizes)}</Col></Row><Space wrap style={{marginTop:16}}><label className="file-button"><UploadOutlined/> {file?.name||'上传广告单元表 JSON'}<input type="file" accept="application/json,.json" onChange={choose}/></label><Button type="primary" loading={busy} disabled={!payload} onClick={runPreview}>预览广告单元</Button></Space></Card>{preview&&<Card title={`预览结果：${preview.total} 个`} extra={<Space><Button onClick={download} disabled={!items.length}>下载</Button><Button type="primary" disabled={!items.length} loading={busy} onClick={create}>保存创建任务</Button></Space>}><Alert type={preview.duplicates?.length?'warning':'success'} showIcon message={preview.duplicates?.length?`发现 ${preview.duplicates.length} 个重复项，将自动跳过`:'未发现重复项'}/><Table rowKey="code" dataSource={items} columns={[{title:'名称',dataIndex:'name'},{title:'大小',dataIndex:'size'},{title:'说明',dataIndex:'description'},{title:'AdSense',dataIndex:'adsenseEnabled',render:v=>v?'是':'否'},{title:'刊登位置',dataIndex:'placement'},{title:'目标窗口',dataIndex:'targetWindow'},{title:'标签',dataIndex:'label'},{title:'编码',dataIndex:'code'}]} scroll={{x:1500}} pagination={{pageSize:20}}/></Card>}</Space>;
+  const [file,setFile] = useState(null), [payload,setPayload] = useState(null), [preview,setPreview] = useState(null), [items,setItems] = useState([]), [accounts,setAccounts] = useState([]);
+  const [busy,setBusy] = useState(''), [subdomains,setSubdomains] = useState([]), [types,setTypes] = useState([]), [sizes,setSizes] = useState([]);
+  const [gamAccountId,setGamAccountId] = useState(null), [parentAdUnit,setParentAdUnit] = useState(''), [parents,setParents] = useState([]);
+  const load = async () => { const [u,a] = await Promise.all([api('/api/admin/ad-units'),api('/api/admin/gam-accounts')]); setItems(u.items); setAccounts(a.items); };
+  useEffect(() => { load().catch(e=>message.error(e.message)); }, []);
+  const choose = async e => { const picked=e.target.files?.[0]; if(!picked)return; try { setPayload(JSON.parse(await picked.text())); setFile(picked); setPreview(null); } catch { message.error('JSON 文件无法解析'); } };
+  const runPreview = async () => {
+    if(!payload)return message.warning('请先上传 JSON'); setBusy('preview');
+    try { setPreview(await api('/api/admin/ad-units/preview',{method:'POST',body:JSON.stringify({payload,rules:{subdomains,inventoryTypes:types,sizes}})})); }
+    catch(e) { message.error(e.message); } finally { setBusy(''); }
+  };
+  const create = async () => {
+    if(!preview?.items?.length)return; setBusy('create');
+    try { const result=await api('/api/admin/ad-units/create',{method:'POST',body:JSON.stringify({items:preview.items})}); message.success('已保存 '+result.created+' 个创建任务'); setPreview(null); await load(); }
+    catch(e) { message.error(e.message); } finally { setBusy(''); }
+  };
+  const loadParents = async () => {
+    if(!gamAccountId)return message.warning('先选择 REST 账户'); setBusy('parents');
+    try { const result=await api('/api/admin/gam-accounts/'+gamAccountId+'/ad-units'); setParents(result.items); message.success('已加载 '+result.items.length+' 个广告单元'); }
+    catch(e) { message.error(e.message); } finally { setBusy(''); }
+  };
+  const publish = async item => {
+    if(!gamAccountId || !parentAdUnit.trim())return message.warning('请选择 REST 账户并填写父广告单元资源名');
+    setBusy('publish:'+item.id);
+    try { const result=await api('/api/admin/ad-units/'+item.id+'/publish',{method:'POST',body:JSON.stringify({gamAccountId,parentAdUnit:parentAdUnit.trim()})}); message.success('已通过 REST 创建：'+result.name); await load(); }
+    catch(e) { message.error(e.message); await load(); } finally { setBusy(''); }
+  };
+  const download = () => {
+    const rows=(preview?.items||items).map(x=>[x.code,x.name,x.size,x.description,x.adsenseEnabled?'是':'否',x.placement,x.targetWindow,x.label,x.status||'planned',x.providerId||'']);
+    const csv='\ufeff'+[['代码','名称','大小','说明','AdSense','刊登位置','目标窗口','标签','状态','REST 资源名'],...rows].map(row=>row.map(v=>'"'+String(v??'').replaceAll('"','""')+'"').join(',')).join('\n');
+    const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'})); const a=document.createElement('a'); a.href=url; a.download='ad-units.csv'; a.click(); URL.revokeObjectURL(url);
+  };
+  const options=(values,setter)=><Select mode="tags" allowClear value={values} onChange={setter} style={{width:'100%'}} tokenSeparators={[',','，']} placeholder="可输入多个值"/>;
+  return <Space direction="vertical" size={16} className="page-stack">
+    <div className="page-heading"><div><Title level={2}>广告单元创建</Title><Text type="secondary">先生成任务，再通过 Google Ad Manager REST v1 发布</Text></div></div>
+    <Alert type="info" showIcon message="发布要求" description="尺寸支持宽×高或 fluid；发布前选择可用 REST 账户和父广告单元。系统先检查远端同编码广告单元，再执行创建并记录 REST 资源名。"/>
+    <Card title="生成规则"><Row gutter={[16,16]}><Col xs={24} md={8}><Text strong>子域名</Text>{options(subdomains,setSubdomains)}</Col><Col xs={24} md={8}><Text strong>广告位类型</Text>{options(types,setTypes)}</Col><Col xs={24} md={8}><Text strong>尺寸</Text>{options(sizes,setSizes)}</Col></Row>
+      <Space wrap style={{marginTop:16}}><label className="file-button"><UploadOutlined/> {file?.name||'上传广告单元表 JSON'}<input type="file" accept="application/json,.json" onChange={choose}/></label><Button type="primary" loading={busy==='preview'} disabled={!payload} onClick={runPreview}>预览广告单元</Button></Space>
+    </Card>
+    {preview&&<Card title={'预览结果：'+preview.total+' 个'} extra={<Space><Button onClick={download}>下载</Button><Button type="primary" loading={busy==='create'} onClick={create}>保存创建任务</Button></Space>}>
+      <Alert type={preview.duplicates?.length?'warning':'success'} showIcon message={preview.duplicates?.length?'发现 '+preview.duplicates.length+' 个重复项，将跳过':'未发现重复项'}/>
+      <Table rowKey="code" dataSource={preview.items} pagination={{pageSize:20}} scroll={{x:1100}} columns={[
+        {title:'名称',dataIndex:'name'},{title:'编码',dataIndex:'code'},{title:'尺寸',dataIndex:'size'},{title:'说明',dataIndex:'description'},
+        {title:'AdSense',dataIndex:'adsenseEnabled',render:v=>v?'是':'否'},{title:'刊登位置',dataIndex:'placement'},{title:'目标窗口',dataIndex:'targetWindow'}
+      ]}/>
+    </Card>}
+    <Card title="REST 发布设置"><Space wrap>
+      <Select style={{minWidth:230}} placeholder="选择 REST 账户" value={gamAccountId} onChange={v=>{setGamAccountId(v);setParents([]);setParentAdUnit('')}} options={accounts.filter(x=>x.status==='active').map(x=>({value:x.id,label:x.name+'（'+x.networkCode+'）'}))}/>
+      <Button onClick={loadParents} loading={busy==='parents'} disabled={!gamAccountId}>加载父广告单元</Button>
+      <Select showSearch allowClear style={{minWidth:380}} placeholder="选择已加载的父广告单元" value={parentAdUnit||undefined} onChange={v=>setParentAdUnit(v||'')} options={parents.map(x=>({value:x.name,label:x.displayName+'（'+x.name+'）'}))}/>
+      <Input style={{width:380}} placeholder="也可输入 networks/编号/adUnits/编号" value={parentAdUnit} onChange={e=>setParentAdUnit(e.target.value)}/>
+    </Space></Card>
+    <Card title="创建任务" extra={<Button onClick={download} disabled={!items.length}>导出 CSV</Button>}><Table rowKey="id" dataSource={items} scroll={{x:1300}} columns={[
+      {title:'编码',dataIndex:'code'},{title:'名称',dataIndex:'name'},{title:'尺寸',dataIndex:'size'},
+      {title:'状态',dataIndex:'status',render:v=><Tag color={v==='created'?'green':v==='failed'?'red':'orange'}>{v==='created'?'已创建':v==='failed'?'失败':'待发布'}</Tag>},
+      {title:'REST 资源名',dataIndex:'providerId',ellipsis:true},{title:'错误',dataIndex:'publishError',ellipsis:true},
+      {title:'操作',render:(_,r)=>r.status==='created'?null:<Popconfirm title={'确认将 '+r.code+' 发布到所选 REST 账户？'} onConfirm={()=>publish(r)}><Button size="small" type="primary" loading={busy==='publish:'+r.id}>发布</Button></Popconfirm>}
+    ]}/></Card>
+  </Space>;
 }
 
 function Channels() {
@@ -140,14 +179,86 @@ function DataImport() {
   return <Space direction="vertical" size={16} className="page-stack"><div className="page-heading"><div><Title level={2}>JSON 数据导入</Title><Text type="secondary">按 Google Ad Manager API 字段口径预检，重复数据按维度键更新</Text></div></div><Alert type="info" showIcon message="Google Ad Manager 字段说明" description={<span>API 专用维度与指标需要在互动式报告中开启“访问 API 字段”后才能显示；部分维度与指标不可组合。系统会标准化核心字段，并完整保留其他原始字段。</span>}/><Card title="上传数据"><Space wrap><Select placeholder="选择所属渠道" value={channelId} onChange={setChannelId} style={{width:260}} options={channels.map(c=>({value:c.id,label:c.name}))}/><label className="file-button"><UploadOutlined/> {file?.name||'选择 JSON 文件'}<input type="file" accept="application/json,.json" onChange={choose}/></label><Button type="primary" loading={busy} disabled={!payload||!channelId} onClick={preflight}>预检字段</Button></Space>{preview&&<div className="import-preview"><Alert type={preview.rejected?'warning':'success'} showIcon message={`共 ${preview.totalRows} 条；通过 ${preview.accepted} 条，拒绝 ${preview.rejected} 条`} description={<Space direction="vertical" size={4}><span>字段映射：{preview.fieldMappings.map(v=>`${v.source} → ${v.field}`).join('、')||'未识别'}</span>{preview.missingRequiredFields.length>0&&<Text type="danger">缺少核心字段：{preview.missingRequiredFields.join('、')}</Text>}{preview.preservedFields.length>0&&<span>仅保留原值：{preview.preservedFields.join('、')}</span>}</Space>}/><Button type="primary" danger={preview.rejected>0} disabled={!preview.accepted} loading={busy} onClick={commit}>确认导入</Button></div>}</Card><Card title="导入记录"><Table rowKey="id" dataSource={runs} columns={[{title:'时间',dataIndex:'createdAt'},{title:'渠道',dataIndex:'channelName'},{title:'文件',dataIndex:'sourceFile',ellipsis:true},{title:'总数',dataIndex:'totalRows'},{title:'成功',dataIndex:'acceptedRows'},{title:'拒绝',dataIndex:'rejectedRows'},{title:'状态',dataIndex:'status'}]}/></Card></Space>;
 }
 
-function SoapAccounts() {
-  const [items,setItems]=useState([]),[busy,setBusy]=useState(false),[open,setOpen]=useState(false),[file,setFile]=useState(null),[credentials,setCredentials]=useState(null),[form]=Form.useForm();
-  const load=()=>api('/api/admin/soap-accounts').then(r=>setItems(r.items)).catch(e=>message.error(`SOAP账户加载失败：${e.message}`));
-  useEffect(()=>{load()},[]);
-  const choose=async e=>{const picked=e.target.files?.[0];if(!picked)return;try{const json=JSON.parse(await picked.text());if(!json.client_email||!json.private_key)throw new Error('missing');setCredentials(json);setFile(picked)}catch{setCredentials(null);setFile(null);message.error('服务账号 JSON 无法解析或缺少 client_email/private_key')}};
-  const save=async v=>{if(!credentials)return message.warning('请先上传服务账号 JSON');setBusy(true);try{await api('/api/admin/soap-accounts',{method:'POST',body:JSON.stringify({...v,credentials})});message.success('SOAP账户已保存');form.resetFields();setCredentials(null);setFile(null);setOpen(false);load()}catch(e){message.error(e.message)}finally{setBusy(false)}};
-  const test=async id=>{setBusy(true);try{const r=await api(`/api/admin/soap-accounts/${id}/test`,{method:'POST'});message.success(`连接成功：${r.network.displayName||r.network.networkCode}，版本 ${r.version}`);load()}catch(e){message.error(`SOAP连接失败：${e.message}`);load()}finally{setBusy(false)}};
-  return <Space direction="vertical" size={16} className="page-stack"><div className="page-heading"><div><Title level={2}>SOAP 真实同步账户</Title><Text type="secondary">使用 Google Ad Manager SOAP API，当前默认版本 v202602；凭证加密保存，不会回显私钥</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={()=>{form.resetFields();setFile(null);setCredentials(null);setOpen(true)}}>新建 SOAP 账户</Button></div><Card title="已配置账户"><Table rowKey="id" dataSource={items} columns={[{title:'账户',dataIndex:'name'},{title:'Network Code',dataIndex:'networkCode'},{title:'版本',dataIndex:'apiVersion'},{title:'状态',dataIndex:'status',render:v=><Tag color={v==='active'?'green':v==='error'?'red':'orange'}>{v==='active'?'可用':v==='error'?'失败':'未测试'}</Tag>},{title:'最近测试',dataIndex:'lastTestAt'},{title:'结果',dataIndex:'lastTestSummary',ellipsis:true},{title:'操作',render:(_,r)=><Button icon={<ReloadOutlined/>} loading={busy} onClick={()=>test(r.id)}>测试连接</Button>}]} scroll={{x:1000}}/></Card><Drawer title="新建 SOAP 账户" open={open} onClose={()=>setOpen(false)} width={560} destroyOnClose><Form form={form} layout="vertical" onFinish={save}><Form.Item name="name" label="账户名称" rules={[{required:true}]}><Input placeholder="Google Ad Manager 账户"/></Form.Item><Form.Item name="networkCode" label="Network Code" rules={[{required:true}]}><Input placeholder="例如 23380056141"/></Form.Item><Form.Item name="apiVersion" label="SOAP API 版本" initialValue="v202602" rules={[{required:true}]}><Input placeholder="v202602"/></Form.Item><Form.Item label="服务账号 JSON" required><label className="file-button"><UploadOutlined/> {file?.name||'上传服务账号 JSON'}<input type="file" accept="application/json,.json" onChange={choose}/></label></Form.Item><Button type="primary" htmlType="submit" loading={busy} disabled={!credentials}>保存账户</Button></Form></Drawer></Space>;
+function GamAccounts() {
+  const [items,setItems] = useState([]), [channels,setChannels] = useState([]), [upstream,setUpstream] = useState([]), [runs,setRuns] = useState([]);
+  const [busy,setBusy] = useState(''), [open,setOpen] = useState(false), [reportAccount,setReportAccount] = useState(null);
+  const [file,setFile] = useState(null), [credentials,setCredentials] = useState(null), [preview,setPreview] = useState(null);
+  const [dates,setDates] = useState([dayjs().subtract(1,'day'),dayjs()]);
+  const [form] = Form.useForm(), [reportForm] = Form.useForm();
+  const load = async () => {
+    const [a,c,u,r] = await Promise.all([api('/api/admin/gam-accounts'),api('/api/admin/channels'),api('/api/admin/upstream-accounts'),api('/api/admin/gam-sync/runs')]);
+    setItems(a.items); setChannels(c.items); setUpstream(u.items); setRuns(r.items);
+  };
+  useEffect(() => { load().catch(e => message.error(e.message)); }, []);
+  const choose = async e => {
+    const picked = e.target.files?.[0]; if (!picked) return;
+    try { const json = JSON.parse(await picked.text()); if (!json.client_email || !json.private_key) throw new Error('invalid'); setCredentials(json); setFile(picked); }
+    catch { setCredentials(null); setFile(null); message.error('服务账号 JSON 缺少 client_email 或 private_key'); }
+  };
+  const save = async values => {
+    if (!credentials) return message.warning('请上传服务账号 JSON');
+    setBusy('save');
+    try { await api('/api/admin/gam-accounts', {method:'POST',body:JSON.stringify({...values,credentials})}); message.success('REST 账户已保存，请测试连接'); form.resetFields(); setCredentials(null); setFile(null); setOpen(false); await load(); }
+    catch(e) { message.error(e.message); } finally { setBusy(''); }
+  };
+  const invoke = async (id, action, body, label) => {
+    setBusy(id + ':' + action);
+    try {
+      const response = await api('/api/admin/gam-accounts/' + id + '/' + action, {method:'POST',body:JSON.stringify(body || {})});
+      if (action === 'preview') setPreview({account:items.find(x => x.id === id), ...response.preview});
+      message.success(label); await load(); return true;
+    } catch(e) { message.error(e.message); return false; } finally { setBusy(''); }
+  };
+  const openReport = item => { setReportAccount(item); reportForm.setFieldsValue({channelId:item.channelId || undefined,upstreamAccountId:item.upstreamAccountId || undefined,moneyDivisor:item.moneyDivisor || 1}); };
+  const configure = async values => { if (await invoke(reportAccount.id,'report',values,'REST 报表已配置，请先预览并核对金额')) { setReportAccount(null); setPreview(null); } };
+  const previewReport = item => invoke(item.id,'preview',{start:dates?.[0]?.format('YYYY-MM-DD'),end:dates?.[1]?.format('YYYY-MM-DD')},'报表预览完成');
+  const syncNow = item => invoke(item.id,'sync-now',{start:dates?.[0]?.format('YYYY-MM-DD'),end:dates?.[1]?.format('YYYY-MM-DD')},'REST 数据已写入本地报表');
+  return <Space direction="vertical" size={16} className="page-stack">
+    <div className="page-heading"><div><Title level={2}>Google Ad Manager REST 账户</Title><Text type="secondary">REST v1 连接、报表预览与同步；服务账号凭证加密保存</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={() => {form.resetFields();setCredentials(null);setFile(null);setOpen(true);}}>新增账户</Button></div>
+    <Alert type="warning" showIcon message="先核对新旧报表的财务口径" description="REST 的 AD_EXCHANGE_REVENUE 与旧报表的行项目级收入不可直接视为相同。请先选择渠道、上游账户和金额单位，预览核对后再启用自动入库。"/>
+    <Card title="日期范围（预览或手动同步）"><DatePicker.RangePicker value={dates} onChange={setDates}/></Card>
+    <Card title="REST 账户与报表"><Table rowKey="id" dataSource={items} scroll={{x:1150}} columns={[
+      {title:'账户',dataIndex:'name'}, {title:'Network Code',dataIndex:'networkCode'},
+      {title:'连接',dataIndex:'status',render:v=><Tag color={v==='active'?'green':v==='error'?'red':'orange'}>{v==='active'?'可用':v==='error'?'失败':'未测试'}</Tag>},
+      {title:'报表',dataIndex:'reportName',ellipsis:true,render:v=>v||'未配置'},
+      {title:'自动入库',dataIndex:'syncEnabled',render:v=><Tag color={v?'green':'default'}>{v?'已启用':'已暂停'}</Tag>},
+      {title:'最近预览',dataIndex:'lastPreviewAt',render:(v,r)=>v? v+' / '+r.lastPreviewRows+' 行':'未预览'},
+      {title:'操作',width:420,render:(_,r)=><Space wrap>
+        <Button size="small" loading={busy===r.id+':test'} onClick={()=>invoke(r.id,'test',{},'连接成功')}>测试</Button>
+        <Button size="small" disabled={r.status!=='active'} onClick={()=>openReport(r)}>配置报表</Button>
+        <Button size="small" disabled={!r.reportName} loading={busy===r.id+':preview'} onClick={()=>previewReport(r)}>预览</Button>
+        {r.syncEnabled?<Button size="small" onClick={()=>invoke(r.id,'pause',{},'自动入库已暂停')}>暂停</Button>:
+          <Popconfirm title="已核对金额单位及新旧报表口径？" onConfirm={()=>invoke(r.id,'activate',{},'自动入库已启用')}><Button size="small" type="primary" disabled={!r.lastPreviewRows}>启用</Button></Popconfirm>}
+        <Popconfirm title="确认将所选日期范围写入本地报表？" onConfirm={()=>syncNow(r)}><Button size="small" disabled={!r.syncEnabled} loading={busy===r.id+':sync-now'}>立即同步</Button></Popconfirm>
+      </Space>}
+    ]}/></Card>
+    {preview&&<Card title={'预览：'+preview.account?.name+' / '+preview.start+' 至 '+preview.end}><Descriptions items={[
+      {key:'rows',label:'行数',children:preview.rows},{key:'revenue',label:'收入（USD）',children:Number(preview.revenue).toFixed(2)},
+      {key:'divisor',label:'金额除数',children:preview.moneyDivisor}
+    ]}/><Table size="small" rowKey={(_,i)=>i} dataSource={preview.sample||[]} scroll={{x:1000}} columns={[
+      {title:'日期',dataIndex:'reportDate'},{title:'小时',dataIndex:'hour'},{title:'域名',dataIndex:'domain'},{title:'广告单元',dataIndex:'adUnit'},
+      {title:'国家',dataIndex:'country'},{title:'请求',dataIndex:'requests'},{title:'展示',dataIndex:'impressions'},{title:'收入',dataIndex:'revenue'}
+    ]}/></Card>}
+    <Card title="同步记录"><Table size="small" rowKey="id" dataSource={runs} columns={[
+      {title:'账户',dataIndex:'gamAccountName'},{title:'开始',dataIndex:'windowStart'},{title:'结束',dataIndex:'windowEnd'},
+      {title:'状态',dataIndex:'status'},{title:'读取',dataIndex:'rowsRead'},{title:'写入',dataIndex:'rowsWritten'},{title:'错误',dataIndex:'error',ellipsis:true}
+    ]}/></Card>
+    <Drawer title="新增 REST 账户" open={open} onClose={()=>setOpen(false)} width={560} destroyOnClose><Form form={form} layout="vertical" onFinish={save}>
+      <Form.Item name="name" label="账户名称" rules={[{required:true}]}><Input/></Form.Item>
+      <Form.Item name="networkCode" label="Network Code" rules={[{required:true}]}><Input/></Form.Item>
+      <Form.Item label="服务账号 JSON" required><label className="file-button"><UploadOutlined/> {file?.name||'上传服务账号 JSON'}<input type="file" accept="application/json,.json" onChange={choose}/></label></Form.Item>
+      <Button type="primary" htmlType="submit" loading={busy==='save'} disabled={!credentials}>保存账户</Button>
+    </Form></Drawer>
+    <Drawer title="配置 REST 报表" open={Boolean(reportAccount)} onClose={()=>setReportAccount(null)} width={560} destroyOnClose>
+      <Form form={reportForm} layout="vertical" onFinish={configure}>
+        <Form.Item name="channelId" label="收入所属渠道" rules={[{required:true}]}><Select options={channels.filter(x=>x.status==='active').map(x=>({value:x.id,label:x.name}))}/></Form.Item>
+        <Form.Item name="upstreamAccountId" label="上游结算账户" rules={[{required:true}]}><Select options={upstream.filter(x=>x.gamAccountId===reportAccount?.id && x.status==='active').map(x=>({value:x.id,label:x.name}))}/></Form.Item>
+        <Form.Item name="moneyDivisor" label="REST 金额单位" rules={[{required:true}]}><Select options={[{value:1,label:'API 值为 USD'},{value:1000000,label:'API 值为 micros（除以 1,000,000）'}]}/></Form.Item>
+        <Alert type="info" showIcon message="保存配置会暂停自动入库，直到重新预览并启用" style={{marginBottom:16}}/>
+        <Button type="primary" htmlType="submit" loading={busy===reportAccount?.id+':report'}>保存报表配置</Button>
+      </Form>
+    </Drawer>
+  </Space>;
 }
 
 function AdminUsers(){
@@ -174,13 +285,46 @@ function ApiDocs({ user }) {
 }
 
 function SettlementConfigEditor() {
-  const [accounts,setAccounts]=useState([]),[channels,setChannels]=useState([]),[domains,setDomains]=useState([]),[rules,setRules]=useState([]),[editingUp,setEditingUp]=useState(null),[editingDown,setEditingDown]=useState(null);
-  const [upForm]=Form.useForm(),[downForm]=Form.useForm();
-  const load=async()=>{const [a,c,d,r]=await Promise.all([api('/api/admin/upstream-accounts'),api('/api/admin/channels'),api('/api/admin/ad-unit-domains'),api('/api/admin/domain-share-rules')]);setAccounts(a.items);setChannels(c.items);setDomains([...new Map(d.items.map(x=>[x.domain,x])).values()]);setRules(r.items)};
-  useEffect(()=>{load().catch(e=>message.error(e.message))},[]);
-  const saveUp=async v=>{await api(editingUp?`/api/admin/upstream-accounts/${editingUp.id}`:'/api/admin/upstream-accounts',{method:editingUp?'PUT':'POST',body:JSON.stringify(v)});message.success('上游配置已保存');upForm.resetFields();setEditingUp(null);load()};
-  const saveDown=async v=>{await api(editingDown?`/api/admin/domain-share-rules/${editingDown.id}`:'/api/admin/domain-share-rules',{method:editingDown?'PUT':'POST',body:JSON.stringify({...v,effectiveFrom:v.effectiveFrom?.format('YYYY-MM-DD')})});message.success('下游配置已保存');downForm.resetFields();setEditingDown(null);load()};
-  return <Space direction="vertical" size={16} className="page-stack"><div className="page-heading"><Title level={2}>结算配置</Title></div><Row gutter={[16,16]}><Col xs={24} xl={10}><Card title={editingUp?'编辑上游账户':'新增上游账户'}><Form form={upForm} layout="vertical" onFinish={saveUp}><Form.Item name="accountKey" label="上游账户标识" rules={[{required:true}]}><Input disabled={Boolean(editingUp)}/></Form.Item><Form.Item name="name" label="账户名称" rules={[{required:true}]}><Input/></Form.Item><Form.Item name="sharePercent" label="上游结算比例（%）" rules={[{required:true}]}><InputNumber min={0} max={100} precision={2} style={{width:'100%'}}/></Form.Item><Space><Button type="primary" htmlType="submit">保存上游配置</Button>{editingUp&&<Button onClick={()=>{setEditingUp(null);upForm.resetFields()}}>取消编辑</Button>}</Space></Form><Table size="small" rowKey="id" dataSource={accounts} columns={[{title:'账户',dataIndex:'name'},{title:'比例',dataIndex:'sharePercent',render:v=>`${v}%`},{title:'操作',render:(_,r)=><Button type="link" onClick={()=>{setEditingUp(r);upForm.setFieldsValue(r)}}>编辑</Button>}]}/></Card></Col><Col xs={24} xl={14}><Card title={editingDown?'编辑下游规则':'新增下游规则'}><Form form={downForm} layout="vertical" onFinish={saveDown}><Row gutter={12}><Col span={12}><Form.Item name="upstreamAccountId" label="上游账户" rules={[{required:true}]}><Select options={accounts.map(x=>({value:x.id,label:x.name}))}/></Form.Item></Col><Col span={12}><Form.Item name="channelId" label="下游渠道" rules={[{required:true}]}><Select options={channels.map(x=>({value:x.id,label:x.name}))}/></Form.Item></Col></Row><Form.Item name="domain" label="下游域名（可选）"><Select allowClear showSearch options={domains.map(x=>({value:x.domain,label:x.domain}))} placeholder="不选择表示全部域名"/></Form.Item><Row gutter={12}><Col span={12}><Form.Item name="sharePercent" label="下游结算比例（%）" rules={[{required:true}]}><InputNumber min={0} max={100} precision={2} style={{width:'100%'}}/></Form.Item></Col><Col span={12}><Form.Item name="effectiveFrom" label="生效日期" rules={[{required:true}]}><DatePicker style={{width:'100%'}}/></Form.Item></Col></Row><Space><Button type="primary" htmlType="submit">保存下游配置</Button>{editingDown&&<Button onClick={()=>{setEditingDown(null);downForm.resetFields()}}>取消编辑</Button>}</Space></Form><Table size="small" rowKey="id" dataSource={rules} columns={[{title:'上游',dataIndex:'upstreamAccountName'},{title:'下游',dataIndex:'channelName'},{title:'域名',dataIndex:'domain',render:v=>v||'全部域名'},{title:'比例',dataIndex:'sharePercent',render:v=>`${v}%`},{title:'操作',render:(_,r)=><Button type="link" onClick={()=>{setEditingDown(r);downForm.setFieldsValue({...r,effectiveFrom:dayjs(r.effectiveFrom)})}}>编辑</Button>}]}/></Card></Col></Row></Space>;
+  const [gamAccounts,setGamAccounts] = useState([]), [accounts,setAccounts] = useState([]), [channels,setChannels] = useState([]), [domains,setDomains] = useState([]), [rules,setRules] = useState([]);
+  const [editingUp,setEditingUp] = useState(null), [editingDown,setEditingDown] = useState(null);
+  const [upForm] = Form.useForm(), [downForm] = Form.useForm();
+  const load = async () => {
+    const [g,a,c,d,r] = await Promise.all([api('/api/admin/gam-accounts'),api('/api/admin/upstream-accounts'),api('/api/admin/channels'),api('/api/admin/ad-unit-domains'),api('/api/admin/domain-share-rules')]);
+    setGamAccounts(g.items); setAccounts(a.items); setChannels(c.items); setDomains([...new Map(d.items.map(x=>[x.domain,x])).values()]); setRules(r.items);
+  };
+  useEffect(() => { load().catch(e=>message.error(e.message)); }, []);
+  const saveUp = async v => {
+    try { await api(editingUp?'/api/admin/upstream-accounts/'+editingUp.id:'/api/admin/upstream-accounts',{method:editingUp?'PUT':'POST',body:JSON.stringify(v)}); message.success('上游配置已保存'); upForm.resetFields(); setEditingUp(null); await load(); }
+    catch(e) { message.error(e.message); }
+  };
+  const saveDown = async v => {
+    try { await api(editingDown?'/api/admin/domain-share-rules/'+editingDown.id:'/api/admin/domain-share-rules',{method:editingDown?'PUT':'POST',body:JSON.stringify({...v,effectiveFrom:v.effectiveFrom?.format('YYYY-MM-DD')})}); message.success('下游配置已保存'); downForm.resetFields(); setEditingDown(null); await load(); }
+    catch(e) { message.error(e.message); }
+  };
+  return <Space direction="vertical" size={16} className="page-stack">
+    <div className="page-heading"><Title level={2}>结算配置</Title></div>
+    <Row gutter={[16,16]}>
+      <Col xs={24} xl={10}><Card title={editingUp?'编辑上游账户':'新增上游账户'}><Form form={upForm} layout="vertical" onFinish={saveUp}>
+        <Form.Item name="gamAccountId" label="Google Ad Manager REST 账户" rules={[{required:true}]}><Select options={gamAccounts.map(x=>({value:x.id,label:x.name+'（'+x.networkCode+'）'}))}/></Form.Item>
+        <Form.Item name="accountKey" label="上游账户标识" rules={[{required:true}]}><Input disabled={Boolean(editingUp)}/></Form.Item>
+        <Form.Item name="name" label="账户名称" rules={[{required:true}]}><Input/></Form.Item>
+        <Form.Item name="sharePercent" label="上游结算比例（%）" rules={[{required:true}]}><InputNumber min={0} max={100} precision={2} style={{width:'100%'}}/></Form.Item>
+        <Space><Button type="primary" htmlType="submit">保存上游配置</Button>{editingUp&&<Button onClick={()=>{setEditingUp(null);upForm.resetFields()}}>取消编辑</Button>}</Space>
+      </Form><Table size="small" rowKey="id" dataSource={accounts} columns={[
+        {title:'账户',dataIndex:'name'},{title:'REST 账户',dataIndex:'gamAccountName'},{title:'比例',dataIndex:'sharePercent',render:v=>v+'%'},
+        {title:'操作',render:(_,r)=><Button type="link" onClick={()=>{setEditingUp(r);upForm.setFieldsValue(r)}}>编辑</Button>}
+      ]}/></Card></Col>
+      <Col xs={24} xl={14}><Card title={editingDown?'编辑下游规则':'新增下游规则'}><Form form={downForm} layout="vertical" onFinish={saveDown}>
+        <Row gutter={12}><Col span={12}><Form.Item name="upstreamAccountId" label="上游账户" rules={[{required:true}]}><Select options={accounts.map(x=>({value:x.id,label:x.name}))}/></Form.Item></Col><Col span={12}><Form.Item name="channelId" label="下游渠道" rules={[{required:true}]}><Select options={channels.map(x=>({value:x.id,label:x.name}))}/></Form.Item></Col></Row>
+        <Form.Item name="domain" label="下游域名（可选）"><Select allowClear showSearch options={domains.map(x=>({value:x.domain,label:x.domain}))} placeholder="不选择表示全部域名"/></Form.Item>
+        <Row gutter={12}><Col span={12}><Form.Item name="sharePercent" label="下游结算比例（%）" rules={[{required:true}]}><InputNumber min={0} max={100} precision={2} style={{width:'100%'}}/></Form.Item></Col><Col span={12}><Form.Item name="effectiveFrom" label="生效日期" rules={[{required:true}]}><DatePicker style={{width:'100%'}}/></Form.Item></Col></Row>
+        <Space><Button type="primary" htmlType="submit">保存下游配置</Button>{editingDown&&<Button onClick={()=>{setEditingDown(null);downForm.resetFields()}}>取消编辑</Button>}</Space>
+      </Form><Table size="small" rowKey="id" dataSource={rules} columns={[
+        {title:'上游',dataIndex:'upstreamAccountName'},{title:'下游',dataIndex:'channelName'},{title:'域名',dataIndex:'domain',render:v=>v||'全部域名'},
+        {title:'比例',dataIndex:'sharePercent',render:v=>v+'%'},{title:'操作',render:(_,r)=><Button type="link" onClick={()=>{setEditingDown(r);downForm.setFieldsValue({...r,effectiveFrom:dayjs(r.effectiveFrom)})}}>编辑</Button>}
+      ]}/></Card></Col>
+    </Row>
+  </Space>;
 }
 
 function Shell({ user, onLogout }) {
@@ -189,10 +333,10 @@ function Shell({ user, onLogout }) {
   const menu=useMemo(()=>[
     {key:'dashboard',icon:<DashboardOutlined/>,label:'经营总览'},
     {key:'reports',icon:<BarChartOutlined/>,label:'数据报告'},
-    ...(admin?[{type:'group',label:'平台管理',children:[{key:'channels',icon:<TeamOutlined/>,label:'渠道管理'},{key:'soap',icon:<SafetyOutlined/>,label:'SOAP账户同步'},{key:'settlement',icon:<DollarOutlined/>,label:'结算配置'},{key:'ad-units',icon:<PlusOutlined/>,label:'广告单元创建'},{key:'admins',icon:<UserSwitchOutlined/>,label:'管理员账户'},{key:'report-keys',icon:<KeyOutlined/>,label:'账户日报 API Key'}]}]:[]),
+    ...(admin?[{type:'group',label:'平台管理',children:[{key:'channels',icon:<TeamOutlined/>,label:'渠道管理'},{key:'gam',icon:<SafetyOutlined/>,label:'Ad Manager REST'},{key:'settlement',icon:<DollarOutlined/>,label:'结算配置'},{key:'ad-units',icon:<PlusOutlined/>,label:'广告单元创建'},{key:'admins',icon:<UserSwitchOutlined/>,label:'管理员账户'},{key:'report-keys',icon:<KeyOutlined/>,label:'账户日报 API Key'}]}]:[]),
     {type:'group',label:'开发能力',children:[{key:'api',icon:<ApiOutlined/>,label:'渠道 API'}]}
   ],[admin]);
-  const body=view==='dashboard'?<Dashboard range={range} setRange={setRange} admin={admin}/>:view==='reports'?<Reports range={range} setRange={setRange} admin={admin}/>:view==='channels'?<Channels/>:view==='imports'?<DataImport/>:view==='soap'?<SoapAccounts/>:view==='settlement'?<SettlementConfigEditor/>:view==='ad-units'?<AdUnitBuilder/>:view==='admins'?<AdminUsers/>:view==='report-keys'?<ReportApiKeys/>:<ApiDocs user={user}/>;
+  const body=view==='dashboard'?<Dashboard range={range} setRange={setRange} admin={admin}/>:view==='reports'?<Reports range={range} setRange={setRange} admin={admin}/>:view==='channels'?<Channels/>:view==='imports'?<DataImport/>:view==='gam'?<GamAccounts/>:view==='settlement'?<SettlementConfigEditor/>:view==='ad-units'?<AdUnitBuilder/>:view==='admins'?<AdminUsers/>:view==='report-keys'?<ReportApiKeys/>:<ApiDocs user={user}/>;
   return <Layout className="app-shell"><Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={238}><div className="side-brand"><span>AX</span>{!collapsed&&<div><b>{admin?'AdX Control':'AdX Publisher'}</b><small>{admin?'平台管理端':'渠道工作台'}</small></div>}</div><Menu theme="dark" mode="inline" selectedKeys={[view]} items={menu} onClick={({key})=>setView(key)}/></Sider><Layout><Header><div><Text strong>{user.name||user.email}</Text><Tag color={admin?'blue':'cyan'}>{admin?'平台管理员':'渠道账号'}</Tag></div><Popconfirm title="确认退出登录？" onConfirm={onLogout}><Button icon={<LogoutOutlined/>}>退出</Button></Popconfirm></Header><Content><PageErrorBoundary key={view}>{body}</PageErrorBoundary></Content></Layout></Layout>;
 }
 

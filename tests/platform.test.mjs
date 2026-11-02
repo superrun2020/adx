@@ -140,3 +140,26 @@ test('upstream account and ad unit rules calculate layered settlement and mapped
   assert.equal(report.body.items[0].upstreamRevenue, 60);
   assert.equal(report.body.items[0].channelRevenue, 30);
 });
+
+test('REST account setup links upstream settlement without exposing credentials', async () => {
+  cookie = '';
+  const login = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: 'admin@example.test', password: 'AdminPass123!' }) });
+  cookie = login.response.headers.get('set-cookie').split(';')[0];
+  const created = await request('/api/admin/gam-accounts', { method: 'POST', body: JSON.stringify({
+    name: 'Test REST Network', networkCode: '123456789',
+    credentials: { client_email: 'test@example.test', private_key: 'dummy-key', token_uri: 'https://oauth2.googleapis.com/token' }
+  }) });
+  assert.equal(created.response.status, 200);
+  assert.equal(created.body.item.status, 'untested');
+  assert.equal(Object.hasOwn(created.body.item, 'credential_ciphertext'), false);
+  const gamAccountId = created.body.item.id;
+  const upstream = await request('/api/admin/upstream-accounts', { method: 'POST', body: JSON.stringify({
+    accountKey: 'gam-test-upstream', name: 'REST Upstream', sharePercent: 100, gamAccountId
+  }) });
+  assert.equal(upstream.response.status, 201);
+  assert.equal(upstream.body.item.gamAccountId, gamAccountId);
+  const listed = await request('/api/admin/upstream-accounts');
+  assert.equal(listed.body.items.find(item => item.accountKey === 'gam-test-upstream').gamAccountName, 'Test REST Network');
+  assert.equal((await request('/api/admin/gam-accounts/' + gamAccountId + '/activate', { method: 'POST' })).response.status, 400);
+  assert.equal((await request('/api/admin/soap-accounts')).response.status, 404);
+});
