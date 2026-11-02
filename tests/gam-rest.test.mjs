@@ -46,7 +46,7 @@ test('REST report definition is fixed and mismatched columns fail closed', () =>
 test('REST report run polls and reads all result pages', async () => {
   const row = {
     dimensionValues: [
-      { stringValue: '2026-10-31' }, { intValue: '13' }, { stringValue: 'example.com' },
+      { intValue: '20261031' }, { intValue: '13' }, { stringValue: 'example.com' },
       { stringValue: 'US' }, { stringValue: 'Banner' }
     ],
     metricValueGroups: [{ primaryValues: [
@@ -67,6 +67,7 @@ test('REST report run polls and reads all result pages', async () => {
   assert.match(paths[3], /pageToken=next/);
   const facts = normalizeRestReportRows(result.rows, { channelId: 1, accountKey: 'upstream-a', sourceFile: 'test', moneyDivisor: 1000000 });
   assert.equal(facts[0].revenue, 1.25);
+  assert.equal(facts[0].reportDate, '2026-10-31');
   assert.equal(facts[0].hour, 13);
   assert.equal(facts[0].requests, 100);
   assert.throws(() => normalizeRestReportRows([{ ...row, metricValueGroups: [] }], { channelId: 1, accountKey: 'upstream-a', sourceFile: 'test', moneyDivisor: 1 }), /columns_mismatch/);

@@ -10,8 +10,9 @@ const RESULT_NAME = /^networks\/(\d+)\/reports\/(\d+)\/results\/(\d+)$/;
 const OPERATION_NAME = /^networks\/(\d+)\/operations\/reports\/runs\/(\d+)$/;
 
 function dateObject(isoDate) {
+  const parsed = new Date(String(isoDate) + 'T00:00:00Z');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(isoDate)) ||
-      new Date(isoDate + 'T00:00:00Z').toISOString().slice(0, 10) !== isoDate) {
+      Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== isoDate) {
     throw new Error('invalid_report_date');
   }
   const [year, month, day] = isoDate.split('-').map(Number);
@@ -117,6 +118,14 @@ function integer(value) {
   return number;
 }
 
+function reportDate(value) {
+  const raw = String(scalar(value));
+  const compact = /^(\d{4})(\d{2})(\d{2})$/.exec(raw);
+  const iso = compact ? compact[1] + '-' + compact[2] + '-' + compact[3] : raw;
+  dateObject(iso);
+  return iso;
+}
+
 export function normalizeRestReportRows(rows, { channelId, accountKey, sourceFile, moneyDivisor }) {
   if (!Number.isSafeInteger(channelId) || channelId < 1 || !accountKey || ![1, 1000000].includes(moneyDivisor)) {
     throw new Error('invalid_rest_report_mapping');
@@ -126,8 +135,7 @@ export function normalizeRestReportRows(rows, { channelId, accountKey, sourceFil
     const metrics = row.metricValueGroups?.[0]?.primaryValues || [];
     if (dimensions.length !== REPORT_DIMENSIONS.length || row.metricValueGroups?.length !== 1 ||
         metrics.length !== REPORT_METRICS.length) throw new Error('rest_report_columns_mismatch');
-    const reportDate = String(scalar(dimensions[0]));
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(reportDate)) throw new Error('invalid_rest_report_date');
+    const date = reportDate(dimensions[0]);
     const hour = integer(dimensions[1]);
     if (hour > 23) throw new Error('invalid_rest_report_hour');
     const url = String(scalar(dimensions[2]) || '').trim();
@@ -136,7 +144,7 @@ export function normalizeRestReportRows(rows, { channelId, accountKey, sourceFil
     const revenueRaw = Number(scalar(metrics[4]));
     if (!Number.isFinite(revenueRaw)) throw new Error('invalid_rest_report_revenue');
     return {
-      channelId, reportDate, hour, url, account: accountKey, adUnit, country,
+      channelId, reportDate: date, hour, url, account: accountKey, adUnit, country,
       requests: integer(metrics[0]), matched: integer(metrics[1]),
       impressions: integer(metrics[2]), clicks: integer(metrics[3]),
       revenue: revenueRaw / moneyDivisor, sourceFile, rawJson: JSON.stringify(row)
