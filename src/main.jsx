@@ -10,12 +10,12 @@ import {
   LogoutOutlined, PlusOutlined, ReloadOutlined, SafetyOutlined, TeamOutlined,
   UploadOutlined, UserSwitchOutlined
 } from '@ant-design/icons';
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import dayjs from 'dayjs';
 import './styles.css';
 
 const { Header, Sider, Content } = Layout;
 const { Title, Text } = Typography;
+const RevenueChart = React.lazy(() => import('./RevenueChart.jsx'));
 const hostname = window.location.hostname.toLowerCase();
 const portal = hostname === 'adxpub.geekforest.ai' || new URLSearchParams(window.location.search).get('portal') === 'publisher' ? 'publisher' : 'admin';
 
@@ -73,7 +73,7 @@ function Dashboard({ range, setRange, admin }) {
   return <Space direction="vertical" size={16} className="page-stack">
     <div className="page-heading"><div><Title level={2}>经营总览</Title><Text type="secondary">收入、流量质量与渠道结算一屏掌握</Text></div><Space><DatePicker.RangePicker value={range} onChange={v => v && setRange(v)} /><Button icon={<ReloadOutlined />} loading={loading} onClick={load}>刷新</Button></Space></div>
     <MetricCards summary={data.summary} admin={admin} />
-    <Row gutter={[16, 16]}><Col xs={24} xl={16}><Card title="每日收益趋势" extra={data.lastSync ? `最近同步 ${data.lastSync}` : '尚未同步'}><div className="chart"><ResponsiveContainer><AreaChart data={data.trend}><defs><linearGradient id="revenue" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#168aad" stopOpacity={.35}/><stop offset="95%" stopColor="#168aad" stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" vertical={false}/><XAxis dataKey="date"/><YAxis/><Tooltip formatter={v => money(v)}/><Area type="monotone" dataKey="revenue" stroke="#168aad" fill="url(#revenue)" strokeWidth={2}/></AreaChart></ResponsiveContainer></div></Card></Col><Col xs={24} xl={8}><Card title="收益最高的链接"><Table size="small" pagination={false} rowKey="url" dataSource={data.topUrls} columns={[{ title: '链接', dataIndex: 'url', ellipsis: true }, { title: '收益', dataIndex: 'revenue', align: 'right', render: money }]} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}/></Card></Col></Row>
+    <Row gutter={[16, 16]}><Col xs={24} xl={16}><Card title="每日收益趋势" extra={data.lastSync ? `最近同步 ${data.lastSync}` : '尚未同步'}><div className="chart"><PageErrorBoundary><React.Suspense fallback={<div style={{padding:24,color:"#587184"}}>图表加载中…</div>}><RevenueChart data={data.trend} formatMoney={money}/></React.Suspense></PageErrorBoundary></div></Card></Col><Col xs={24} xl={8}><Card title="收益最高的链接"><Table size="small" pagination={false} rowKey="url" dataSource={data.topUrls} columns={[{ title: '链接', dataIndex: 'url', ellipsis: true }, { title: '收益', dataIndex: 'revenue', align: 'right', render: money }]} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}/></Card></Col></Row>
   </Space>;
 }
 
@@ -340,12 +340,14 @@ function Shell({ user, onLogout }) {
   return <Layout className="app-shell"><Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={238}><div className="side-brand"><span>AX</span>{!collapsed&&<div><b>{admin?'AdX Control':'AdX Publisher'}</b><small>{admin?'平台管理端':'渠道工作台'}</small></div>}</div><Menu theme="dark" mode="inline" selectedKeys={[view]} items={menu} onClick={({key})=>setView(key)}/></Sider><Layout><Header><div><Text strong>{user.name||user.email}</Text><Tag color={admin?'blue':'cyan'}>{admin?'平台管理员':'渠道账号'}</Tag></div><Popconfirm title="确认退出登录？" onConfirm={onLogout}><Button icon={<LogoutOutlined/>}>退出</Button></Popconfirm></Header><Content><PageErrorBoundary key={view}>{body}</PageErrorBoundary></Content></Layout></Layout>;
 }
 
-function Root() {
-  const [user,setUser]=useState(null); const [ready,setReady]=useState(false);
-  useEffect(()=>{api('/api/auth/me').then(r=>setUser(r.user)).catch(()=>{}).finally(()=>setReady(true))},[]);
+function Root({ initialUser }) {
+  const [user,setUser]=useState(initialUser || null); const [ready,setReady]=useState(Boolean(initialUser));
+  useEffect(()=>{if(initialUser)return;api('/api/auth/me').then(r=>setUser(r.user)).catch(()=>{}).finally(()=>setReady(true))},[initialUser]);
   const logout=async()=>{await api('/api/auth/logout',{method:'POST'}).catch(()=>{});setUser(null)};
   if(!ready)return <div className="boot">正在加载安全工作区…</div>;
   return user?<Shell user={user} onLogout={logout}/>:<Login onLogin={setUser}/>;
 }
 
-createRoot(document.getElementById('root')).render(<AntApp><Root/></AntApp>);
+export function mountApp(initialUser) {
+  createRoot(document.getElementById('root')).render(<AntApp><Root initialUser={initialUser}/></AntApp>);
+}

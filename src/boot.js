@@ -11,12 +11,24 @@ if (portal) {
   document.getElementById('boot-hint').textContent = '使用平台分配的渠道账号登录，仅可查看本渠道分成后数据。';
 }
 
-async function loadApp() {
+let appPromise;
+let mounted = false;
+function getApp() {
+  if (!appPromise) appPromise = import('./main.jsx').catch(error => { appPromise = null; throw error; });
+  return appPromise;
+}
+getApp().catch(() => {});
+
+async function loadApp(user) {
+  if (mounted) return;
   form.hidden = true;
   status.classList.add('loading');
   status.textContent = '正在加载安全工作区…';
   try {
-    await import('./main.jsx');
+    const app = await getApp();
+    if (mounted) return;
+    mounted = true;
+    app.mountApp(user);
   } catch (error) {
     console.error('app_load_failed', error);
     form.hidden = false;
@@ -40,7 +52,7 @@ form.addEventListener('submit', async event => {
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok || result.ok === false) throw new Error(result.error || 'login_failed');
-    await loadApp();
+    await loadApp(result.user);
   } catch (error) {
     status.classList.remove('loading');
     status.textContent = error.message === 'invalid_credentials' ? '账号或密码错误' : '登录失败，请稍后重试。';
@@ -50,5 +62,5 @@ form.addEventListener('submit', async event => {
 });
 
 fetch('/api/auth/me', { credentials: 'include', cache: 'no-store' })
-  .then(response => { if (response.ok) return loadApp(); })
+  .then(async response => { if (response.ok) return loadApp((await response.json()).user); })
   .catch(() => { status.textContent = '暂时无法连接服务，请稍后重试。'; });
