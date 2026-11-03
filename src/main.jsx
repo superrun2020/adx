@@ -133,16 +133,24 @@ function Root({ initialUser, initialView, initialDashboard, onReady }) {
   return <Shell user={initialUser} onLogout={logout} initialView={initialView} initialDashboard={initialDashboard} onReady={onReady} />;
 }
 
+let appRootInstance;
 export function mountApp(initialUser, initialView, initialDashboard) {
-  const fallback = document.getElementById('root');
+  const loginRoot = document.getElementById('root');
   const appRoot = document.getElementById('app-root');
-  const onReady = () => { appRoot.hidden = false; fallback.hidden = true; };
-  const onError = () => {
-    appRoot.hidden = true;
-    fallback.hidden = false;
-    const error = document.getElementById('quick-error');
-    error.firstChild.textContent = '后台页面加载失败，请刷新重试。';
-    error.hidden = false;
-  };
-  createRoot(appRoot).render(<AppErrorBoundary onError={onError}><AntApp><Root initialUser={initialUser} initialView={initialView} initialDashboard={initialDashboard} onReady={onReady}/></AntApp></AppErrorBoundary>);
+  return new Promise((resolve, reject) => {
+    const onReady = () => {
+      appRoot.hidden = false;
+      loginRoot.hidden = true;
+      resolve();
+    };
+    const onError = error => {
+      appRoot.hidden = true;
+      loginRoot.hidden = false;
+      document.getElementById('boot-status').textContent = '后台页面加载失败，请刷新重试。';
+      document.getElementById('boot-retry').hidden = false;
+      reject(error);
+    };
+    if (!appRootInstance) appRootInstance = createRoot(appRoot);
+    appRootInstance.render(<AppErrorBoundary onError={onError}><AntApp><Root initialUser={initialUser} initialView={initialView} initialDashboard={initialDashboard} onReady={onReady}/></AntApp></AppErrorBoundary>);
+  });
 }

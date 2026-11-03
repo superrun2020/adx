@@ -15,22 +15,17 @@ function start({ loginResponse, loadApp, dashboardResponse }) {
     addEventListener: (name, handler) => { listeners[name] = handler; },
     elements: { namedItem: name => ({ value: name === 'email' ? 'admin@example.test' : 'secret' }) }
   };
-  const makeNode = () => ({ hidden: false, textContent: '', style: {}, firstChild: { textContent: '' },
-    classList: { toggle() {} }, addEventListener() {}, replaceChildren() {}, append() {},
-    setAttribute() {}, removeAttribute() {} });
+  const makeNode = () => ({ hidden: false, textContent: '',
+    classList: { add() {}, remove() {} }, addEventListener() {} });
   const status = makeNode();
-  const retry = makeNode();
+  const retry = { ...makeNode(), hidden: true };
   const loginPage = makeNode();
-  const nav = makeNode();
-  const navItems = ['dashboard', 'reports'].map(view => ({ ...makeNode(), dataset: { view } }));
-  const workspace = { ...makeNode(), querySelector: () => nav,
-    querySelectorAll: selector => selector === '[data-view]' ? navItems : [] };
   const calls = [];
-  const nodes = new Map([['boot-login', form], ['boot-status', status], ['boot-retry', retry], ['boot-workspace', workspace]]);
+  const nodes = new Map([['boot-login', form], ['boot-status', status], ['boot-retry', retry]]);
   const document = { getElementById: id => {
     if (!nodes.has(id)) nodes.set(id, makeNode());
     return nodes.get(id);
-  }, querySelector: () => loginPage, createElement: () => makeNode() };
+  }, querySelector: () => loginPage };
   const context = {
     document, URLSearchParams, console,
     window: { location: { hostname: 'adx.geekforest.ai', search: '', reload() {} }, setTimeout() {} },
@@ -45,22 +40,23 @@ function start({ loginResponse, loadApp, dashboardResponse }) {
     __loadApp: loadApp
   };
   vm.runInNewContext(boot, context);
-  return { listeners, button, form, status, calls, loginPage, workspace, nodes };
+  return { listeners, button, status, retry, calls, loginPage };
 }
 
-test('login is enabled before the application bundle loads', async () => {
-  assert.equal(html.includes('<button type="submit">登录</button>'), true);
-  assert.doesNotMatch(html, /正在准备完整后台/);
+test('login stays usable while the full application bundle downloads', async () => {
+  assert.match(html, /<button type="submit">登录<\/button>/);
+  assert.doesNotMatch(html, /boot-workspace|quick-page-preview|页面正在打开/);
   const page = start({ loginResponse: { ok: false, json: async () => ({ error: 'invalid_credentials' }) },
     loadApp: () => new Promise(() => {}) });
   assert.equal(page.button.disabled, false);
   await page.listeners.submit({ preventDefault() {} });
   assert.equal(page.calls.some(call => call.path === '/api/auth/login'), true);
   assert.equal(page.status.textContent, '账号或密码错误');
+  assert.equal(page.loginPage.hidden, false);
   assert.equal(page.button.disabled, false);
 });
 
-test('successful login shows a styled workspace before its bundle becomes ready', async () => {
+test('successful login keeps the login page until the real application is ready', async () => {
   let resolveApp;
   let mountedUser;
   const page = start({ loginResponse: { ok: true, json: async () => ({ user: { role: 'admin' } }) },
@@ -69,11 +65,25 @@ test('successful login shows a styled workspace before its bundle becomes ready'
   for (let i = 0; i < 10 && !resolveApp; i++) await new Promise(setImmediate);
   await new Promise(setImmediate);
   assert.equal(page.calls.some(call => call.path === '/api/auth/login'), true);
-  assert.equal(page.loginPage.hidden, true);
-  assert.equal(page.workspace.hidden, false);
-  assert.equal(page.nodes.get('quick-revenue').textContent, '$12.00');
-  assert.equal(page.calls.some(call => call.path.startsWith('/api/dashboard?')), true);
-  resolveApp({ mountApp: user => { mountedUser = user; } });
+  assert.equal(page.loginPage.hidden, false);
+  assert.equal(page.button.textContent, '正在进入后台…');
+  resolveApp({ mountApp: async (user, view, initialDashboard) => {
+    mountedUser = user;
+    assert.equal(view, 'dashboard');
+    assert.ok(initialDashboard.promise);
+    page.loginPage.hidden = true;
+  } });
   await submit;
   assert.equal(mountedUser.role, 'admin');
+  assert.equal(page.loginPage.hidden, true);
+  assert.equal(page.calls.some(call => call.path.startsWith('/api/dashboard?')), true);
+});
+
+test('application load failure leaves a retryable login page', async () => {
+  const page = start({ loginResponse: { ok: true, json: async () => ({ user: { role: 'admin' } }) },
+    loadApp: async () => { throw new Error('asset_failed'); } });
+  await page.listeners.submit({ preventDefault() {} });
+  assert.equal(page.loginPage.hidden, false);
+  assert.equal(page.retry.hidden, false);
+  assert.match(page.status.textContent, /后台资源加载失败/);
 });
