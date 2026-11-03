@@ -12,6 +12,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import './styles.css';
+import Reports from './ReportExplorer.jsx';
 
 const { Header, Sider, Content } = Layout;
 const { Title, Text } = Typography;
@@ -75,16 +76,6 @@ function Dashboard({ range, setRange, admin }) {
     <MetricCards summary={data.summary} admin={admin} />
     <Row gutter={[16, 16]}><Col xs={24} xl={16}><Card title="每日收益趋势" extra={data.lastSync ? `最近同步 ${data.lastSync}` : '尚未同步'}><div className="chart"><PageErrorBoundary><React.Suspense fallback={<div style={{padding:24,color:"#587184"}}>图表加载中…</div>}><RevenueChart data={data.trend} formatMoney={money}/></React.Suspense></PageErrorBoundary></div></Card></Col><Col xs={24} xl={8}><Card title="收益最高的链接"><Table size="small" pagination={false} rowKey="url" dataSource={data.topUrls} columns={[{ title: '链接', dataIndex: 'url', ellipsis: true }, { title: '收益', dataIndex: 'revenue', align: 'right', render: money }]} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}/></Card></Col></Row>
   </Space>;
-}
-
-function Reports({ range, setRange, admin }) {
-  const [rows, setRows] = useState([]); const [loading, setLoading] = useState(false); const [dimension, setDimension] = useState(['account','adUnit','url','date','hour','country']); const [filters,setFilters]=useState({upstreamAccount:'',channelId:'',adUnit:'',domain:''}); const [options,setOptions]=useState({accounts:[],channels:[]});
-  useEffect(()=>{if(!admin)return;Promise.all([api('/api/admin/upstream-accounts'),api('/api/admin/channels')]).then(([a,c])=>setOptions({accounts:a.items||[],channels:c.items||[]})).catch(e=>message.error(`筛选项加载失败：${e.message}`))},[admin]);
-  const load = async () => { setLoading(true); try { const q = new URLSearchParams({start:range[0].format('YYYY-MM-DD'),end:range[1].format('YYYY-MM-DD'),dimensions:dimension.join(','),...Object.fromEntries(Object.entries(filters).filter(([,v])=>String(v).trim()))}); setRows((await api(`/api/reports?${q}`)).items); } catch(e){message.error(e.message)} finally{setLoading(false)} };
-  useEffect(()=>{load()},[range[0].valueOf(),range[1].valueOf(),dimension.join(',')]);
-  const dimensions=[['date','日期'],['url','链接'],['account','账号'],['adUnit','广告单元'],['hour','小时'],['country','国家']];
-  const columnWidths={account:220,adUnit:300,url:280,date:120,hour:80,country:110}; const cols=[...dimension.map(d=>({title:dimensions.find(x=>x[0]===d)?.[1],dataIndex:d,width:columnWidths[d],fixed:d==='date'?'left':undefined})),...(dimension.includes('url')?[{title:'主域名',dataIndex:'mainDomain',width:180},{title:'域名类型',dataIndex:'domainType',width:100}]:[]),{title:'请求',dataIndex:'requests',width:100,align:'right',render:number},{title:'匹配',dataIndex:'matchedRequests',width:100,align:'right',render:number},{title:'展示',dataIndex:'impressions',width:100,align:'right',render:number},{title:'点击',dataIndex:'clicks',width:100,align:'right',render:number},{title:'匹配率',dataIndex:'matchRate',width:110,align:'right',render:v=>`${Number(v).toFixed(2)}%`},{title:admin?'总流水（收入）':'结算收入',dataIndex:'revenue',width:140,align:'right',render:money},{title:'CPM',dataIndex:'ecpm',width:110,align:'right',render:money},...(admin?[{title:'上游分成后',dataIndex:'upstreamRevenue',width:130,align:'right',render:money},{title:'上游比例',dataIndex:'upstreamSharePercent',width:110,align:'right',render:v=>`${v}%`},{title:'下游比例',dataIndex:'channelSharePercent',width:110,align:'right',render:v=>`${v}%`},{title:'渠道结算',dataIndex:'channelRevenue',width:120,align:'right',render:money},{title:'毛利',dataIndex:'grossProfit',width:120,align:'right',render:money}]:[])];
-  return <Space direction="vertical" size={16} className="page-stack"><div className="page-heading"><div><Title level={2}>数据报告</Title><Text type="secondary">支持按小时、上游账户、渠道、广告单元和域名查询，结算金额按规则自动计算</Text></div></div><Card><Space wrap><DatePicker.RangePicker value={range} onChange={v=>v&&setRange(v)}/>{admin&&<Select allowClear showSearch placeholder="上游账户" value={filters.upstreamAccount||undefined} onChange={v=>setFilters({...filters,upstreamAccount:v||''})} options={options.accounts.map(x=>({value:x.accountKey,label:`${x.name}（${x.accountKey}）`}))} style={{width:220}}/>}{admin&&<Select allowClear showSearch placeholder="渠道" value={filters.channelId||undefined} onChange={v=>setFilters({...filters,channelId:v||''})} options={options.channels.map(x=>({value:String(x.id),label:x.name}))} style={{width:160}}/>}<Input placeholder="广告单元" value={filters.adUnit} onChange={e=>setFilters({...filters,adUnit:e.target.value})} style={{width:220}}/><Input placeholder="域名" value={filters.domain} onChange={e=>setFilters({...filters,domain:e.target.value})} style={{width:180}}/><Select mode="multiple" value={dimension} onChange={v=>v.length&&setDimension(v)} options={dimensions.map(([value,label])=>({value,label}))} style={{minWidth:360}}/><Button type="primary" icon={<BarChartOutlined/>} onClick={load}>搜索</Button><Button onClick={()=>{setFilters({upstreamAccount:'',channelId:'',adUnit:'',domain:''});setDimension(['account','adUnit','url','date','hour','country'])}}>重置</Button></Space></Card><Card title="小时明细"><Table rowKey={(r,i)=>JSON.stringify(r)+i} loading={loading} dataSource={rows} columns={cols} scroll={{x:1500}} pagination={{pageSize:20,showSizeChanger:true}}/></Card></Space>;
 }
 
 function SettlementConfig() {
@@ -308,10 +299,14 @@ function SettlementConfigEditor() {
         <Form.Item name="gamAccountId" label="Google Ad Manager REST 账户" rules={[{required:true}]}><Select options={gamAccounts.map(x=>({value:x.id,label:x.name+'（'+x.networkCode+'）'}))}/></Form.Item>
         <Form.Item name="accountKey" label="上游账户标识" rules={[{required:true}]}><Input disabled={Boolean(editingUp)}/></Form.Item>
         <Form.Item name="name" label="账户名称" rules={[{required:true}]}><Input/></Form.Item>
+        <Form.Item name="advertiser" label="广告主"><Input maxLength={200}/></Form.Item>
+        <Form.Item name="bd" label="BD"><Input maxLength={200}/></Form.Item>
         <Form.Item name="sharePercent" label="上游结算比例（%）" rules={[{required:true}]}><InputNumber min={0} max={100} precision={2} style={{width:'100%'}}/></Form.Item>
         <Space><Button type="primary" htmlType="submit">保存上游配置</Button>{editingUp&&<Button onClick={()=>{setEditingUp(null);upForm.resetFields()}}>取消编辑</Button>}</Space>
       </Form><Table size="small" rowKey="id" dataSource={accounts} columns={[
-        {title:'账户',dataIndex:'name'},{title:'REST 账户',dataIndex:'gamAccountName'},{title:'比例',dataIndex:'sharePercent',render:v=>v+'%'},
+        {title:'账户',dataIndex:'name'},{title:'REST 账户',dataIndex:'gamAccountName'},
+        {title:'广告主',dataIndex:'advertiser'},{title:'BD',dataIndex:'bd'},
+        {title:'比例',dataIndex:'sharePercent',render:v=>v+'%'},
         {title:'操作',render:(_,r)=><Button type="link" onClick={()=>{setEditingUp(r);upForm.setFieldsValue(r)}}>编辑</Button>}
       ]}/></Card></Col>
       <Col xs={24} xl={14}><Card title={editingDown?'编辑下游规则':'新增下游规则'}><Form form={downForm} layout="vertical" onFinish={saveDown}>

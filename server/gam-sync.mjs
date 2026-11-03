@@ -23,7 +23,7 @@ function asDate(value) {
 
 export function createGamSync({ db, transaction, tokenFor, normalizedDomain, domainFromAdUnit, audit }) {
   const busy = new Set();
-  const upsert = db.prepare('INSERT INTO revenue_facts(channel_id,report_date,hour,url,domain,account,ad_unit,country,requests,matched_requests,impressions,clicks,revenue,source_file,raw_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(channel_id,report_date,hour,url,account,ad_unit,country) DO UPDATE SET requests=excluded.requests,matched_requests=excluded.matched_requests,impressions=excluded.impressions,clicks=excluded.clicks,revenue=excluded.revenue,domain=excluded.domain,source_file=excluded.source_file,raw_json=excluded.raw_json,imported_at=CURRENT_TIMESTAMP');
+  const upsert = db.prepare('INSERT INTO revenue_facts(channel_id,report_date,hour,url,domain,account,ad_unit,ad_unit_id,country,requests,matched_requests,impressions,clicks,revenue,source_file,raw_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(channel_id,report_date,hour,url,account,ad_unit,ad_unit_id,country) DO UPDATE SET requests=excluded.requests,matched_requests=excluded.matched_requests,impressions=excluded.impressions,clicks=excluded.clicks,revenue=excluded.revenue,domain=excluded.domain,source_file=excluded.source_file,raw_json=excluded.raw_json,imported_at=CURRENT_TIMESTAMP');
 
   async function locked(id, action) {
     if (busy.has(id)) throw new Error('gam_account_busy');
@@ -49,7 +49,7 @@ export function createGamSync({ db, transaction, tokenFor, normalizedDomain, dom
       const yesterday = localDate(network.timeZone, -1);
       let reportName = account.rest_report_name;
       if (reportName) {
-        validateReportDefinition(await gamApiRequest(account.network_code, token, reportName), account.network_code);
+        validateReportDefinition(await gamApiRequest(account.network_code, token, reportName), account.network_code, { allowLegacy: true });
       } else {
         reportName = (await createRestReport(account.network_code, token, yesterday, today)).name;
       }
@@ -83,8 +83,9 @@ export function createGamSync({ db, transaction, tokenFor, normalizedDomain, dom
       }
       try {
         const token = await tokenFor(account);
-        await setReportRange(account.network_code, token, account.rest_report_name, from, through);
-        const result = await fetchRestReport(account.network_code, token, account.rest_report_name);
+        const activeReport = await setReportRange(account.network_code, token, account.rest_report_name, from, through);
+        validateReportDefinition(activeReport, account.network_code);
+        const result = await fetchRestReport(account.network_code, token, activeReport.name);
         const actual = result.dateRanges[0];
         const dateKey = date => [date?.year, date?.month, date?.day].map(Number).join('-');
         const startKey = from.split('-').map(Number).join('-');
@@ -100,16 +101,28 @@ export function createGamSync({ db, transaction, tokenFor, normalizedDomain, dom
         });
         const revenue = facts.reduce((sum, fact) => sum + fact.revenue, 0);
         if (write) {
-          transaction(() => facts.forEach(fact => upsert.run(
-            fact.channelId, fact.reportDate, fact.hour, fact.url, fact.domain, fact.account,
-            fact.adUnit, fact.country, fact.requests, fact.matched, fact.impressions,
-            fact.clicks, fact.revenue, fact.sourceFile, fact.rawJson
-          )));
+          transaction(() => {
+            // A completed REST run replaces that account's previous rows for
+            // the same dates, including legacy five-dimensional rows.
+            db.prepare("DELETE FROM revenue_facts WHERE channel_id=? AND account=? AND report_date BETWEEN ? AND ? AND source_file LIKE ?")
+              .run(channelId, accountKey, from, through, 'gam-rest:' + account.network_code + ':%');
+            for (const fact of facts) upsert.run(
+              fact.channelId, fact.reportDate, fact.hour, fact.url, fact.domain, fact.account,
+              fact.adUnit, fact.adUnitId, fact.country, fact.requests, fact.matched, fact.impressions,
+              fact.clicks, fact.revenue, fact.sourceFile, fact.rawJson
+            );
+            if (activeReport.name !== account.rest_report_name)
+              db.prepare('UPDATE soap_accounts SET rest_report_name=?,updated_at=CURRENT_TIMESTAMP WHERE id=?')
+                .run(activeReport.name, account.id);
+          });
           db.prepare("UPDATE soap_sync_runs SET status='success',rows_read=?,rows_written=?,finished_at=CURRENT_TIMESTAMP WHERE id=?")
             .run(result.rows.length, facts.length, runId);
         } else {
           db.prepare('UPDATE soap_accounts SET rest_last_preview_at=CURRENT_TIMESTAMP,rest_last_preview_rows=? WHERE id=?')
             .run(facts.length, account.id);
+          if (activeReport.name !== account.rest_report_name)
+            db.prepare('UPDATE soap_accounts SET rest_report_name=?,updated_at=CURRENT_TIMESTAMP WHERE id=?')
+              .run(activeReport.name, account.id);
         }
         return {
           start: from, end: through, rows: facts.length, revenue,

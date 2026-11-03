@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildGamAdUnit, createGamAdUnit, findGamAdUnitByCode, getGamAdUnit } from '../server/gam-beta.mjs';
-import { buildReportDefinition, fetchRestReport, normalizeRestReportRows, validateReportDefinition } from '../server/gam-reports.mjs';
+import { buildReportDefinition, fetchRestReport, normalizeRestReportRows, setReportRange, validateReportDefinition } from '../server/gam-reports.mjs';
 
 const network = '123456';
 const parent = 'networks/123456/adUnits/9';
@@ -71,4 +71,25 @@ test('REST report run polls and reads all result pages', async () => {
   assert.equal(facts[0].hour, 13);
   assert.equal(facts[0].requests, 100);
   assert.throws(() => normalizeRestReportRows([{ ...row, metricValueGroups: [] }], { channelId: 1, accountKey: 'upstream-a', sourceFile: 'test', moneyDivisor: 1 }), /columns_mismatch/);
+  const six = { ...row, dimensionValues: [...row.dimensionValues, { stringValue:'unit-99' }] };
+  assert.equal(normalizeRestReportRows([six], { channelId:1, accountKey:'upstream-a', sourceFile:'test', moneyDivisor:1000000 })[0].adUnitId, 'unit-99');
+});
+
+test('immutable legacy report is replaced with six-dimensional REST report', async () => {
+  const old = { name:'networks/123456/reports/42', reportDefinition:{
+    ...buildReportDefinition('2026-10-30','2026-10-31'), dimensions:['DATE','HOUR','SITE','COUNTRY_CODE','AD_UNIT_NAME']
+  } };
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    calls.push(options.method);
+    if (options.method === 'GET') return json(old);
+    if (options.method === 'PATCH') return json({ error:{ message:'Definition is immutable' } },400);
+    if (options.method === 'POST') return json({ name:'networks/123456/reports/43',
+      reportDefinition:buildReportDefinition('2026-11-01','2026-11-02') });
+    throw new Error('unexpected_method');
+  };
+  const updated = await setReportRange(network,'token',old.name,'2026-11-01','2026-11-02',fetchImpl);
+  assert.equal(updated.name,'networks/123456/reports/43');
+  assert.equal(updated.reportDefinition.dimensions.length,6);
+  assert.deepEqual(calls,['GET','PATCH','POST']);
 });

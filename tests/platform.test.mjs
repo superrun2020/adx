@@ -163,3 +163,60 @@ test('REST account setup links upstream settlement without exposing credentials'
   assert.equal((await request('/api/admin/gam-accounts/' + gamAccountId + '/activate', { method: 'POST' })).response.status, 400);
   assert.equal((await request('/api/admin/soap-accounts')).response.status, 404);
 });
+
+test('reports keep distinct ad unit IDs, page safely, and drill into exact rows', async () => {
+  cookie = '';
+  const login = await request('/api/auth/login', { method:'POST', body:JSON.stringify({ email:'admin@example.test', password:'AdminPass123!' }) });
+  cookie = login.response.headers.get('set-cookie').split(';')[0];
+  const channelId = (await request('/api/admin/channels')).body.items[0].id;
+  const account = (await request('/api/admin/upstream-accounts')).body.items.find(item => item.accountKey === 'acct-layered');
+  const updated = await request('/api/admin/upstream-accounts/' + account.id, { method:'PUT',
+    body:JSON.stringify({ name:account.name, sharePercent:account.sharePercent, advertiser:'Acme', bd:'Alice' }) });
+  assert.equal(updated.response.status, 200);
+  const payload = [
+    { date:'2026-10-12', hour:12, account:'acct-layered', ad_unit:'Same name', ad_unit_id:'unit-1',
+      url:'https://report.example.test', country:'US', requests:100, matched_requests:80, impressions:60, clicks:3, revenue:10 },
+    { date:'2026-10-12', hour:13, account:'acct-layered', ad_unit:'Same name', ad_unit_id:'unit-2',
+      url:'https://report.example.test', country:'US', requests:200, matched_requests:180, impressions:150, clicks:8, revenue:20 }
+  ];
+  const imported = await request('/api/admin/imports', { method:'POST',
+    body:JSON.stringify({ channelId, fileName:'six-dimensional.json', payload }) });
+  assert.equal(imported.body.accepted, 2);
+  const query = new URLSearchParams({ start:'2026-10-12', end:'2026-10-12',
+    dimensions:'date,adUnit,adUnitId,channel,advertiser,bd', page:'1', pageSize:'1' });
+  const first = await request('/api/reports?' + query);
+  assert.equal(first.response.status, 200);
+  assert.equal(first.body.total, 2);
+  assert.equal(first.body.items.length, 1);
+  assert.equal(first.body.items[0].advertiser, 'Acme');
+  assert.equal(first.body.items[0].bd, 'Alice');
+  query.set('page','2');
+  const second = await request('/api/reports?' + query);
+  assert.equal(second.body.items.length, 1);
+  assert.notEqual(second.body.items[0].adUnitId, first.body.items[0].adUnitId);
+  const drill = new URLSearchParams({ start:'2026-10-12', end:'2026-10-12',
+    dimensions:'date,hour,adUnit,adUnitId,country', drill:JSON.stringify({ adUnitId:'unit-1' }) });
+  const detail = await request('/api/reports?' + drill);
+  assert.equal(detail.body.total, 1);
+  assert.equal(detail.body.items[0].hour, 12);
+  assert.equal(detail.body.items[0].matchRate, 80);
+  drill.set('minMatchRate','85');
+  assert.equal((await request('/api/reports?' + drill)).body.total, 0);
+  const restOnly = await request('/api/reports?start=2026-10-12&end=2026-10-12&source=rest');
+  assert.equal(restOnly.body.total, 0);
+  const exported = await fetch('http://127.0.0.1:' + port + '/api/reports/export?' + query,
+    { headers:{ Cookie:cookie } });
+  assert.equal(exported.status, 200);
+  assert.match(await exported.text(), /unit-1|unit-2/);
+  cookie = '';
+  const channelLogin = await request('/api/auth/login', { method:'POST',
+    headers:{ 'X-Forwarded-Host':'adxpub.geekforest.ai' },
+    body:JSON.stringify({ email:'publisher@example.test', password:'PublisherPass123!' }) });
+  cookie = channelLogin.response.headers.get('set-cookie').split(';')[0];
+  const channelReport = await request('/api/reports?start=2026-10-12&end=2026-10-12&dimensions=adUnitId',
+    { headers:{ 'X-Forwarded-Host':'adxpub.geekforest.ai' } });
+  assert.equal(channelReport.body.items.length, 2);
+  assert.equal(channelReport.body.items[0].upstreamRevenue, undefined);
+  assert.equal((await request('/api/reports?dimensions=advertiser',
+    { headers:{ 'X-Forwarded-Host':'adxpub.geekforest.ai' } })).response.status, 403);
+});

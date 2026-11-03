@@ -1,6 +1,7 @@
 import { gamApiRequest } from './gam-beta.mjs';
 
-export const REPORT_DIMENSIONS = ['DATE', 'HOUR', 'SITE', 'COUNTRY_CODE', 'AD_UNIT_NAME'];
+export const REPORT_DIMENSIONS = ['DATE', 'HOUR', 'SITE', 'COUNTRY_CODE', 'AD_UNIT_NAME', 'AD_UNIT_ID'];
+const LEGACY_REPORT_DIMENSIONS = REPORT_DIMENSIONS.slice(0, -1);
 export const REPORT_METRICS = [
   'AD_EXCHANGE_TOTAL_REQUESTS', 'AD_EXCHANGE_RESPONSES_SERVED',
   'AD_EXCHANGE_IMPRESSIONS', 'AD_EXCHANGE_CLICKS', 'AD_EXCHANGE_REVENUE'
@@ -32,12 +33,14 @@ export function buildReportDefinition(start, end) {
   };
 }
 
-export function validateReportDefinition(report, network) {
+export function validateReportDefinition(report, network, { allowLegacy = false } = {}) {
   if (!REPORT_NAME.test(String(report?.name || '')) || REPORT_NAME.exec(report.name)[1] !== String(network)) {
     throw new Error('invalid_rest_report_name');
   }
   const definition = report.reportDefinition || {};
-  if (JSON.stringify(definition.dimensions) !== JSON.stringify(REPORT_DIMENSIONS) ||
+  const dimensions = JSON.stringify(definition.dimensions);
+  if ((dimensions !== JSON.stringify(REPORT_DIMENSIONS) &&
+       !(allowLegacy && dimensions === JSON.stringify(LEGACY_REPORT_DIMENSIONS))) ||
       JSON.stringify(definition.metrics) !== JSON.stringify(REPORT_METRICS) ||
       definition.reportType !== 'HISTORICAL' || definition.currencyCode !== 'USD' ||
       definition.comparisonDateRange || definition.timePeriodColumn ||
@@ -62,12 +65,30 @@ export async function createRestReport(network, token, start, end, fetchImpl) {
 
 export async function setReportRange(network, token, reportName, start, end, fetchImpl) {
   if (!REPORT_NAME.test(reportName) || REPORT_NAME.exec(reportName)[1] !== String(network)) throw new Error('invalid_rest_report_name');
-  const report = await gamApiRequest(network, token, reportName, {
-    method: 'PATCH', query: { updateMask: 'reportDefinition.dateRange' }, fetchImpl,
-    body: { name: reportName, reportDefinition: { dateRange: buildReportDefinition(start, end).dateRange } }
-  });
-  validateReportDefinition(report, network);
-  return report;
+  const dateRange = buildReportDefinition(start, end).dateRange;
+  const current = await gamApiRequest(network, token, reportName, { fetchImpl });
+  const currentDefinition = validateReportDefinition(current, network, { allowLegacy: true });
+  if (JSON.stringify(currentDefinition.dimensions) === JSON.stringify(REPORT_DIMENSIONS)) {
+    const report = await gamApiRequest(network, token, reportName, {
+      method: 'PATCH', query: { updateMask: 'reportDefinition.dateRange' }, fetchImpl,
+      body: { name: reportName, reportDefinition: { dateRange } }
+    });
+    validateReportDefinition(report, network);
+    return report;
+  }
+  try {
+    const upgraded = await gamApiRequest(network, token, reportName, {
+      method: 'PATCH', query: { updateMask: 'reportDefinition.dateRange,reportDefinition.dimensions' }, fetchImpl,
+      body: { name: reportName, reportDefinition: { dateRange, dimensions: REPORT_DIMENSIONS } }
+    });
+    validateReportDefinition(upgraded, network);
+    return upgraded;
+  } catch (error) {
+    if (!/^(gam_http_(400|409):|rest_report_definition_mismatch)/.test(String(error.message))) throw error;
+    // Existing report definitions may be immutable. Create a six-dimensional
+    // replacement; the caller switches its saved report only after a good run.
+    return createRestReport(network, token, start, end, fetchImpl);
+  }
 }
 
 export async function fetchRestReport(network, token, reportName, { fetchImpl, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
@@ -133,7 +154,7 @@ export function normalizeRestReportRows(rows, { channelId, accountKey, sourceFil
   return rows.map(row => {
     const dimensions = row.dimensionValues || [];
     const metrics = row.metricValueGroups?.[0]?.primaryValues || [];
-    if (dimensions.length !== REPORT_DIMENSIONS.length || row.metricValueGroups?.length !== 1 ||
+    if (![REPORT_DIMENSIONS.length, LEGACY_REPORT_DIMENSIONS.length].includes(dimensions.length) || row.metricValueGroups?.length !== 1 ||
         metrics.length !== REPORT_METRICS.length) throw new Error('rest_report_columns_mismatch');
     const date = reportDate(dimensions[0]);
     const hour = integer(dimensions[1]);
@@ -141,10 +162,11 @@ export function normalizeRestReportRows(rows, { channelId, accountKey, sourceFil
     const url = String(scalar(dimensions[2]) || '').trim();
     const country = String(scalar(dimensions[3]) || '').trim();
     const adUnit = String(scalar(dimensions[4]) || '').trim();
+    const adUnitId = dimensions[5] ? String(scalar(dimensions[5]) || '').trim() : '';
     const revenueRaw = Number(scalar(metrics[4]));
     if (!Number.isFinite(revenueRaw)) throw new Error('invalid_rest_report_revenue');
     return {
-      channelId, reportDate: date, hour, url, account: accountKey, adUnit, country,
+      channelId, reportDate: date, hour, url, account: accountKey, adUnit, adUnitId, country,
       requests: integer(metrics[0]), matched: integer(metrics[1]),
       impressions: integer(metrics[2]), clicks: integer(metrics[3]),
       revenue: revenueRaw / moneyDivisor, sourceFile, rawJson: JSON.stringify(row)

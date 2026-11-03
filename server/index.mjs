@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { registerGamRoutes } from './gam-routes.mjs';
 import { createGamSync } from './gam-sync.mjs';
+import { ensureAdUnitIdDimension } from './revenue-schema.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -40,6 +41,7 @@ CREATE TABLE IF NOT EXISTS channel_share_versions (
 CREATE TABLE IF NOT EXISTS upstream_accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT, account_key TEXT NOT NULL UNIQUE COLLATE NOCASE,
   name TEXT NOT NULL, soap_account_id INTEGER, share_percent REAL NOT NULL DEFAULT 100 CHECK(share_percent BETWEEN 0 AND 100),
+  advertiser TEXT NOT NULL DEFAULT '', bd TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS ad_unit_domains (
@@ -93,11 +95,11 @@ CREATE TABLE IF NOT EXISTS channel_domains (
 );
 CREATE TABLE IF NOT EXISTS revenue_facts (
   id INTEGER PRIMARY KEY AUTOINCREMENT, channel_id INTEGER NOT NULL, report_date TEXT NOT NULL, hour INTEGER,
-  url TEXT NOT NULL DEFAULT '', domain TEXT NOT NULL DEFAULT '', account TEXT NOT NULL DEFAULT '', ad_unit TEXT NOT NULL DEFAULT '', country TEXT NOT NULL DEFAULT '',
+  url TEXT NOT NULL DEFAULT '', domain TEXT NOT NULL DEFAULT '', account TEXT NOT NULL DEFAULT '', ad_unit TEXT NOT NULL DEFAULT '', ad_unit_id TEXT NOT NULL DEFAULT '', country TEXT NOT NULL DEFAULT '',
   requests INTEGER NOT NULL DEFAULT 0, matched_requests INTEGER NOT NULL DEFAULT 0, impressions INTEGER NOT NULL DEFAULT 0,
   clicks INTEGER NOT NULL DEFAULT 0, revenue REAL NOT NULL DEFAULT 0, source_file TEXT NOT NULL, imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   raw_json TEXT NOT NULL DEFAULT '{}',
-  UNIQUE(channel_id,report_date,hour,url,account,ad_unit,country), FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
+  UNIQUE(channel_id,report_date,hour,url,account,ad_unit,ad_unit_id,country), FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS import_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, actor_email TEXT NOT NULL, channel_id INTEGER NOT NULL, source_file TEXT NOT NULL,
@@ -151,9 +153,15 @@ for (const [column, definition] of Object.entries({
 }
 if (firstRestMigration) db.exec("UPDATE soap_accounts SET status='untested',last_test_at=NULL,last_test_status=NULL,last_test_summary='请重新测试 REST 连接'");
 if (!db.prepare("SELECT 1 FROM pragma_table_info('upstream_accounts') WHERE name='soap_account_id'").get()) db.exec('ALTER TABLE upstream_accounts ADD COLUMN soap_account_id INTEGER');
+for (const column of ['advertiser', 'bd']) {
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('upstream_accounts') WHERE name=?").get(column))
+    db.exec(`ALTER TABLE upstream_accounts ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`);
+}
 if (!db.prepare("SELECT 1 FROM pragma_table_info('revenue_facts') WHERE name='raw_json'").get()) {
   db.exec("ALTER TABLE revenue_facts ADD COLUMN raw_json TEXT NOT NULL DEFAULT '{}'");
 }
+ensureAdUnitIdDimension(db);
+db.exec('CREATE INDEX IF NOT EXISTS idx_revenue_ad_unit_id ON revenue_facts(ad_unit_id, report_date)');
 db.exec("INSERT OR IGNORE INTO channel_share_versions(channel_id,share_percent,effective_from,created_by) SELECT id,share_percent,'1900-01-01','migration' FROM channels");
 db.exec("CREATE TABLE IF NOT EXISTS upstream_share_versions (id INTEGER PRIMARY KEY AUTOINCREMENT, upstream_account_id INTEGER NOT NULL, share_percent REAL NOT NULL CHECK(share_percent BETWEEN 0 AND 100), effective_from TEXT NOT NULL, created_by TEXT NOT NULL, UNIQUE(upstream_account_id,effective_from), FOREIGN KEY(upstream_account_id) REFERENCES upstream_accounts(id) ON DELETE CASCADE)");
 db.exec("INSERT OR IGNORE INTO upstream_share_versions(upstream_account_id,share_percent,effective_from,created_by) SELECT id,100,'1900-01-01','migration' FROM upstream_accounts");
@@ -370,25 +378,149 @@ app.get('/api/dashboard', requireAuth, (req, res) => {
   res.json({ ok: true, summary: { ...sums, revenue: req.user.role === 'channel' ? settledRevenue : sums.revenue, channelRevenue: settledRevenue, matchRate: sums.requests ? sums.matched * 100 / sums.requests : 0 }, trend, topUrls, lastSync });
 });
 
-const dimensionMap = { date: 'report_date', url: 'url', account: 'account', adUnit: 'ad_unit', hour: 'hour', country: 'country' };
-app.get('/api/reports', requireAuth, (req, res) => {
-  const requested = String(req.query.dimensions || 'date,url').split(',').filter(v => dimensionMap[v]);
-  const dimensions = requested.length ? requested : ['date'];
-  const scope = reportScope(req), { start, end } = range(req), where = whereScope(scope, start, end);
-  const filters = [], filterParams = [];
-  if (req.user.role === 'admin' && Number(req.query.channelId)) { filters.push('channel_id=?'); filterParams.push(Number(req.query.channelId)); }
-  if (String(req.query.upstreamAccount || '').trim()) { filters.push('lower(account)=lower(?)'); filterParams.push(String(req.query.upstreamAccount).trim()); }
-  if (String(req.query.account || '').trim()) { filters.push('lower(account)=lower(?)'); filterParams.push(String(req.query.account).trim()); }
-  if (String(req.query.adUnit || '').trim()) { filters.push('lower(ad_unit)=lower(?)'); filterParams.push(String(req.query.adUnit).trim()); }
-  if (String(req.query.domain || '').trim()) { filters.push(`lower(${mappedDomainSql('revenue_facts')})=lower(?)`); filterParams.push(normalizedDomain(req.query.domain)); }
-  if (filters.length) { where.sql += ` AND ${filters.join(' AND ')}`; where.params.push(...filterParams); }
-  const select = dimensions.map(v => v === 'url' ? `${mappedDomainSql('revenue_facts')} AS url` : `${dimensionMap[v]} AS ${v}`).join(',');
-  const group = dimensions.map(v => v === 'url' ? mappedDomainSql('revenue_facts') : dimensionMap[v]).join(',');
-  const settled = settledRevenueSql('revenue_facts');
-  const rows = db.prepare(`SELECT ${select},SUM(requests) requests,SUM(matched_requests) matchedRequests,SUM(impressions) impressions,SUM(clicks) clicks,ROUND(SUM(revenue),6) revenue,ROUND(SUM(revenue*${upstreamShareSql('revenue_facts')}/100.0),6) upstreamRevenue,ROUND(SUM(${settled}),6) settledRevenue,ROUND(AVG(${upstreamShareSql('revenue_facts')}),2) upstreamSharePercent,ROUND(AVG(${channelRuleShareSql('revenue_facts')}),2) channelSharePercent FROM revenue_facts WHERE ${where.sql} GROUP BY ${group} ORDER BY report_date DESC,revenue DESC LIMIT 5000`).all(...where.params);
-  const share = scope ? Number(db.prepare('SELECT share_percent FROM channels WHERE id=?').get(scope)?.share_percent || 0) : 100;
-  res.json({ ok: true, items: rows.map(r => { const settled=scope?r.settledRevenue:r.settledRevenue; const visibleRevenue=req.user.role==='channel'?settled:r.revenue; const {settledRevenue:_,...publicRow}=r; const info=domainInfo(r.url||domainFromAdUnit(r.adUnit)); return { ...publicRow, url:publicRow.url||info.domain, mainDomain:info.mainDomain, domainType:info.domainType, revenue:visibleRevenue, ecpm:r.impressions?Number((visibleRevenue*1000/r.impressions).toFixed(6)):0, upstreamRevenue:req.user.role==='channel'?undefined:r.upstreamRevenue, channelRevenue:settled, grossProfit:req.user.role==='admin'?Number(r.upstreamRevenue||0)*0.85-Number(settled||0):undefined, matchRate:r.requests?r.matchedRequests*100/r.requests:0 }; }) });
-});
+const reportDimensionMap = {
+  date: 'rf.report_date', hour: 'rf.hour', url: mappedDomainSql('rf'),
+  country: 'rf.country', adUnit: 'rf.ad_unit', adUnitId: 'rf.ad_unit_id',
+  account: 'rf.account', channel: 'rf.channel_id',
+  advertiser: "COALESCE(ua.advertiser,'')", bd: "COALESCE(ua.bd,'')"
+};
+const reportMetricMap = {
+  requests: 'requests', matchedRequests: 'matchedRequests', impressions: 'impressions',
+  clicks: 'clicks', revenue: 'revenue', matchRate: 'matchRate',
+  impressionRate: 'impressionRate', clickRate: 'clickRate', ecpm: 'ecpm',
+  upstreamRevenue: 'upstreamRevenue', channelRevenue: 'channelRevenue',
+  grossProfit: 'upstreamRevenue*0.85-channelRevenue',
+  upstreamSharePercent: 'upstreamSharePercent', channelSharePercent: 'channelSharePercent'
+};
+function serveReports(req, res, exportCsv = false) {
+  const dimensions = [...new Set(String(req.query.dimensions || 'date,url').split(',').filter(v => Object.hasOwn(reportDimensionMap, v)))];
+  if (!dimensions.length || dimensions.length > 10) return res.status(400).json({ ok:false, error:'invalid_report_dimensions' });
+  const isAdmin = req.user.role === 'admin';
+  if (!isAdmin && dimensions.some(key => ['channel','advertiser','bd'].includes(key)))
+    return res.status(403).json({ ok:false, error:'report_dimension_forbidden' });
+  if (!isAdmin && (req.query.advertiser || req.query.bd))
+    return res.status(403).json({ ok:false, error:'report_filter_forbidden' });
+  const { start, end } = range(req);
+  if (start > end) return res.status(400).json({ ok:false, error:'invalid_report_range' });
+  const page = Number(req.query.page || 1), requestedSize = Number(req.query.pageSize || 50);
+  if (!Number.isSafeInteger(page) || page < 1 || page > 100000 ||
+      !Number.isSafeInteger(requestedSize) || requestedSize < 1 || requestedSize > 50000)
+    return res.status(400).json({ ok:false, error:'invalid_report_page' });
+  const pageSize = exportCsv ? 50001 : Math.min(200, requestedSize);
+  const where = ['rf.report_date BETWEEN ? AND ?'];
+  const params = [start, end];
+  const addExact = (expression, value) => {
+    if (value !== undefined && value !== null && String(value).trim() !== '') {
+      where.push(`lower(${expression})=lower(?)`); params.push(String(value).trim());
+    }
+  };
+  if (!isAdmin) { where.push('rf.channel_id=?'); params.push(req.user.channel_id); }
+  else if (req.query.channelId !== undefined && req.query.channelId !== '') {
+    const channelId = Number(req.query.channelId);
+    if (!Number.isSafeInteger(channelId) || channelId < 1) return res.status(400).json({ ok:false, error:'invalid_channel_id' });
+    where.push('rf.channel_id=?'); params.push(channelId);
+  }
+  if (req.query.source === 'rest') where.push("rf.source_file LIKE 'gam-rest:%'");
+  else if (req.query.source && req.query.source !== 'all') return res.status(400).json({ ok:false, error:'invalid_report_source' });
+  addExact('rf.account', req.query.account || req.query.upstreamAccount);
+  addExact('rf.ad_unit', req.query.adUnit);
+  addExact('rf.ad_unit_id', req.query.adUnitId);
+  addExact('rf.country', req.query.country);
+  addExact("COALESCE(ua.advertiser,'')", req.query.advertiser);
+  addExact("COALESCE(ua.bd,'')", req.query.bd);
+  if (req.query.domain) addExact(mappedDomainSql('rf'), normalizedDomain(req.query.domain));
+  if (req.query.hour !== undefined && req.query.hour !== '') {
+    const hour = Number(req.query.hour);
+    if (!Number.isSafeInteger(hour) || hour < 0 || hour > 23) return res.status(400).json({ ok:false, error:'invalid_report_hour' });
+    where.push('rf.hour=?'); params.push(hour);
+  }
+  if (req.query.drill !== undefined) {
+    let drill;
+    try { drill = JSON.parse(String(req.query.drill)); } catch { return res.status(400).json({ ok:false, error:'invalid_report_drill' }); }
+    if (!drill || Array.isArray(drill) || typeof drill !== 'object' || Object.keys(drill).length > 10 ||
+        Object.keys(drill).some(key => !Object.hasOwn(reportDimensionMap, key) ||
+          (!isAdmin && ['channel','advertiser','bd'].includes(key)) ||
+          (drill[key] !== null && !['string','number'].includes(typeof drill[key])) ||
+          String(drill[key]).length > 500))
+      return res.status(400).json({ ok:false, error:'invalid_report_drill' });
+    for (const [key, value] of Object.entries(drill)) {
+      if (value === null) where.push(`${reportDimensionMap[key]} IS NULL`);
+      else { where.push(`${reportDimensionMap[key]}=?`); params.push(value); }
+    }
+  }
+  const select = dimensions.map(key => key === 'channel' ? 'rf.channel_id AS channelId,c.name AS channel' : `${reportDimensionMap[key]} AS ${key}`).join(',');
+  const group = dimensions.map(key => reportDimensionMap[key]).join(',');
+  const settled = settledRevenueSql('rf');
+  const gross = 'grossRevenue', visible = isAdmin ? gross : 'channelRevenue';
+  const rateSql = {
+    ...reportMetricMap,
+    revenue: visible, matchRate: 'CASE WHEN requests=0 THEN 0 ELSE matchedRequests*100.0/requests END',
+    impressionRate: 'CASE WHEN matchedRequests=0 THEN 0 ELSE impressions*100.0/matchedRequests END',
+    clickRate: 'CASE WHEN impressions=0 THEN 0 ELSE clicks*100.0/impressions END',
+    ecpm: `CASE WHEN impressions=0 THEN 0 ELSE ${visible}*1000.0/impressions END`
+  };
+  const metricFilters = [], metricParams = [];
+  for (const [key, expression] of Object.entries(rateSql)) {
+    for (const [prefix, op] of [['min','>='], ['max','<=']]) {
+      const raw = req.query[prefix + key[0].toUpperCase() + key.slice(1)];
+      if (raw === undefined || raw === '') continue;
+      if (!isAdmin && ['upstreamRevenue','grossProfit','upstreamSharePercent','channelSharePercent'].includes(key))
+        return res.status(403).json({ ok:false, error:'report_filter_forbidden' });
+      const threshold = Number(raw);
+      if (!Number.isFinite(threshold)) return res.status(400).json({ ok:false, error:'invalid_report_metric_filter' });
+      metricFilters.push(`${expression} ${op} ?`); metricParams.push(threshold);
+    }
+  }
+  const metricWhere = metricFilters.length ? 'WHERE ' + metricFilters.join(' AND ') : '';
+  const sql = `WITH grouped AS (
+    SELECT ${select}, MAX(rf.report_date) sortDate,
+      SUM(rf.requests) requests, SUM(rf.matched_requests) matchedRequests,
+      SUM(rf.impressions) impressions, SUM(rf.clicks) clicks,
+      ROUND(SUM(rf.revenue),6) grossRevenue,
+      ROUND(SUM(rf.revenue*${upstreamShareSql('rf')}/100.0),6) upstreamRevenue,
+      ROUND(SUM(${settled}),6) channelRevenue,
+      ROUND(AVG(${upstreamShareSql('rf')}),2) upstreamSharePercent,
+      ROUND(AVG(${channelRuleShareSql('rf')}),2) channelSharePercent
+    FROM revenue_facts rf
+    JOIN channels c ON c.id=rf.channel_id
+    LEFT JOIN upstream_accounts ua ON ua.account_key=rf.account
+    WHERE ${where.join(' AND ')} GROUP BY ${group}
+  ) SELECT grouped.*, COUNT(*) OVER() totalRows FROM grouped ${metricWhere}
+    ORDER BY sortDate DESC, ${visible} DESC LIMIT ? OFFSET ?`;
+  const rows = db.prepare(sql).all(...params, ...metricParams, pageSize, exportCsv ? 0 : (page-1)*pageSize);
+  const items = rows.map(row => {
+    const { grossRevenue, sortDate, totalRows, ...base } = row;
+    const revenue = isAdmin ? grossRevenue : row.channelRevenue;
+    const info = domainInfo(row.url || domainFromAdUnit(row.adUnit));
+    return { ...base, url: row.url || info.domain, rawUrl: row.url, mainDomain: info.mainDomain,
+      domainType: info.domainType, revenue, ecpm: row.impressions ? revenue*1000/row.impressions : 0,
+      matchRate: row.requests ? row.matchedRequests*100/row.requests : 0,
+      impressionRate: row.matchedRequests ? row.impressions*100/row.matchedRequests : 0,
+      clickRate: row.impressions ? row.clicks*100/row.impressions : 0,
+      upstreamRevenue: isAdmin ? row.upstreamRevenue : undefined,
+      upstreamSharePercent: isAdmin ? row.upstreamSharePercent : undefined,
+      channelSharePercent: isAdmin ? row.channelSharePercent : undefined,
+      grossProfit: isAdmin ? row.upstreamRevenue*0.85-row.channelRevenue : undefined };
+  });
+  if (exportCsv) {
+    if (rows.length > 50000) return res.status(413).json({ ok:false, error:'report_export_too_large' });
+    const metrics = [...new Set(String(req.query.metrics || 'requests,matchedRequests,impressions,clicks,revenue,matchRate,impressionRate,clickRate,ecpm').split(',').filter(key => Object.hasOwn(reportMetricMap,key)))];
+    const allowed = isAdmin ? metrics : metrics.filter(key =>
+      !['upstreamRevenue','grossProfit','upstreamSharePercent','channelSharePercent'].includes(key));
+    const columns = [...dimensions, ...allowed];
+    const csvCell = (key, value) => {
+      const raw = String(value ?? '');
+      return dimensions.includes(key) && /^[ - ]*[=+	@-]/.test(raw) ? "'" + raw : raw;
+    };
+    const csv = [columns.join(','), ...items.map(item => columns.map(key => `"${csvCell(key,item[key]).replaceAll('\"','\"\"')}"`).join(','))].join('\r\n');
+    res.setHeader('Content-Type','text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition','attachment; filename=adx-report.csv');
+    return res.send('\uFEFF' + csv);
+  }
+  res.json({ ok:true, items, total: rows[0]?.totalRows || 0, page, pageSize, dimensions });
+}
+app.get('/api/reports', requireAuth, (req, res) => serveReports(req, res));
+app.get('/api/reports/export', requireAuth, (req, res) => serveReports(req, res, true));
 
 // Account-level report for the admin console. Keep settlement calculations on
 // the server so callers never need to infer the upstream deduction.
@@ -515,21 +647,23 @@ app.get('/api/public/account/revenue', requireAccountReportKey, (req, res) => {
   })) });
 });
 
-app.get('/api/admin/upstream-accounts', requireAuth, requireAdmin, (_req,res) => res.json({ ok:true, items:db.prepare('SELECT u.id,u.account_key accountKey,u.name,u.soap_account_id gamAccountId,s.name gamAccountName,s.network_code networkCode,u.share_percent sharePercent,u.status,u.created_at createdAt,u.updated_at updatedAt FROM upstream_accounts u LEFT JOIN soap_accounts s ON s.id=u.soap_account_id ORDER BY u.account_key').all() }));
+app.get('/api/admin/upstream-accounts', requireAuth, requireAdmin, (_req,res) => res.json({ ok:true, items:db.prepare('SELECT u.id,u.account_key accountKey,u.name,u.advertiser,u.bd,u.soap_account_id gamAccountId,s.name gamAccountName,s.network_code networkCode,u.share_percent sharePercent,u.status,u.created_at createdAt,u.updated_at updatedAt FROM upstream_accounts u LEFT JOIN soap_accounts s ON s.id=u.soap_account_id ORDER BY u.account_key').all() }));
 app.post('/api/admin/upstream-accounts', requireAuth, requireAdmin, (req,res) => {
   const accountKey=String(req.body?.accountKey||'').trim(), name=String(req.body?.name||accountKey).trim(), share=Number(req.body?.sharePercent), gamAccountId=Number(req.body?.gamAccountId)||null;
-  if(!accountKey||!name||!Number.isFinite(share)||share<0||share>100||(gamAccountId&&!db.prepare('SELECT id FROM soap_accounts WHERE id=?').get(gamAccountId)))return res.status(400).json({ok:false,error:'invalid_upstream_account'});
-  try { const r=db.prepare('INSERT INTO upstream_accounts(account_key,name,soap_account_id,share_percent,status) VALUES(?,?,?,?,?)').run(accountKey,name,gamAccountId,share,'active'); audit(req.user.email,'upstream_account.create','upstream_account',r.lastInsertRowid,JSON.stringify({accountKey,name,gamAccountId,share}),req.ip); res.status(201).json({ok:true,item:db.prepare('SELECT id,account_key accountKey,name,soap_account_id gamAccountId,share_percent sharePercent,status FROM upstream_accounts WHERE id=?').get(r.lastInsertRowid)}); } catch { res.status(409).json({ok:false,error:'account_exists'}); }
+  const advertiser=String(req.body?.advertiser||'').trim(), bd=String(req.body?.bd||'').trim();
+  if(!accountKey||!name||advertiser.length>200||bd.length>200||!Number.isFinite(share)||share<0||share>100||(gamAccountId&&!db.prepare('SELECT id FROM soap_accounts WHERE id=?').get(gamAccountId)))return res.status(400).json({ok:false,error:'invalid_upstream_account'});
+  try { const r=db.prepare('INSERT INTO upstream_accounts(account_key,name,soap_account_id,share_percent,advertiser,bd,status) VALUES(?,?,?,?,?,?,?)').run(accountKey,name,gamAccountId,share,advertiser,bd,'active'); audit(req.user.email,'upstream_account.create','upstream_account',r.lastInsertRowid,JSON.stringify({accountKey,name,gamAccountId,share,advertiser,bd}),req.ip); res.status(201).json({ok:true,item:db.prepare('SELECT id,account_key accountKey,name,advertiser,bd,soap_account_id gamAccountId,share_percent sharePercent,status FROM upstream_accounts WHERE id=?').get(r.lastInsertRowid)}); } catch { res.status(409).json({ok:false,error:'account_exists'}); }
 });
 app.put('/api/admin/upstream-accounts/:id', requireAuth, requireAdmin, (req,res) => {
   const id=Number(req.params.id), name=String(req.body?.name||'').trim(), share=Number(req.body?.sharePercent), status=req.body?.status==='disabled'?'disabled':'active';
-  if(!Number.isSafeInteger(id)||!name||!Number.isFinite(share)||share<0||share>100)return res.status(400).json({ok:false,error:'invalid_upstream_account'});
   const before=db.prepare('SELECT * FROM upstream_accounts WHERE id=?').get(id); if(!before)return res.status(404).json({ok:false,error:'upstream_account_not_found'});
+  const advertiser=String(req.body?.advertiser??before.advertiser).trim(), bd=String(req.body?.bd??before.bd).trim();
+  if(!Number.isSafeInteger(id)||!name||advertiser.length>200||bd.length>200||!Number.isFinite(share)||share<0||share>100)return res.status(400).json({ok:false,error:'invalid_upstream_account'});
   const gamAccountId=req.body?.gamAccountId===undefined?before.soap_account_id:(Number(req.body.gamAccountId)||null);
   if(gamAccountId&&!db.prepare('SELECT id FROM soap_accounts WHERE id=?').get(gamAccountId))return res.status(400).json({ok:false,error:'invalid_gam_account'});
-  db.prepare('UPDATE upstream_accounts SET name=?,soap_account_id=?,share_percent=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(name,gamAccountId,share,status,id);
+  db.prepare('UPDATE upstream_accounts SET name=?,soap_account_id=?,share_percent=?,advertiser=?,bd=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(name,gamAccountId,share,advertiser,bd,status,id);
   if(gamAccountId!==before.soap_account_id||status!=='active')db.prepare('UPDATE soap_accounts SET rest_sync_enabled=0 WHERE rest_upstream_account_id=?').run(id);
-  const after=db.prepare('SELECT id,account_key accountKey,name,soap_account_id gamAccountId,share_percent sharePercent,status FROM upstream_accounts WHERE id=?').get(id); audit(req.user.email,'upstream_account.update','upstream_account',id,JSON.stringify({before,after}),req.ip); res.json({ok:true,item:after});
+  const after=db.prepare('SELECT id,account_key accountKey,name,advertiser,bd,soap_account_id gamAccountId,share_percent sharePercent,status FROM upstream_accounts WHERE id=?').get(id); audit(req.user.email,'upstream_account.update','upstream_account',id,JSON.stringify({before,after}),req.ip); res.json({ok:true,item:after});
 });
 app.get('/api/admin/ad-unit-domains', requireAuth, requireAdmin, (_req,res) => res.json({ok:true,items:db.prepare('SELECT id,ad_unit adUnit,domain,created_by createdBy,created_at createdAt,updated_at updatedAt FROM ad_unit_domains ORDER BY ad_unit').all()}));
 app.post('/api/admin/ad-unit-domains', requireAuth, requireAdmin, (req,res) => {
@@ -610,7 +744,8 @@ const fieldDefinitions = {
   hour: { aliases: ['hour','小时','dimension_hour'] },
   url: { aliases: ['url','link','链接','url_channel','dimension_url','dimension_url_channel'] },
   account: { aliases: ['account','账号','child_network','child_network_code','dimension_child_network_code','publisher'] },
-  adUnit: { aliases: ['ad_unit','adunit','unit','广告单元','ad_unit_name','ad_unit_id','dimension_ad_unit_name','dimension_ad_unit_id'] },
+  adUnit: { aliases: ['ad_unit','adunit','unit','广告单元','ad_unit_name','dimension_ad_unit_name'] },
+  adUnitId: { aliases: ['ad_unit_id','dimension_ad_unit_id','广告单元ID'] },
   country: { aliases: ['country','country_code','国家','dimension_country_name','dimension_country_code'] },
   requests: { aliases: ['requests','ad_requests','请求','total_ad_requests','metric_total_ad_requests','ad_server_requests'] },
   matched: { aliases: ['matched_requests','matchedrequests','matched','匹配','total_matched_requests','metric_total_matched_requests','ad_server_matched_requests'] },
@@ -637,7 +772,7 @@ function domainInfo(value) { const domain=normalizedDomain(value),parts=domain.s
 function normalizeFact(row, channelId, sourceFile) {
   const dateValue=pick(row,'date'), revenueValue=pick(row,'revenue'), hourValue=pick(row,'hour');
   const reportDate=String(dateValue||'').slice(0,10), url=String(pick(row,'url')||'').trim();
-  const fact={channelId,reportDate,hour:hourValue===undefined?-1:Number(hourValue),url,domain:normalizedDomain(url),account:String(pick(row,'account')||''),adUnit:String(pick(row,'adUnit')||''),country:String(pick(row,'country')||''),requests:Number(pick(row,'requests')||0),matched:Number(pick(row,'matched')||0),impressions:Number(pick(row,'impressions')||0),clicks:Number(pick(row,'clicks')||0),revenue:Number(revenueValue),sourceFile,rawJson:JSON.stringify(row)};
+  const fact={channelId,reportDate,hour:hourValue===undefined?-1:Number(hourValue),url,domain:normalizedDomain(url),account:String(pick(row,'account')||''),adUnit:String(pick(row,'adUnit')||''),adUnitId:String(pick(row,'adUnitId')||''),country:String(pick(row,'country')||''),requests:Number(pick(row,'requests')||0),matched:Number(pick(row,'matched')||0),impressions:Number(pick(row,'impressions')||0),clicks:Number(pick(row,'clicks')||0),revenue:Number(revenueValue),sourceFile,rawJson:JSON.stringify(row)};
   const requiredPresent=dateValue!==undefined&&dateValue!==null&&String(dateValue).trim()!==''&&revenueValue!==undefined&&revenueValue!==null&&String(revenueValue).trim()!=='';
   const validHour=fact.hour===-1||(Number.isInteger(fact.hour)&&fact.hour>=0&&fact.hour<=23);
   const conflictingFields=Object.keys(fieldDefinitions).filter(field=>sourceKeys(row,field).length>1);
@@ -652,12 +787,13 @@ app.post('/api/admin/imports/preview', requireAuth, requireAdmin, (req,res)=>{
 });
 app.post('/api/admin/imports', requireAuth, requireAdmin, (req,res)=>{
   const channelId=Number(req.body?.channelId), payload=req.body?.payload, fileName=String(req.body?.fileName||'upload.json').slice(0,190), rows=Array.isArray(payload)?payload:Array.isArray(payload?.data)?payload.data:Array.isArray(payload?.rows)?payload.rows:null;
+  if (/^gam-rest:/i.test(fileName)) return res.status(400).json({ok:false,error:'reserved_import_source'});
   if(!db.prepare('SELECT id FROM channels WHERE id=?').get(channelId)||!rows?.length||rows.length>200000)return res.status(400).json({ok:false,error:'invalid_import'});
   const normalized=rows.map(row=>normalizeFact(row,channelId,fileName)), valid=normalized.filter(x=>x.valid), rejected=normalized.length-valid.length;
   if(!valid.length)return res.status(422).json({ok:false,error:'no_valid_rows'});
-  const upsert=db.prepare(`INSERT INTO revenue_facts(channel_id,report_date,hour,url,domain,account,ad_unit,country,requests,matched_requests,impressions,clicks,revenue,source_file,raw_json)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(channel_id,report_date,hour,url,account,ad_unit,country) DO UPDATE SET requests=excluded.requests,matched_requests=excluded.matched_requests,impressions=excluded.impressions,clicks=excluded.clicks,revenue=excluded.revenue,domain=excluded.domain,source_file=excluded.source_file,raw_json=excluded.raw_json,imported_at=CURRENT_TIMESTAMP`);
-  const runId=transaction(()=>{for(const {fact:f} of valid)upsert.run(f.channelId,f.reportDate,f.hour,f.url,f.domain,f.account,f.adUnit,f.country,f.requests,f.matched,f.impressions,f.clicks,f.revenue,f.sourceFile,f.rawJson);const run=db.prepare('INSERT INTO import_runs(actor_email,channel_id,source_file,total_rows,accepted_rows,rejected_rows,status,error_summary) VALUES(?,?,?,?,?,?,?,?)').run(req.user.email,channelId,fileName,rows.length,valid.length,rejected,rejected?'partial':'success',rejected?`${rejected} rows rejected`:'');return Number(run.lastInsertRowid)});
+  const upsert=db.prepare(`INSERT INTO revenue_facts(channel_id,report_date,hour,url,domain,account,ad_unit,ad_unit_id,country,requests,matched_requests,impressions,clicks,revenue,source_file,raw_json)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(channel_id,report_date,hour,url,account,ad_unit,ad_unit_id,country) DO UPDATE SET requests=excluded.requests,matched_requests=excluded.matched_requests,impressions=excluded.impressions,clicks=excluded.clicks,revenue=excluded.revenue,domain=excluded.domain,source_file=excluded.source_file,raw_json=excluded.raw_json,imported_at=CURRENT_TIMESTAMP`);
+  const runId=transaction(()=>{for(const {fact:f} of valid)upsert.run(f.channelId,f.reportDate,f.hour,f.url,f.domain,f.account,f.adUnit,f.adUnitId,f.country,f.requests,f.matched,f.impressions,f.clicks,f.revenue,f.sourceFile,f.rawJson);const run=db.prepare('INSERT INTO import_runs(actor_email,channel_id,source_file,total_rows,accepted_rows,rejected_rows,status,error_summary) VALUES(?,?,?,?,?,?,?,?)').run(req.user.email,channelId,fileName,rows.length,valid.length,rejected,rejected?'partial':'success',rejected?`${rejected} rows rejected`:'');return Number(run.lastInsertRowid)});
   audit(req.user.email,'data.import','import',runId,JSON.stringify({channelId,fileName,total:rows.length,accepted:valid.length,rejected}),req.ip); res.json({ok:true,runId,total:rows.length,accepted:valid.length,rejected});
 });
 app.get('/api/admin/imports', requireAuth, requireAdmin, (_req,res)=>res.json({ok:true,items:db.prepare(`SELECT r.id,r.source_file sourceFile,r.total_rows totalRows,r.accepted_rows acceptedRows,r.rejected_rows rejectedRows,r.status,r.created_at createdAt,c.name channelName FROM import_runs r JOIN channels c ON c.id=r.channel_id ORDER BY r.id DESC LIMIT 100`).all()}));
