@@ -11,6 +11,7 @@ import {
   UserSwitchOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import { clearCachedUser, readCached, rememberRead } from './readCache.js';
 import Reports from './ReportExplorer.jsx';
 import AdminPages from './AdminPages.jsx';
 import './styles.css';
@@ -84,9 +85,13 @@ function MetricCards({ summary, admin }) {
   return <Row gutter={[16, 16]}>{items.map(([title, value, icon]) => <Col xs={24} sm={12} xl={6} key={title}><Card className="metric"><Statistic title={title} value={value} prefix={icon} /></Card></Col>)}</Row>;
 }
 
-function Dashboard({ range, setRange, admin, initialDashboard }) {
+function Dashboard({ range, setRange, admin, user, initialDashboard }) {
   const rangeKey = range[0].format('YYYY-MM-DD') + ':' + range[1].format('YYYY-MM-DD');
-  const [data, setData] = useState(initialDashboard?.key === rangeKey ? initialDashboard.data || null : null);
+  const path = '/api/dashboard?start=' + range[0].format('YYYY-MM-DD') + '&end=' + range[1].format('YYYY-MM-DD');
+  const saved = readCached(user, path);
+  const freshInitial = initialDashboard?.key === rangeKey && initialDashboard.fresh;
+  const [data, setData] = useState(initialDashboard?.key === rangeKey ? initialDashboard.data || saved?.data || null : saved?.data || null);
+  const [showingCached, setShowingCached] = useState(Boolean(saved && !freshInitial));
   const [loading, setLoading] = useState(false);
   const load = async (force = false) => {
     setLoading(true);
@@ -98,14 +103,22 @@ function Dashboard({ range, setRange, admin, initialDashboard }) {
         if (cached.error) throw cached.error;
         result = cached.data;
       } else {
-        result = await api('/api/dashboard?start=' + range[0].format('YYYY-MM-DD') + '&end=' + range[1].format('YYYY-MM-DD'));
+        result = await api(path);
       }
+      rememberRead(user, path, result);
       setData(result);
+      setShowingCached(false);
     } catch (e) { message.error(e.message); } finally { setLoading(false); }
   };
-  useEffect(() => { load(); }, [range[0].valueOf(), range[1].valueOf()]);
+  useEffect(() => {
+    const latest = readCached(user, path);
+    const initial = initialDashboard?.key === rangeKey ? initialDashboard.data : null;
+    setData(initial || latest?.data || null);
+    setShowingCached(Boolean(latest && !freshInitial));
+    load();
+  }, [range[0].valueOf(), range[1].valueOf()]);
   return <Space direction="vertical" size={16} className="page-stack">
-    <div className="page-heading"><div><Title level={2}>经营总览</Title><Text type="secondary">收入、流量质量与渠道结算一屏掌握</Text></div><Space><DatePicker.RangePicker value={range} onChange={v => v && setRange(v)} /><Button icon={<ReloadOutlined />} loading={loading} onClick={() => load(true)}>刷新</Button></Space></div>
+    <div className="page-heading"><div><Title level={2}>经营总览</Title><Text type="secondary">收入、流量质量与渠道结算一屏掌握</Text>{showingCached && <Tag color="gold" style={{marginLeft:10}}>{loading ? '已显示缓存，正在更新' : '已显示缓存数据'}</Tag>}</div><Space><DatePicker.RangePicker value={range} onChange={v => v && setRange(v)} /><Button icon={<ReloadOutlined />} loading={loading} onClick={() => load(true)}>刷新</Button></Space></div>
     <MetricCards summary={data?.summary} admin={admin} />
     <Row gutter={[16, 16]}><Col xs={24} xl={16}><Card title="每日收益趋势" extra={data?.lastSync ? '最近同步 ' + data.lastSync : '尚未同步'}><div className="chart"><PageErrorBoundary><React.Suspense fallback={<div style={{padding:24,color:"#587184"}}>图表加载中…</div>}><RevenueChart data={data?.trend || []} formatMoney={money}/></React.Suspense></PageErrorBoundary></div></Card></Col><Col xs={24} xl={8}><Card title="收益最高的链接"><Table size="small" pagination={false} rowKey="url" dataSource={data?.topUrls || []} columns={[{ title: '链接', dataIndex: 'url', ellipsis: true }, { title: '收益', dataIndex: 'revenue', align: 'right', render: money }]} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}/></Card></Col></Row>
   </Space>;
@@ -121,13 +134,14 @@ function Shell({ user, onLogout, initialView = 'dashboard', initialDashboard, on
     ...(admin?[{type:'group',label:'平台管理',children:[{key:'channels',icon:<TeamOutlined/>,label:'渠道管理'},{key:'gam',icon:<SafetyOutlined/>,label:'Ad Manager REST'},{key:'settlement',icon:<DollarOutlined/>,label:'结算配置'},{key:'ad-units',icon:<PlusOutlined/>,label:'广告单元创建'},{key:'admins',icon:<UserSwitchOutlined/>,label:'管理员账户'},{key:'report-keys',icon:<KeyOutlined/>,label:'账户日报 API Key'}]}]:[]),
     {type:'group',label:'开发能力',children:[{key:'api',icon:<ApiOutlined/>,label:'渠道 API'}]}
   ],[admin]);
-  const body=view==='dashboard'?<Dashboard range={range} setRange={setRange} admin={admin} initialDashboard={initialDashboard}/>:view==='reports'?<Reports range={range} setRange={setRange} admin={admin}/>:<AdminPages view={view} user={user}/>;
+  const body=view==='dashboard'?<Dashboard range={range} setRange={setRange} admin={admin} user={user} initialDashboard={initialDashboard}/>:view==='reports'?<Reports range={range} setRange={setRange} admin={admin} user={user}/>:<AdminPages view={view} user={user}/>;
   return <Layout className="app-shell"><Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={238}><div className="side-brand"><span>AX</span>{!collapsed&&<div><b>{admin?'AdX Control':'AdX Publisher'}</b><small>{admin?'平台管理端':'渠道工作台'}</small></div>}</div><Menu theme="dark" mode="inline" selectedKeys={[view]} items={menu} onClick={({key})=>setView(key)}/></Sider><Layout><Header><div><Text strong>{user.name||user.email}</Text><Tag color={admin?'blue':'cyan'}>{admin?'平台管理员':'渠道账号'}</Tag></div><Popconfirm title="确认退出登录？" onConfirm={onLogout}><Button icon={<LogoutOutlined/>}>退出</Button></Popconfirm></Header><Content><PageErrorBoundary key={view}><React.Suspense fallback={<Card loading style={{minHeight:220}}>正在加载页面…</Card>}>{body}</React.Suspense></PageErrorBoundary></Content></Layout></Layout>;
 }
 
 function Root({ initialUser, initialView, initialDashboard, onReady }) {
   const logout = async () => {
     await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
+    clearCachedUser(initialUser);
     window.location.reload();
   };
   return <Shell user={initialUser} onLogout={logout} initialView={initialView} initialDashboard={initialDashboard} onReady={onReady} />;

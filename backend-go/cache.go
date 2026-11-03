@@ -110,7 +110,11 @@ func (a *app) cachedReport(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		u := currentUser(r)
-		key := strconv.FormatInt(u.ID, 10) + ":" + u.Role + ":" + strconv.FormatInt(u.ChannelID.Int64, 10) + ":" + r.URL.RequestURI()
+		uri := r.URL.Path
+		if query := r.URL.Query().Encode(); query != "" {
+			uri += "?" + query
+		}
+		key := strconv.FormatInt(u.ID, 10) + ":" + u.Role + ":" + strconv.FormatInt(u.ChannelID.Int64, 10) + ":" + uri
 		hit, version := a.reportCache.lookup(r.Context(), key)
 		if hit != nil {
 			copyHeaders(w.Header(), hit.headers)

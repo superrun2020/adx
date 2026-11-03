@@ -206,13 +206,14 @@ func main() {
 	log.Printf("adx-go listening on %s", srv.Addr)
 	if os.Getenv("ADX_GAM_WORKER_DISABLED") != "true" {
 		go func() {
+			a.warmDefaultReports()
 			if os.Getenv("ADX_SYNC_ON_START") == "true" {
-				a.runHourlyGamSync()
+				a.runScheduledGamSync()
 			}
-			ticker := time.NewTicker(time.Hour)
+			ticker := time.NewTicker(15 * time.Minute)
 			defer ticker.Stop()
 			for range ticker.C {
-				a.runHourlyGamSync()
+				a.runScheduledGamSync()
 			}
 		}()
 	}

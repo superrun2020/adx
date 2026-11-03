@@ -136,7 +136,7 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	settlementMS := time.Since(started) - sumMS - trendMS - topMS
 	var lastSync sql.NullString
-	_ = a.db.QueryRowContext(r.Context(), "SELECT created_at FROM import_runs ORDER BY id DESC LIMIT 1").Scan(&lastSync)
+	_ = a.db.QueryRowContext(r.Context(), "SELECT MAX(value) FROM (SELECT MAX(created_at) value FROM import_runs UNION ALL SELECT MAX(finished_at) value FROM soap_sync_runs WHERE status='success')").Scan(&lastSync)
 	var last any
 	if lastSync.Valid {
 		last = lastSync.String

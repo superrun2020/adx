@@ -1,3 +1,5 @@
+import { readCached, rememberRead } from './readCache.js';
+
 const form = document.getElementById('boot-login');
 const status = document.getElementById('boot-status');
 const button = form.querySelector('button[type="submit"]');
@@ -40,8 +42,9 @@ function retryAutomatically() {
   } catch { /* Manual retry remains available. */ }
 }
 
+const dashboardPath = '/api/dashboard?start=' + start + '&end=' + end;
 async function requestDashboard() {
-  const response = await fetch('/api/dashboard?start=' + start + '&end=' + end, { credentials: 'include' });
+  const response = await fetch(dashboardPath, { credentials: 'include' });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.ok === false) throw new Error(data.error || 'http_' + response.status);
   return data;
@@ -54,9 +57,12 @@ async function openApp(user) {
   button.textContent = '正在进入后台…';
   status.classList.add('loading');
   status.textContent = '正在进入后台…';
-  const initialDashboard = { key: dashboardKey };
+  const saved = readCached(user, dashboardPath);
+  const initialDashboard = { key: dashboardKey, data: saved?.data };
   initialDashboard.promise = requestDashboard().then(data => {
     initialDashboard.data = data;
+    initialDashboard.fresh = true;
+    rememberRead(user, dashboardPath, data);
     return { data };
   }, error => ({ error }));
   try {

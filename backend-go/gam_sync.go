@@ -302,7 +302,7 @@ func (a *app) pauseGam(account map[string]any, actor string) error {
 	}
 	return err
 }
-func (a *app) runHourlyGamSync() {
+func (a *app) runScheduledGamSync() {
 	a.gamMu.Lock()
 	if a.gamScheduled {
 		a.gamMu.Unlock()
@@ -340,4 +340,5 @@ func (a *app) runHourlyGamSync() {
 			<-done
 		}
 	}
+	a.warmDefaultReports()
 }

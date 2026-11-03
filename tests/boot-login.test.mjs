@@ -5,6 +5,7 @@ import vm from 'node:vm';
 
 const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 const boot = (await readFile(new URL('../src/boot.js', import.meta.url), 'utf8'))
+  .replace("import { readCached, rememberRead } from './readCache.js';", '')
   .replace("import('./main.jsx')", 'globalThis.__loadApp()');
 
 function start({ loginResponse, loadApp, dashboardResponse }) {
@@ -27,7 +28,7 @@ function start({ loginResponse, loadApp, dashboardResponse }) {
     return nodes.get(id);
   }, querySelector: () => loginPage };
   const context = {
-    document, URLSearchParams, console,
+    document, URLSearchParams, console, readCached: () => null, rememberRead() {},
     window: { location: { hostname: 'adx.geekforest.ai', search: '', reload() {} }, setTimeout() {} },
     sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     fetch: async (path, options) => {

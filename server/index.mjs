@@ -467,7 +467,7 @@ app.get('/api/dashboard', requireAuth, cachedReport, (req, res) => {
   const domain = dashboardDailyReady ? 'domain' : mappedDomainSql('revenue_facts');
   const trend = db.prepare('SELECT report_date date,ROUND(SUM(' + factor + '),6) revenue FROM ' + source + ' WHERE ' + where.sql + ' GROUP BY report_date ORDER BY report_date').all(...where.params);
   const topUrls = db.prepare('SELECT ' + domain + ' url,ROUND(SUM(' + factor + '),6) revenue FROM ' + source + ' WHERE ' + where.sql + ' GROUP BY ' + domain + ' ORDER BY revenue DESC LIMIT 10').all(...where.params);
-  const lastSync = db.prepare('SELECT created_at FROM import_runs ORDER BY id DESC LIMIT 1').get()?.created_at || null;
+  const lastSync = db.prepare("SELECT MAX(value) value FROM (SELECT MAX(created_at) value FROM import_runs UNION ALL SELECT MAX(finished_at) value FROM soap_sync_runs WHERE status='success')").get()?.value || null;
   const settledWhere = where.sql.replaceAll('report_date', 'rf.report_date').replaceAll('channel_id', 'rf.channel_id');
   const settledRevenue = dashboardDailyReady
     ? db.prepare('SELECT COALESCE(SUM(settled_revenue),0) value FROM dashboard_daily WHERE ' + where.sql).get(...where.params).value
@@ -932,4 +932,4 @@ app.use(express.static(dist, { index:false, maxAge:'1h', setHeaders(res, file) {
 app.all('/api/{*path}',(_req,res)=>res.status(404).json({ok:false,error:'not_found'}));
 app.get('/{*splat}',(_req,res)=>res.sendFile(path.join(dist,'index.html')));
 app.use((error,_req,res,_next)=>{console.error('request_failed',error.message);res.status(500).json({ok:false,error:'internal_error'})});
-app.listen(port,process.env.HOST||'127.0.0.1',()=>{ console.log(`adx-channel-platform listening on ${port}`); setInterval(runHourlyGamSync,60*60*1000); if(process.env.ADX_SYNC_ON_START==='true')runHourlyGamSync(); });
+app.listen(port,process.env.HOST||'127.0.0.1',()=>{ console.log(`adx-channel-platform listening on ${port}`); setInterval(runHourlyGamSync,15*60*1000); if(process.env.ADX_SYNC_ON_START==='true')runHourlyGamSync(); });

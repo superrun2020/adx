@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Alert, Button, Card, Col, DatePicker, Drawer, Input, InputNumber, Modal, Row, Select, Space, Statistic, Table, Typography, message } from 'antd';
 import { BarChartOutlined, DownloadOutlined, FilterOutlined, ReloadOutlined } from '@ant-design/icons';
+import { readCached, rememberRead } from './readCache.js';
 
 const { Title, Text } = Typography;
 const dimensions = [
@@ -27,6 +28,10 @@ const defaultFilters = { source:'rest', upstreamAccount:'', channelId:'', advert
 const defaultDimensions = ['url','adUnit','adUnitId'];
 const width = { date:115, hour:75, account:170, channel:140, advertiser:150, bd:130,
   url:240, country:90, adUnit:240, adUnitId:150 };
+const defaultReportPath = range => '/api/reports?' + new URLSearchParams({
+  start:range[0].format('YYYY-MM-DD'), end:range[1].format('YYYY-MM-DD'),
+  dimensions:defaultDimensions.join(','), page:'1', pageSize:'50', source:'rest'
+});
 
 async function getJson(path) {
   const response = await fetch(path, { credentials:'include' });
@@ -43,15 +48,18 @@ function metricColumns(selected, admin) {
   });
 }
 
-export default function ReportExplorer({ range, setRange, admin }) {
+export default function ReportExplorer({ range, setRange, admin, user }) {
   const [selectedDimensions, setSelectedDimensions] = useState(defaultDimensions);
   const [selectedMetrics, setSelectedMetrics] = useState(coreMetrics.map(([key]) => key));
   const [filters, setFilters] = useState(defaultFilters), [applied, setApplied] = useState(defaultFilters);
   const [options, setOptions] = useState({ accounts:[], channels:[] });
-  const [rows, setRows] = useState([]), [total, setTotal] = useState(0);
+  const [rows, setRows] = useState(() => readCached(user, defaultReportPath(range))?.data?.items || []);
+  const [total, setTotal] = useState(() => readCached(user, defaultReportPath(range))?.data?.total || 0);
+  const [cachedRows, setCachedRows] = useState(() => Boolean(readCached(user, defaultReportPath(range))));
   const [page, setPage] = useState(1), [pageSize, setPageSize] = useState(50);
   const [dailyRows, setDailyRows] = useState([]), [dailyTotal, setDailyTotal] = useState(0);
   const [dailyPage, setDailyPage] = useState(1), [dailyLoading, setDailyLoading] = useState(false);
+  const [dailyCached, setDailyCached] = useState(false);
   const [selectedDate, setSelectedDate] = useState(null);
   const [loading, setLoading] = useState(false), [error, setError] = useState('');
   const [filterOpen, setFilterOpen] = useState(false), [exporting, setExporting] = useState(false);
@@ -74,20 +82,26 @@ export default function ReportExplorer({ range, setRange, admin }) {
       .catch(cause => message.error('筛选项加载失败：' + cause.message));
   }, [admin]);
   useEffect(() => {
-    let active = true; setLoading(true); setError(''); setRows([]); setTotal(0);
+    let active = true; setLoading(true); setError('');
     const extra = selectedDate && selectedDimensions.includes('date')
       ? { drill:JSON.stringify({ date:selectedDate }) } : {};
-    getJson('/api/reports?' + params(selectedDimensions,page,pageSize,extra))
-      .then(data => { if (active) { setRows(data.items || []); setTotal(data.total || 0); } })
-      .catch(cause => { if (active) { setError(cause.message); setRows([]); setTotal(0); } })
+    const path = '/api/reports?' + params(selectedDimensions,page,pageSize,extra);
+    const saved = readCached(user, path);
+    setRows(saved?.data?.items || []); setTotal(saved?.data?.total || 0); setCachedRows(Boolean(saved));
+    getJson(path)
+      .then(data => { if (active) { rememberRead(user, path, data); setRows(data.items || []); setTotal(data.total || 0); setCachedRows(false); } })
+      .catch(cause => { if (active) setError(cause.message); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [range[0].valueOf(),range[1].valueOf(),selectedDimensions.join(','),applied,page,pageSize,selectedDate]);
   useEffect(() => {
-    if (!selectedDimensions.includes('date')) { setDailyRows([]); setDailyTotal(0); return; }
-    let active = true; setDailyLoading(true); setDailyRows([]); setDailyTotal(0);
-    getJson('/api/reports?' + params(['date'],dailyPage,200))
-      .then(data => { if (active) { setDailyRows(data.items || []); setDailyTotal(data.total || 0); } })
+    if (!selectedDimensions.includes('date')) { setDailyRows([]); setDailyTotal(0); setDailyCached(false); return; }
+    let active = true; setDailyLoading(true);
+    const path = '/api/reports?' + params(['date'],dailyPage,200);
+    const saved = readCached(user, path);
+    setDailyRows(saved?.data?.items || []); setDailyTotal(saved?.data?.total || 0); setDailyCached(Boolean(saved));
+    getJson(path)
+      .then(data => { if (active) { rememberRead(user, path, data); setDailyRows(data.items || []); setDailyTotal(data.total || 0); setDailyCached(false); } })
       .catch(cause => { if (active) message.error('每日汇总加载失败：' + cause.message); })
       .finally(() => { if (active) setDailyLoading(false); });
     return () => { active = false; };
@@ -132,7 +146,7 @@ export default function ReportExplorer({ range, setRange, admin }) {
   const detailColumns = [...dimensionColumns(detailDimensions),...metricColumns(selectedMetrics,admin)];
   return <Space direction="vertical" size={16} className="page-stack">
     <div className="page-heading"><div><Title level={2}>数据报告</Title>
-      <Text type="secondary">默认汇总所选日期范围内的域名与广告单元；勾选“日期”可按天拆分，点击行可下钻</Text></div>
+      <Text type="secondary">默认汇总所选日期范围内的域名与广告单元；勾选“日期”可按天拆分，点击行可下钻</Text>{cachedRows && <Text type="secondary" style={{marginLeft:10}}>已显示缓存数据{loading ? '，正在更新' : ''}</Text>}</div>
       <Button icon={<ReloadOutlined/>} loading={loading} onClick={() => setApplied({ ...applied })}>刷新</Button></div>
     {error && <Alert type="error" showIcon message="报表加载失败" description={error}/>}
     <Card><Space wrap>
@@ -165,7 +179,7 @@ export default function ReportExplorer({ range, setRange, admin }) {
     {selectedDimensions.includes('date') && <Card title="所选区间每日汇总"
       extra={<Text type="secondary">{range[0].format('YYYY-MM-DD')} 至 {range[1].format('YYYY-MM-DD')} · {number(dailyTotal)} 个有数据日期</Text>}>
       <Text type="secondary">按最新日期排序；点击日期可查看该日明细，再点一次或选择“全部日期”恢复整个区间。</Text>
-      <Table style={{marginTop:12}} size="small" rowKey="date" loading={dailyLoading} dataSource={dailyRows}
+      <Table style={{marginTop:12}} size="small" rowKey="date" loading={dailyLoading && !dailyCached} dataSource={dailyRows}
         columns={[{title:'日期',dataIndex:'date',width:130},{title:'请求',dataIndex:'requests',align:'right',render:number},
           {title:'展示',dataIndex:'impressions',align:'right',render:number},
           {title:'收入',dataIndex:'revenue',align:'right',render:money}]}
@@ -179,7 +193,7 @@ export default function ReportExplorer({ range, setRange, admin }) {
     <Card title={selectedDimensions.includes('date') ? '按日期拆分的数据明细' : '所选区间汇总'} extra={<Space><Text type="secondary">{range[0].format('YYYY-MM-DD')} 至 {range[1].format('YYYY-MM-DD')} · 共 {number(total)} 组</Text>
       {selectedDate && <Button size="small" onClick={() => { setPage(1); setSelectedDate(null); }}>全部日期</Button>}
       <Button icon={<DownloadOutlined/>} loading={exporting} onClick={exportCsv}>导出 CSV</Button></Space>}>
-      <Table size="small" rowKey={(row,index) => String(page) + '-' + index} loading={loading} dataSource={rows}
+      <Table size="small" rowKey={(row,index) => String(page) + '-' + index} loading={loading && !cachedRows} dataSource={rows}
         columns={columns} scroll={{x:'max-content'}} onRow={row => ({
           onClick:() => openDetail(row), style:{cursor:'pointer'}
         })} pagination={{ current:page, pageSize, total, showSizeChanger:true, pageSizeOptions:[20,50,100,200],
