@@ -25,6 +25,7 @@ registerGamRoutes(app, { db, requireAuth: auth, requireAdmin: (_req, _res, next)
 const realFetch = globalThis.fetch;
 const remoteUnits = new Map();
 const posts = [];
+const listFilters = [];
 let server, base, failAfterCreate = false;
 const response = (payload, status = 200) => new Response(JSON.stringify(payload),
   { status, headers: { 'Content-Type': 'application/json' } });
@@ -53,9 +54,13 @@ before(async () => {
     }
     if (path === 'adUnits') {
       const filter = url.searchParams.get('filter');
-      if (filter) {
+      if (filter?.startsWith('adUnitCode = ')) {
         const code = JSON.parse(filter.slice('adUnitCode = '.length));
         return response({ adUnits: remoteUnits.has(network + '/' + code) ? [remoteUnits.get(network + '/' + code)] : [] });
+      }
+      if (filter) {
+        listFilters.push(filter);
+        return response({ adUnits: [...remoteUnits.values()].filter(unit => unit.name.startsWith('networks/' + network + '/')) });
       }
       return response({ adUnits: [{ name: 'networks/' + network + '/adUnits/9', displayName: 'Root' }] });
     }
@@ -94,6 +99,12 @@ test('batch creates real REST resources, isolates networks, and reconciles a fai
   assert.deepEqual(posts[0].unit.adUnitSizes.map(item => item.size.sizeType), ['PIXEL', 'PIXEL']);
   assert.deepEqual(posts[1].unit.adUnitSizes.map(item => item.size.sizeType), ['INTERSTITIAL', 'FLUID']);
   assert.equal(batch.body.results[0].item.domain, '123456.example.com');
+  const listing = await request('/api/admin/gam-accounts/1/ad-units?search=Banner&statuses=ACTIVE,INACTIVE');
+  assert.equal(listing.status, 200);
+  assert.equal(listing.body.items[0].adUnitSizes.length, 2);
+  assert.equal(listFilters.at(-1), 'displayName = "*Banner*" AND status != ARCHIVED');
+  assert.equal((await request('/api/admin/gam-accounts/1/ad-units?statuses=INVALID')).status, 400);
+  assert.equal((await request('/api/admin/gam-ad-units/batch', 'POST', { gamAccountId: 1, items: Array(101).fill({}) })).status, 400);
 
   const duplicate = await request('/api/admin/gam-ad-units/batch', 'POST', { gamAccountId: 1,
     items: [{ siteName: site, parentAdUnit: parent, name: 'Banner A', code: 'banner-a', sizes: ['300x250'] }] });

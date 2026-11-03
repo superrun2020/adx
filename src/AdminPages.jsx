@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Alert, Button, Card, Col, DatePicker, Descriptions, Drawer, Empty, Form,
+  Alert, Button, Card, Col, Collapse, DatePicker, Descriptions, Drawer, Empty, Form,
   Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Statistic, Table,
   Tag, Typography, message
 } from 'antd';
@@ -69,8 +69,8 @@ function AdUnitBuilder() {
   };
   const options=(values,setter)=><Select mode="tags" allowClear value={values} onChange={setter} style={{width:'100%'}} tokenSeparators={[',','，']} placeholder="可输入多个值"/>;
   return <Space direction="vertical" size={16} className="page-stack">
-    <div className="page-heading"><div><Title level={2}>广告单元创建</Title><Text type="secondary">选择账户、域名和模板，批量预览后同步到 GAM</Text></div></div>
     <GamAdUnitCreator accounts={accounts}/>
+    <Collapse items={[{key:'legacy',label:'旧版 JSON 导入与创建任务',children:<Space direction="vertical" size={16} style={{width:'100%'}}>
     <Alert type="info" showIcon message="JSON 导入兼容模式" description="已有 JSON 任务仍可在下方发布。新建广告单元推荐使用上方的 GAM Sites 域名和尺寸模板批量同步。"/>
     <Card title="JSON 任务生成规则"><Row gutter={[16,16]}><Col xs={24} md={8}><Text strong>子域名</Text>{options(subdomains,setSubdomains)}</Col><Col xs={24} md={8}><Text strong>广告位类型</Text>{options(types,setTypes)}</Col><Col xs={24} md={8}><Text strong>尺寸</Text>{options(sizes,setSizes)}</Col></Row>
       <Space wrap style={{marginTop:16}}><label className="file-button"><UploadOutlined/> {file?.name||'上传广告单元表 JSON'}<input type="file" accept="application/json,.json" onChange={choose}/></label><Button type="primary" loading={busy==='preview'} disabled={!payload} onClick={runPreview}>预览广告单元</Button></Space>
@@ -94,6 +94,7 @@ function AdUnitBuilder() {
       {title:'REST 资源名',dataIndex:'providerId',ellipsis:true},{title:'错误',dataIndex:'publishError',ellipsis:true},
       {title:'操作',render:(_,r)=>r.status==='created'?null:<Popconfirm title={'确认将 '+r.code+' 发布到所选 REST 账户？'} onConfirm={()=>publish(r)}><Button size="small" type="primary" loading={busy==='publish:'+r.id}>发布</Button></Popconfirm>}
     ]}/></Card>
+    </Space>}]} />
   </Space>;
 }
 

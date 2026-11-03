@@ -1,14 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  App as AntApp, Alert, Button, Card, Col, DatePicker, Descriptions, Drawer, Empty, Form,
-  Input, InputNumber, Layout, Menu, Modal, Popconfirm, Row, Select, Space, Statistic, Table,
+  App as AntApp, Alert, Button, Card, Col, DatePicker, Empty,
+  Layout, Menu, Popconfirm, Row, Space, Statistic, Table,
   Tag, Typography, message
 } from 'antd';
 import {
-  ApiOutlined, BarChartOutlined, CopyOutlined, DashboardOutlined, DollarOutlined, KeyOutlined,
+  ApiOutlined, BarChartOutlined, DashboardOutlined, DollarOutlined, KeyOutlined,
   LogoutOutlined, PlusOutlined, ReloadOutlined, SafetyOutlined, TeamOutlined,
-  UploadOutlined, UserSwitchOutlined
+  UserSwitchOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import './styles.css';
@@ -21,9 +21,6 @@ const loadReports = () => import('./ReportExplorer.jsx');
 const loadAdminPages = () => import('./AdminPages.jsx');
 const Reports = React.lazy(loadReports);
 const AdminPages = React.lazy(loadAdminPages);
-const hostname = window.location.hostname.toLowerCase();
-const portal = hostname === 'adxpub.geekforest.ai' || new URLSearchParams(window.location.search).get('portal') === 'publisher' ? 'publisher' : 'admin';
-
 async function api(path, options = {}) {
   const response = await fetch(path, {
     credentials: 'include',
@@ -81,18 +78,6 @@ class AppErrorBoundary extends React.Component {
   }
 }
 
-function Login({ onLogin }) {
-  const [busy, setBusy] = useState(false);
-  const submit = async values => {
-    setBusy(true);
-    try { onLogin((await api('/api/auth/login', { method: 'POST', body: JSON.stringify(values) })).user); }
-    catch (error) { message.error(error.message === 'invalid_credentials' ? '账号或密码错误' : '登录失败'); }
-    finally { setBusy(false); }
-  };
-  const publisher=portal==='publisher';
-  return <div className={`login-page ${publisher?'publisher-login':''}`}><div className="login-brand"><div className="brand-mark">AX</div><div><b>{publisher?'AdX Publisher':'AdX Control'}</b><span>{publisher?'渠道收益与流量数据工作台':'平台数据与渠道管理后台'}</span></div></div><Card className="login-card"><Title level={3}>{publisher?'渠道登录':'管理员登录'}</Title><Text type="secondary">{publisher?'使用平台分配的渠道账号登录，仅可查看本渠道分成后数据。':'仅限平台管理员访问，渠道账号请前往渠道后台。'}</Text><Form layout="vertical" onFinish={submit} requiredMark={false}><Form.Item name="email" label="登录邮箱" rules={[{ required: true }, { type: 'email' }]}><Input size="large" /></Form.Item><Form.Item name="password" label="密码" rules={[{ required: true }]}><Input.Password size="large" /></Form.Item><Button block size="large" type="primary" htmlType="submit" loading={busy}>登录</Button></Form></Card></div>;
-}
-
 function MetricCards({ summary = {}, admin }) {
   const items = [
     [admin?'总流水（收入）':'渠道结算收入', money(summary.revenue), <DollarOutlined />],
@@ -138,11 +123,11 @@ function Shell({ user, onLogout, initialView = 'dashboard' }) {
 }
 
 function Root({ initialUser, initialView }) {
-  const [user,setUser]=useState(initialUser || null); const [ready,setReady]=useState(Boolean(initialUser));
-  useEffect(()=>{if(initialUser)return;api('/api/auth/me').then(r=>setUser(r.user)).catch(()=>{}).finally(()=>setReady(true))},[initialUser]);
-  const logout=async()=>{await api('/api/auth/logout',{method:'POST'}).catch(()=>{});setUser(null)};
-  if(!ready)return <div className="boot">正在加载安全工作区…</div>;
-  return user?<Shell user={user} onLogout={logout} initialView={initialView}/>:<Login onLogin={setUser}/>;
+  const logout = async () => {
+    await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
+    window.location.reload();
+  };
+  return <Shell user={initialUser} onLogout={logout} initialView={initialView} />;
 }
 
 export function mountApp(initialUser, initialView) {

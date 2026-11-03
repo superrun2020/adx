@@ -126,8 +126,16 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     if (!item) return res.status(404).json({ ok: false, error: 'gam_account_not_found' });
     if (item.status !== 'active') throw new Error('invalid_gam_account_status');
     const pageToken = String(req.query.pageToken || '');
-    const result = await listGamAdUnits(item.network_code, await tokenFor(item), { pageToken, pageSize: 100 });
-    res.json({ ok: true, items: (result.adUnits || []).map(unit => ({ name: unit.name, displayName: unit.displayName, adUnitCode: unit.adUnitCode, parentAdUnit: unit.parentAdUnit, status: unit.status })), nextPageToken: result.nextPageToken || '' });
+    const search = String(req.query.search || '').trim();
+    const statuses = String(req.query.statuses || '').split(',').filter(Boolean);
+    if (search.length > 100 || statuses.some(status => !['ACTIVE', 'INACTIVE'].includes(status)))
+      throw new Error('invalid_ad_unit_filter');
+    const filters = [];
+    if (search) filters.push('displayName = ' + JSON.stringify('*' + search.replaceAll('*', '') + '*'));
+    if (statuses.length === 1) filters.push('status = ' + statuses[0]);
+    if (statuses.length === 2) filters.push('status != ARCHIVED');
+    const result = await listGamAdUnits(item.network_code, await tokenFor(item), { pageToken, pageSize: 100, filter: filters.join(' AND ') });
+    res.json({ ok: true, items: (result.adUnits || []).map(unit => ({ name: unit.name, displayName: unit.displayName, adUnitCode: unit.adUnitCode, parentAdUnit: unit.parentAdUnit, status: unit.status, adUnitSizes: unit.adUnitSizes || [] })), nextPageToken: result.nextPageToken || '' });
   }));
 
   app.get('/api/admin/gam-accounts/:id/sites', requireAuth, requireAdmin, route(async (req, res) => {
@@ -177,9 +185,11 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
       const token = context.token || await tokenFor(gamAccount);
       const sites = context.sites || new Map(), parents = context.parents || new Map();
       let site = sites.get(siteName);
-      if (!site) { site = await getGamSite(network, token, siteName); sites.set(siteName, site); }
+      if (!site) { site = getGamSite(network, token, siteName); sites.set(siteName, site); }
+      site = await site;
       let parent = parents.get(parentName);
-      if (!parent) { parent = await getGamAdUnit(network, token, parentName); parents.set(parentName, parent); }
+      if (!parent) { parent = getGamAdUnit(network, token, parentName); parents.set(parentName, parent); }
+      parent = await parent;
       if (site.name !== siteName) throw new Error('invalid_gam_site');
       if (parent.name !== parentName) throw new Error('invalid_parent_ad_unit');
       if (await findGamAdUnitByCode(network, token, adUnit.adUnitCode)) throw new Error('ad_unit_already_exists_in_gam');
@@ -206,7 +216,7 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     const inputs = req.body?.items;
     const gamAccount = account(req.body?.gamAccountId);
     if (!gamAccount || gamAccount.status !== 'active') throw new Error('invalid_gam_account_status');
-    if (!Array.isArray(inputs) || !inputs.length || inputs.length > 50) throw new Error('invalid_ad_unit_batch');
+    if (!Array.isArray(inputs) || !inputs.length || inputs.length > 100) throw new Error('invalid_ad_unit_batch');
     const seen = new Set();
     const prepared = inputs.map(input => {
       gamSiteResource(input?.siteName, gamAccount.network_code);
@@ -219,13 +229,17 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     });
     const context = { token: await tokenFor(gamAccount), sites: new Map(), parents: new Map() };
     const results = [];
-    for (const [index, input] of prepared.entries()) {
-      try {
-        const item = await createDirect(input, req.user.email, req.ip, context);
-        results.push({ index, code: input.code, siteName: input.siteName, status: 'created', item });
-      } catch (error) {
-        results.push({ index, code: input.code, siteName: input.siteName, status: 'failed', error: String(error.message).slice(0, 500) });
-      }
+    for (let offset = 0; offset < prepared.length; offset += 3) {
+      const group = prepared.slice(offset, offset + 3);
+      results.push(...await Promise.all(group.map(async (input, position) => {
+        const index = offset + position;
+        try {
+          const item = await createDirect(input, req.user.email, req.ip, context);
+          return { index, code: input.code, siteName: input.siteName, status: 'created', item };
+        } catch (error) {
+          return { index, code: input.code, siteName: input.siteName, status: 'failed', error: String(error.message).slice(0, 500) };
+        }
+      })));
     }
     res.json({ ok: true, created: results.filter(item => item.status === 'created').length,
       failed: results.filter(item => item.status === 'failed').length, results });

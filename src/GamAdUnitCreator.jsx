@@ -1,18 +1,22 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Button, Card, Col, Input, Popconfirm, Row, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
-import { ReloadOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Col, Collapse, Empty, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Switch, Table, Tabs, Tag, Typography, message } from 'antd';
+import { DeleteOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 
-const { Text } = Typography;
-const bannerSizes = ['250x250', '300x250', '320x50', '336x280'];
-const interstitialSizes = ['1x1', '320x480', '480x320', '768x1024', '1024x768', 'out-of-page', 'native', 'fluid'];
-const sizeLabels = { 'out-of-page': '页外', native: '自定义呈现 / Native', fluid: '自适应尺寸 / Fluid' };
-const templates = [
-  { id: 'ANL', label: '锚定 · ANL', sizes: ['320x50'] },
-  { id: 'banner1', label: 'Banner 1', sizes: bannerSizes },
-  { id: 'banner2', label: 'Banner 2', sizes: bannerSizes },
-  { id: 'banner3', label: 'Banner 3', sizes: bannerSizes },
-  { id: 'INT', label: '插页 · INT', sizes: interstitialSizes }
+const { Text, Title } = Typography;
+const bannerSizes = ['320x50', '336x280', '250x250', '300x250'];
+const interstitialSizes = ['fluid', 'out-of-page', 'native', '1x1', '480x320', '768x1024', '1024x768', '320x480'];
+const sizeLabels = { fluid: '自适应尺寸 (FLUID)', 'out-of-page': '页外 (INTERSTITIAL)', native: '自定义呈现/原生 (NATIVE)' };
+const unitTypes = [
+  { value: 'banner', label: '横幅广告 (Banner)', sizes: bannerSizes },
+  { value: 'interstitial', label: '插页式广告 (INT)', sizes: interstitialSizes },
+  { value: 'anchor', label: '锚定广告 (ANC)', sizes: ['320x50'] }
 ];
+const typeFor = value => unitTypes.find(item => item.value === value) || unitTypes[0];
+const sizeOptions = values => values.map(value => ({ value, label: sizeLabels[value] || value }));
+const newRow = (type = 'banner', bannerNo = 1) => ({
+  id: Math.random().toString(36).slice(2), type, bannerNo, sizes: [...typeFor(type).sizes], name: '', code: ''
+});
+const initialBatch = () => [newRow('banner', 1), newRow('banner', 2), newRow('banner', 3), newRow('interstitial'), newRow('anchor')];
 
 async function api(path, options = {}) {
   const response = await fetch(path, { credentials: 'include', ...options,
@@ -26,28 +30,54 @@ function siteDomain(url) {
   try { return new URL(String(url).startsWith('http://') || String(url).startsWith('https://') ? url : 'https://' + url).hostname.toLowerCase(); }
   catch { return ''; }
 }
+function suffix(row) {
+  return row.type === 'banner' ? 'banner' + row.bannerNo : row.type === 'anchor' ? 'ANC' : 'INT';
+}
+function remoteSizes(values) {
+  return (values || []).map(item => {
+    const size = item.size || {};
+    if (size.sizeType === 'PIXEL') return size.width + 'x' + size.height;
+    return sizeLabels[{ FLUID: 'fluid', INTERSTITIAL: 'out-of-page', NATIVE: 'native' }[size.sizeType]] || size.sizeType || '';
+  }).filter(Boolean).join('、');
+}
 
-const sizeOptions = values => values.map(value => ({ value, label: sizeLabels[value] || value }));
+function UnitFields({ row, index, onChange, onRemove, removable }) {
+  const template = typeFor(row.type);
+  return <Card size="small" title={'广告单元 ' + (index + 1)} extra={removable && <Button type="text" danger icon={<DeleteOutlined/>} aria-label={'删除广告单元 ' + (index + 1)} onClick={onRemove}/>} style={{ marginBottom: 12 }}>
+    <Row gutter={[16, 12]}>
+      <Col xs={24} sm={row.type === 'banner' ? 12 : 24}><Text>广告类型</Text><Select style={{ width: '100%', marginTop: 6 }} value={row.type} options={unitTypes.map(item => ({ value: item.value, label: item.label }))} onChange={type => onChange({ type, bannerNo: 1, sizes: [...typeFor(type).sizes], name: '', code: '' })}/></Col>
+      {row.type === 'banner' && <Col xs={24} sm={12}><Text>Banner 序号</Text><InputNumber min={1} max={999} precision={0} style={{ width: '100%', marginTop: 6 }} value={row.bannerNo} onChange={bannerNo => onChange({ bannerNo })}/></Col>}
+      <Col span={24}><Text type="secondary">尺寸模板：{template.sizes.map(size => sizeLabels[size] || size).join('、')}</Text><Select mode="tags" tokenSeparators={[',', '，']} style={{ width: '100%', marginTop: 6 }} value={row.sizes} options={sizeOptions(template.sizes)} placeholder="选择尺寸，或输入宽x高" onChange={sizes => onChange({ sizes })}/></Col>
+      <Col xs={24} sm={12}><Text>广告单元名称（可选）</Text><Input style={{ marginTop: 6 }} value={row.name} maxLength={255} placeholder="默认：域名-类型序号" onChange={event => onChange({ name: event.target.value })}/></Col>
+      <Col xs={24} sm={12}><Text>广告单元代码（可选）</Text><Input style={{ marginTop: 6 }} value={row.code} maxLength={120} placeholder="默认：域名-类型序号" onChange={event => onChange({ code: event.target.value })}/></Col>
+    </Row>
+  </Card>;
+}
 
-export default function GamAdUnitCreator({ accounts }) {
-  const [accountId, setAccountId] = useState(null);
+export default function GamAdUnitCreator({ accounts = [] }) {
+  const activeAccounts = accounts.filter(item => item.status === 'active');
+  const [filterAccountId, setFilterAccountId] = useState(null), [filterName, setFilterName] = useState('');
+  const [filterStatuses, setFilterStatuses] = useState(['ACTIVE', 'INACTIVE']);
+  const [queried, setQueried] = useState(false), [remoteUnits, setRemoteUnits] = useState([]);
+  const [nextUnits, setNextUnits] = useState(''), [lastQuery, setLastQuery] = useState(null), [listBusy, setListBusy] = useState(false);
+  const [open, setOpen] = useState(false), [mode, setMode] = useState('batch');
+  const [accountId, setAccountId] = useState(null), [siteNames, setSiteNames] = useState([]), [parentAdUnit, setParentAdUnit] = useState('');
   const [sites, setSites] = useState([]), [parents, setParents] = useState([]);
   const [nextSites, setNextSites] = useState(''), [nextParents, setNextParents] = useState('');
-  const [selectedSites, setSelectedSites] = useState([]), [parentAdUnit, setParentAdUnit] = useState('');
-  const [selectedTemplates, setSelectedTemplates] = useState([]), [templateSizes, setTemplateSizes] = useState({ ANL: ['320x50'] });
-  const [description, setDescription] = useState(''), [adsenseEnabled, setAdsenseEnabled] = useState(false);
-  const [targetWindow, setTargetWindow] = useState(''), [drafts, setDrafts] = useState([]);
-  const [creations, setCreations] = useState([]), [results, setResults] = useState([]);
-  const [busy, setBusy] = useState(''), [inventoryError, setInventoryError] = useState('');
+  const [inventoryBusy, setInventoryBusy] = useState(false), [inventoryError, setInventoryError] = useState('');
   const [inventoryVersion, setInventoryVersion] = useState(0);
-  const activeAccounts = accounts.filter(item => item.status === 'active');
+  const [single, setSingle] = useState(newRow()), [batchRows, setBatchRows] = useState(initialBatch);
+  const [description, setDescription] = useState(''), [adsenseEnabled, setAdsenseEnabled] = useState(false);
+  const [targetWindow, setTargetWindow] = useState('');
+  const [creations, setCreations] = useState([]), [results, setResults] = useState([]);
+  const [publishing, setPublishing] = useState(false), [retrying, setRetrying] = useState(null);
 
   const loadCreations = () => api('/api/admin/gam-ad-units').then(result => setCreations(result.items || []));
   useEffect(() => { loadCreations().catch(error => message.error(error.message)); }, []);
   useEffect(() => {
-    if (!accountId) return;
+    if (!open || !accountId) return;
     let current = true;
-    setBusy('inventory'); setInventoryError('');
+    setInventoryBusy(true); setInventoryError('');
     Promise.all([
       api('/api/admin/gam-accounts/' + accountId + '/sites'),
       api('/api/admin/gam-accounts/' + accountId + '/ad-units')
@@ -56,20 +86,32 @@ export default function GamAdUnitCreator({ accounts }) {
       setSites(siteResult.items || []); setNextSites(siteResult.nextPageToken || '');
       setParents(unitResult.items || []); setNextParents(unitResult.nextPageToken || '');
     }).catch(error => { if (current) setInventoryError(error.message); })
-      .finally(() => { if (current) setBusy(''); });
+      .finally(() => { if (current) setInventoryBusy(false); });
     return () => { current = false; };
-  }, [accountId, inventoryVersion]);
+  }, [open, accountId, inventoryVersion]);
 
+  const searchUnits = async (query = { accountId: filterAccountId, name: filterName, statuses: filterStatuses }, pageToken = '') => {
+    if (!query.accountId) return message.warning('请先选择账号');
+    setListBusy(true);
+    try {
+      const params = new URLSearchParams({ search: query.name.trim(), statuses: query.statuses.join(',') });
+      if (pageToken) params.set('pageToken', pageToken);
+      const result = await api('/api/admin/gam-accounts/' + query.accountId + '/ad-units?' + params);
+      setRemoteUnits(previous => pageToken ? [...previous, ...(result.items || [])] : (result.items || []));
+      setNextUnits(result.nextPageToken || ''); setLastQuery(query); setQueried(true);
+    } catch (error) { message.error('查询 GAM 广告单元失败：' + error.message); }
+    finally { setListBusy(false); }
+  };
   const chooseAccount = value => {
     setAccountId(value); setSites([]); setParents([]); setNextSites(''); setNextParents('');
-    setSelectedSites([]); setParentAdUnit(''); setDrafts([]); setResults([]);
+    setSiteNames([]); setParentAdUnit(''); setInventoryError('');
   };
-  const loadMore = async kind => {
-    const token = kind === 'sites' ? nextSites : nextParents;
-    if (!token || !accountId) return;
-    setBusy(kind);
+  const loadMoreInventory = async kind => {
+    const pageToken = kind === 'sites' ? nextSites : nextParents;
+    if (!pageToken || !accountId) return;
+    setInventoryBusy(true);
     try {
-      const result = await api('/api/admin/gam-accounts/' + accountId + '/' + (kind === 'sites' ? 'sites' : 'ad-units') + '?pageToken=' + encodeURIComponent(token));
+      const result = await api('/api/admin/gam-accounts/' + accountId + '/' + (kind === 'sites' ? 'sites' : 'ad-units') + '?pageToken=' + encodeURIComponent(pageToken));
       if (kind === 'sites') {
         setSites(previous => [...new Map([...previous, ...(result.items || [])].map(item => [item.name, item])).values()]);
         setNextSites(result.nextPageToken || '');
@@ -78,94 +120,106 @@ export default function GamAdUnitCreator({ accounts }) {
         setNextParents(result.nextPageToken || '');
       }
     } catch (error) { message.error(error.message); }
-    finally { setBusy(''); }
+    finally { setInventoryBusy(false); }
   };
-  const updateDraft = (key, changes) => setDrafts(previous => previous.map(item => item.key === key ? { ...item, ...changes } : item));
-  const preview = () => {
-    if (!accountId || !parentAdUnit || !selectedSites.length || !selectedTemplates.length)
-      return message.warning('请选择账户、域名、父广告单元和版位模板');
-    const chosen = selectedTemplates.map(id => templates.find(item => item.id === id));
-    if (chosen.some(item => !templateSizes[item.id]?.length)) return message.warning('请为每个版位模板选择至少一个尺寸');
-    if (selectedSites.length * chosen.length > 50) return message.warning('每批最多 50 个广告单元，请分批创建');
-    const rows = selectedSites.flatMap(siteName => {
+  const openCreator = () => {
+    setMode('batch'); setSingle(newRow()); setBatchRows(initialBatch()); setResults([]);
+    setDescription(''); setAdsenseEnabled(false); setTargetWindow('');
+    chooseAccount(filterAccountId && activeAccounts.some(item => item.id === filterAccountId) ? filterAccountId : null);
+    setOpen(true);
+  };
+  const updateBatchRow = (id, changes) => setBatchRows(previous => previous.map(row => row.id === id ? { ...row, ...changes } : row));
+  const preparedItems = () => {
+    if (!accountId || !siteNames.length || !parentAdUnit) throw new Error('请选择账号、网站和父广告单元');
+    const rows = mode === 'single' ? [single] : batchRows;
+    if (!rows.length || rows.length > 100 || rows.length * siteNames.length > 100) throw new Error('每批最多创建 100 个广告单元');
+    const items = siteNames.flatMap(siteName => {
       const domain = siteDomain(sites.find(item => item.name === siteName)?.url || '');
-      return chosen.map(item => {
-        const code = domain + '-' + item.id;
-        return { key: siteName + '/' + item.id, siteName, domain, templateId: item.id,
-          gamAccountId: accountId, parentAdUnit, code, name: code,
-          sizes: templateSizes[item.id], description, adsenseEnabled, targetWindow };
+      if (!domain) throw new Error('所选网站域名无效，请重新加载 GAM Sites');
+      return rows.map(row => {
+        if (row.type === 'banner' && (!Number.isInteger(row.bannerNo) || row.bannerNo < 1)) throw new Error('Banner 序号必须是正整数');
+        if (!row.sizes?.length) throw new Error('每个广告单元至少选择一个尺寸');
+        const defaultCode = domain + '-' + suffix(row);
+        if (siteNames.length > 1 && row.code.trim() && !row.code.includes('{domain}')) throw new Error('多网站自定义代码请包含 {domain}');
+        const code = row.code.trim() ? row.code.trim().replaceAll('{domain}', domain) : defaultCode;
+        const name = row.name.trim() ? row.name.trim().replaceAll('{domain}', domain) : code;
+        return { gamAccountId: accountId, siteName, parentAdUnit, code, name, sizes: row.sizes,
+          description, adsenseEnabled, targetWindow };
       });
     });
-    if (rows.some(row => !row.domain) || new Set(rows.map(row => row.code.toLowerCase())).size !== rows.length)
-      return message.error('所选 GAM 网站域名为空或重复，请调整选择');
-    setDrafts(rows); setResults([]);
+    if (new Set(items.map(item => item.code.toLowerCase())).size !== items.length) throw new Error('广告单元代码重复，请调整 Banner 序号或代码');
+    return items;
   };
   const publish = async () => {
-    if (!drafts.length) return;
-    if (drafts.some(row => !row.name.trim() || !row.code.trim() || !row.sizes.length) ||
-        new Set(drafts.map(row => row.code.toLowerCase())).size !== drafts.length)
-      return message.error('名称、编码和尺寸必填，且同批编码不能重复');
-    setBusy('publish');
+    let items;
+    try { items = preparedItems(); } catch (error) { message.warning(error.message); return; }
+    setPublishing(true);
     try {
-      const payload = await api('/api/admin/gam-ad-units/batch', { method: 'POST',
-        body: JSON.stringify({ gamAccountId: accountId, items: drafts }) });
-      setResults(payload.results || []); setDrafts([]);
-      await loadCreations();
-      if (payload.failed) message.warning('已同步 ' + payload.created + ' 个，失败 ' + payload.failed + ' 个；可查看下方详情');
-      else message.success('已同步 ' + payload.created + ' 个广告单元到 GAM');
-    } catch (error) { message.error(error.message); }
-    finally { setBusy(''); }
+      const result = mode === 'single'
+        ? await api('/api/admin/gam-ad-units', { method: 'POST', body: JSON.stringify(items[0]) })
+        : await api('/api/admin/gam-ad-units/batch', { method: 'POST', body: JSON.stringify({ gamAccountId: accountId, items }) });
+      const rows = mode === 'single' ? [{ status: 'created', code: items[0].code, item: result.item }] : (result.results || []);
+      setResults(rows); setOpen(false); await loadCreations();
+      if (lastQuery?.accountId === accountId) await searchUnits(lastQuery);
+      const failures = rows.filter(row => row.status === 'failed').length;
+      if (failures) message.warning('已创建 ' + (rows.length - failures) + ' 个，失败 ' + failures + ' 个；请查看同步记录');
+      else message.success('已同步 ' + rows.length + ' 个广告单元到 GAM');
+    } catch (error) {
+      message.error('创建失败：' + error.message + '；如已生成失败记录，请在同步记录中重试');
+      await loadCreations().catch(() => {});
+    } finally { setPublishing(false); }
   };
   const retry = async item => {
-    setBusy('retry:' + item.id);
-    try {
-      await api('/api/admin/gam-ad-units/' + item.id + '/retry', { method: 'POST' });
-      message.success('已同步到 GAM'); await loadCreations();
-    } catch (error) { message.error(error.message); await loadCreations(); }
-    finally { setBusy(''); }
+    setRetrying(item.id);
+    try { await api('/api/admin/gam-ad-units/' + item.id + '/retry', { method: 'POST' }); message.success('已同步到 GAM'); await loadCreations(); }
+    catch (error) { message.error(error.message); await loadCreations(); }
+    finally { setRetrying(null); }
   };
-  const draftColumns = [
-    { title: '域名', dataIndex: 'domain', width: 180 },
-    { title: '模板', dataIndex: 'templateId', width: 100 },
-    { title: '名称', dataIndex: 'name', width: 220, render: (value, row) => <Input value={value} onChange={event => updateDraft(row.key, { name: event.target.value })}/> },
-    { title: '编码', dataIndex: 'code', width: 220, render: (value, row) => <Input value={value} onChange={event => updateDraft(row.key, { code: event.target.value })}/> },
-    { title: '尺寸', dataIndex: 'sizes', width: 260, render: (value, row) => <Select mode="tags" tokenSeparators={[',', '，']} style={{ width: '100%' }} value={value} options={sizeOptions(templates.find(item => item.id === row.templateId)?.sizes || [])} onChange={sizes => updateDraft(row.key, { sizes })}/> }
+  const currentRows = mode === 'single' ? 1 : batchRows.length;
+  const accountOptions = activeAccounts.map(item => ({ value: item.id, label: item.name + '（' + item.networkCode + '）' }));
+  const historyColumns = [
+    { title: '账号', dataIndex: 'networkCode', width: 135 }, { title: '网站', dataIndex: 'domain', width: 170 },
+    { title: '广告单元', dataIndex: 'displayName', width: 210 }, { title: '代码', dataIndex: 'adUnitCode', width: 200 },
+    { title: '状态', dataIndex: 'status', width: 95, render: value => <Tag color={value === 'created' ? 'green' : 'red'}>{value === 'created' ? '已同步' : '失败'}</Tag> },
+    { title: 'GAM 资源名 / 错误', width: 280, ellipsis: true, render: (_, row) => row.providerId || row.publishError },
+    { title: '操作', width: 80, render: (_, row) => row.status === 'failed' && <Popconfirm title={'重试同步 ' + row.adUnitCode + '？'} onConfirm={() => retry(row)}><Button size="small" loading={retrying === row.id}>重试</Button></Popconfirm> }
+  ];
+  const remoteColumns = [
+    { title: '广告单元', dataIndex: 'displayName', width: 280 }, { title: '广告单元代码', dataIndex: 'adUnitCode', width: 230 },
+    { title: '尺寸', dataIndex: 'adUnitSizes', render: remoteSizes },
+    { title: '状态', dataIndex: 'status', width: 120, render: value => <Tag color={value === 'ACTIVE' ? 'green' : 'default'}>{value === 'ACTIVE' ? '启用' : value === 'INACTIVE' ? '停用' : value || '—'}</Tag> }
   ];
 
-  return <>
-    <Alert type="info" showIcon message="GAM REST 同步" description="从所选账户实时读取 Sites 域名和父广告单元。域名关联保存在本站；GAM AdUnit API 没有直接绑定 Site 的字段。请预览名称、编码和尺寸后再创建。"/>
-    <Card title="快速批量创建并同步到 GAM" extra={<Button icon={<ReloadOutlined/>} onClick={() => loadCreations().catch(error => message.error(error.message))}>刷新记录</Button>}>
-      <Row gutter={[16, 12]}>
-        <Col xs={24} lg={8}><Text strong>Ad Manager 账户</Text><Select showSearch optionFilterProp="label" style={{ width: '100%', marginTop: 6 }} placeholder="选择已连接的 REST 账户" value={accountId} onChange={chooseAccount} options={activeAccounts.map(item => ({ value: item.id, label: item.name + '（' + item.networkCode + '）' }))}/></Col>
-        <Col xs={24} lg={8}><Text strong>账户域名 · GAM Sites</Text><Select mode="multiple" showSearch optionFilterProp="label" style={{ width: '100%', marginTop: 6 }} placeholder="可选择多个域名" value={selectedSites} onChange={value => { setSelectedSites(value); setDrafts([]); }} loading={busy === 'inventory'} disabled={!accountId} options={sites.map(item => ({ value: item.name, label: siteDomain(item.url) + (item.approvalStatus ? ' · ' + item.approvalStatus : '') }))}/>{nextSites && <Button size="small" loading={busy === 'sites'} onClick={() => loadMore('sites')}>加载更多域名</Button>}</Col>
-        <Col xs={24} lg={8}><Text strong>父广告单元</Text><Select showSearch optionFilterProp="label" style={{ width: '100%', marginTop: 6 }} placeholder="从此账户选择父单元" value={parentAdUnit || undefined} onChange={value => { setParentAdUnit(value); setDrafts([]); }} loading={busy === 'inventory'} disabled={!accountId} options={parents.map(item => ({ value: item.name, label: item.displayName + '（' + item.name + '）' }))}/>{nextParents && <Button size="small" loading={busy === 'ad-units'} onClick={() => loadMore('ad-units')}>加载更多父单元</Button>}</Col>
-      </Row>
-      {inventoryError && <Alert style={{ marginTop: 12 }} type="error" showIcon message={'账户目录加载失败：' + inventoryError} action={<Button size="small" onClick={() => setInventoryVersion(value => value + 1)}>重试</Button>}/>}
-      <div style={{ marginTop: 18 }}><Text strong>版位模板与尺寸</Text></div>
-      <Select mode="multiple" style={{ width: '100%', marginTop: 6 }} placeholder="可选择 ANL、Banner 1/2/3、INT 组合" value={selectedTemplates} onChange={value => { setSelectedTemplates(value); setDrafts([]); }} options={templates.map(item => ({ value: item.id, label: item.label }))}/>
-      <Row gutter={[16, 12]} style={{ marginTop: 12 }}>{selectedTemplates.map(id => {
-        const item = templates.find(entry => entry.id === id);
-        return <Col xs={24} md={12} xl={8} key={id}><Text>{item.label} 尺寸</Text><Select mode="tags" tokenSeparators={[',', '，']} style={{ width: '100%', marginTop: 6 }} placeholder="选择模板尺寸，或输入宽x高" value={templateSizes[id] || []} onChange={value => { setTemplateSizes(previous => ({ ...previous, [id]: value })); setDrafts([]); }} options={sizeOptions(item.sizes)}/></Col>;
-      })}</Row>
-      <Row gutter={[16, 12]} style={{ marginTop: 16 }}>
-        <Col xs={24} md={12}><Text>说明（可选）</Text><Input style={{ marginTop: 6 }} value={description} onChange={event => { setDescription(event.target.value); setDrafts([]); }} maxLength={500}/></Col>
-        <Col xs={12} md={5}><Text>目标窗口</Text><Select style={{ width: '100%', marginTop: 6 }} value={targetWindow} onChange={value => { setTargetWindow(value); setDrafts([]); }} options={[{ value: '', label: '继承父单元' }, { value: 'TOP', label: 'TOP' }, { value: 'BLANK', label: 'BLANK' }]}/></Col>
-        <Col xs={12} md={5}><Text>启用 AdSense</Text><div style={{ marginTop: 10 }}><Switch checked={adsenseEnabled} onChange={value => { setAdsenseEnabled(value); setDrafts([]); }}/></div></Col>
-      </Row>
-      <Button style={{ marginTop: 16 }} onClick={preview} disabled={busy === 'inventory'}>生成批量预览</Button>
-    </Card>
-    {drafts.length > 0 && <Card title={'待同步预览 · ' + drafts.length + ' 个'} extra={<Popconfirm title={'确认创建并同步 ' + drafts.length + ' 个广告单元到 GAM？'} onConfirm={publish}><Button type="primary" loading={busy === 'publish'}>确认创建并同步</Button></Popconfirm>}>
-      <Table rowKey="key" size="small" dataSource={drafts} columns={draftColumns} pagination={{ pageSize: 10 }} scroll={{ x: 1050 }}/>
-    </Card>}
-    {results.length > 0 && <Card title="本次同步结果"><Table rowKey="index" size="small" dataSource={results} pagination={{ pageSize: 10 }} columns={[{ title: '域名', dataIndex: 'siteName', render: value => siteDomain(sites.find(item => item.name === value)?.url || '') || value }, { title: '编码', dataIndex: 'code' }, { title: '状态', dataIndex: 'status', render: value => <Tag color={value === 'created' ? 'green' : 'red'}>{value === 'created' ? '已同步' : '失败'}</Tag> }, { title: '结果', render: (_, row) => row.item?.providerId || row.error }]}/></Card>}
-    <Card title="GAM 广告单元同步记录"><Table rowKey="id" size="small" dataSource={creations} scroll={{ x: 1150 }} pagination={{ pageSize: 20 }} columns={[
-      { title: '账户', dataIndex: 'networkCode', width: 130 }, { title: '域名', dataIndex: 'domain', width: 190 },
-      { title: '编码', dataIndex: 'adUnitCode', width: 210 }, { title: '名称', dataIndex: 'displayName', width: 210 },
-      { title: '尺寸', dataIndex: 'sizesJson', width: 170, render: value => { try { return JSON.parse(value).map(size => sizeLabels[size] || size).join('、'); } catch { return value; } } },
-      { title: '状态', dataIndex: 'status', width: 90, render: value => <Tag color={value === 'created' ? 'green' : 'red'}>{value === 'created' ? '已同步' : '失败'}</Tag> },
-      { title: 'GAM 资源名', dataIndex: 'providerId', width: 280, ellipsis: true },
-      { title: '错误', dataIndex: 'publishError', width: 220, ellipsis: true },
-      { title: '操作', width: 80, render: (_, row) => row.status === 'failed' && <Popconfirm title={'重试同步 ' + row.adUnitCode + '？'} onConfirm={() => retry(row)}><Button size="small" loading={busy === 'retry:' + row.id}>重试</Button></Popconfirm> }
-    ]}/></Card>
-  </>;
+  return <Space direction="vertical" size={16} style={{ width: '100%' }}>
+    <div className="page-heading"><div><Title level={2}>广告单元</Title><Text type="secondary">按账号查询和创建 Google Ad Manager 广告单元</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={openCreator}>新建广告单元</Button></div>
+    <Card><Space wrap>
+      <Select showSearch optionFilterProp="label" style={{ width: 310 }} placeholder="请选择账号" value={filterAccountId} onChange={value => { setFilterAccountId(value); setQueried(false); setRemoteUnits([]); setNextUnits(''); }} options={accountOptions}/>
+      <Input style={{ width: 280 }} placeholder="广告单元名称" value={filterName} onChange={event => setFilterName(event.target.value)} onPressEnter={() => searchUnits()}/>
+      <Select mode="multiple" style={{ width: 240 }} value={filterStatuses} onChange={setFilterStatuses} options={[{ value: 'ACTIVE', label: '启用' }, { value: 'INACTIVE', label: '停用' }]}/>
+      <Button icon={<SearchOutlined/>} loading={listBusy} onClick={() => searchUnits()}>查询广告单元</Button>
+    </Space></Card>
+    <Card bodyStyle={{ padding: 0 }}><Table rowKey="name" loading={listBusy} dataSource={remoteUnits} columns={remoteColumns} pagination={{ pageSize: 20 }} scroll={{ x: 900 }} locale={{ emptyText: <Empty description={queried ? '没有匹配的广告单元' : '选择账号后点击查询广告单元'}/> }}/>{nextUnits && <div style={{ textAlign: 'center', padding: 12 }}><Button loading={listBusy} onClick={() => searchUnits(lastQuery, nextUnits)}>加载更多</Button></div>}</Card>
+    {results.length > 0 && <Alert type={results.some(row => row.status === 'failed') ? 'warning' : 'success'} showIcon message={'本次同步：成功 ' + results.filter(row => row.status === 'created').length + ' 个，失败 ' + results.filter(row => row.status === 'failed').length + ' 个'}/>}
+    <Collapse items={[{ key: 'history', label: '同步记录与失败重试', children: <Table rowKey="id" size="small" dataSource={creations} columns={historyColumns} pagination={{ pageSize: 10 }} scroll={{ x: 1100 }}/> }]}/>
+    <Modal title="新建广告单元" open={open} width={760} onCancel={() => { if (!publishing) setOpen(false); }} maskClosable={!publishing} closable={!publishing} footer={<Space><Button disabled={publishing} onClick={() => setOpen(false)}>取消</Button><Button type="primary" loading={publishing} onClick={publish}>{mode === 'batch' ? '批量创建' : '创建并同步'}</Button></Space>}>
+      <div style={{ maxHeight: '68vh', overflowY: 'auto', paddingRight: 8 }}>
+        <Row gutter={[16, 12]}>
+          <Col xs={24} sm={12}><Text><Text type="danger">* </Text>账号</Text><Select showSearch optionFilterProp="label" style={{ width: '100%', marginTop: 6 }} placeholder="请选择账号" value={accountId} onChange={chooseAccount} options={accountOptions}/></Col>
+          <Col xs={24} sm={12}><Text><Text type="danger">* </Text>网站</Text><Select mode={mode === 'batch' ? 'multiple' : undefined} showSearch optionFilterProp="label" style={{ width: '100%', marginTop: 6 }} placeholder="从 GAM Sites 选择网站" value={mode === 'batch' ? siteNames : siteNames[0]} onChange={value => setSiteNames(Array.isArray(value) ? value : value ? [value] : [])} loading={inventoryBusy} disabled={!accountId} options={sites.map(item => ({ value: item.name, label: siteDomain(item.url) + (item.approvalStatus ? ' · ' + item.approvalStatus : '') }))}/>{nextSites && <Button size="small" onClick={() => loadMoreInventory('sites')} loading={inventoryBusy}>加载更多网站</Button>}</Col>
+          <Col span={24}><Text><Text type="danger">* </Text>父广告单元</Text><Select showSearch optionFilterProp="label" style={{ width: '100%', marginTop: 6 }} placeholder="从当前账号选择父广告单元" value={parentAdUnit || undefined} onChange={setParentAdUnit} loading={inventoryBusy} disabled={!accountId} options={parents.map(item => ({ value: item.name, label: item.displayName + '（' + item.name + '）' }))}/>{nextParents && <Button size="small" onClick={() => loadMoreInventory('ad-units')} loading={inventoryBusy}>加载更多父单元</Button>}</Col>
+        </Row>
+        {inventoryError && <Alert type="error" style={{ marginTop: 12 }} showIcon message={'GAM 目录加载失败：' + inventoryError} action={<Button size="small" onClick={() => setInventoryVersion(value => value + 1)}>重试</Button>}/>}
+        <Tabs style={{ marginTop: 16 }} activeKey={mode} onChange={value => { setMode(value); if (value === 'single') setSiteNames(previous => previous.slice(0, 1)); }} items={[
+          { key: 'single', label: '创建单个', children: <UnitFields row={single} index={0} onChange={changes => setSingle(previous => ({ ...previous, ...changes }))}/> },
+          { key: 'batch', label: '批量创建', children: <><div style={{ maxHeight: '42vh', overflowY: 'auto', paddingRight: 6 }}>{batchRows.map((row, index) => <UnitFields key={row.id} row={row} index={index} onChange={changes => updateBatchRow(row.id, changes)} onRemove={() => setBatchRows(previous => previous.filter(item => item.id !== row.id))} removable={batchRows.length > 1}/>)}</div><Button block icon={<PlusOutlined/>} disabled={batchRows.length >= 100} onClick={() => setBatchRows(previous => [...previous, newRow()])}>添加广告单元（{batchRows.length}/100）</Button></> }
+        ]}/>
+        <Collapse size="small" items={[{ key: 'advanced', label: '更多设置', children: <Row gutter={[16, 12]}>
+          <Col span={24}><Text>说明</Text><Input maxLength={500} style={{ marginTop: 6 }} value={description} onChange={event => setDescription(event.target.value)}/></Col>
+          <Col xs={12}><Text>目标窗口</Text><Select style={{ width: '100%', marginTop: 6 }} value={targetWindow} onChange={setTargetWindow} options={[{ value: '', label: '继承父单元' }, { value: 'TOP', label: 'TOP' }, { value: 'BLANK', label: 'BLANK' }]}/></Col>
+          <Col xs={12}><Text>启用 AdSense</Text><div style={{ marginTop: 10 }}><Switch checked={adsenseEnabled} onChange={setAdsenseEnabled}/></div></Col>
+        </Row> }]}/>
+        <Text type="secondary">所选网站来自当前 GAM 账号；域名关联保存在本站，创建操作会直接写入 GAM。</Text>
+      </div>
+    </Modal>
+  </Space>;
 }
