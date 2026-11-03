@@ -208,6 +208,14 @@ test('reports keep distinct ad unit IDs, page safely, and drill into exact rows'
     { headers:{ Cookie:cookie } });
   assert.equal(exported.status, 200);
   assert.match(await exported.text(), /unit-1|unit-2/);
+  const formulaName = await request('/api/admin/imports', { method:'POST', body:JSON.stringify({
+    channelId, fileName:'csv-safety.json', payload:[{ date:'2026-10-13', ad_unit:'=1+1', revenue:1 }]
+  }) });
+  assert.equal(formulaName.body.accepted, 1);
+  const csvQuery = new URLSearchParams({ start:'2026-10-13', end:'2026-10-13', dimensions:'adUnit' });
+  const csvResponse = await fetch('http://127.0.0.1:' + port + '/api/reports/export?' + csvQuery,
+    { headers:{ Cookie:cookie } });
+  assert.match(await csvResponse.text(), /"'=1\+1"/);
   cookie = '';
   const channelLogin = await request('/api/auth/login', { method:'POST',
     headers:{ 'X-Forwarded-Host':'adxpub.geekforest.ai' },

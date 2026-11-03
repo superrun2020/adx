@@ -510,7 +510,7 @@ function serveReports(req, res, exportCsv = false) {
     const columns = [...dimensions, ...allowed];
     const csvCell = (key, value) => {
       const raw = String(value ?? '');
-      return dimensions.includes(key) && /^[ - ]*[=+	@-]/.test(raw) ? "'" + raw : raw;
+      return dimensions.includes(key) && /^[=+@-]/.test(raw.trimStart()) ? "'" + raw : raw;
     };
     const csv = [columns.join(','), ...items.map(item => columns.map(key => `"${csvCell(key,item[key]).replaceAll('\"','\"\"')}"`).join(','))].join('\r\n');
     res.setHeader('Content-Type','text/csv; charset=utf-8');
