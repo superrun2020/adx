@@ -18,6 +18,7 @@ let mounted = false;
 let opening = false;
 let submitted = false;
 let appPromise;
+let readyPromise;
 const retryKey = 'adx_asset_retry_once';
 const dateText = date => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
 const today = new Date();
@@ -32,6 +33,21 @@ function loadApp() {
     throw error;
   });
   return appPromise;
+}
+
+function prepareApp() {
+  if (!readyPromise) readyPromise = loadApp().then(app => {
+    if (!opening && !mounted) {
+      button.disabled = false;
+      button.textContent = '登录';
+      status.textContent = '';
+    }
+    return app;
+  }).catch(error => {
+    readyPromise = null;
+    throw error;
+  });
+  return readyPromise;
 }
 
 function retryAutomatically() {
@@ -54,9 +70,6 @@ async function openApp(user) {
   if (mounted || opening) return;
   opening = true;
   button.disabled = true;
-  button.textContent = '正在进入后台…';
-  status.classList.add('loading');
-  status.textContent = '正在进入后台…';
   const saved = readCached(user, dashboardPath);
   const initialDashboard = { key: dashboardKey, data: saved?.data };
   initialDashboard.promise = requestDashboard().then(data => {
@@ -66,7 +79,7 @@ async function openApp(user) {
     return { data };
   }, error => ({ error }));
   try {
-    const app = await loadApp();
+    const app = await prepareApp();
     await app.mountApp(user, 'dashboard', initialDashboard);
     mounted = true;
     try { sessionStorage.removeItem(retryKey); } catch { /* Storage may be disabled. */ }
@@ -113,8 +126,15 @@ form.addEventListener('submit', async event => {
   }
 });
 
-// Restore a session while the real interface downloads in parallel.
-void loadApp().catch(() => {});
+// Finish loading the real interface before a new login can be submitted.
+void prepareApp().catch(error => {
+  console.error('app_preload_failed', error);
+  status.textContent = '后台资源加载失败，请刷新重试。';
+  retryButton.hidden = false;
+  retryAutomatically();
+});
+// The dashboard chart is optional, but fetching it early avoids a second visual load.
+void import('./RevenueChart.jsx').catch(() => {});
 fetch('/api/auth/me', { credentials: 'include', cache: 'no-store' })
   .then(async response => {
     if (!response.ok || submitted) return;
