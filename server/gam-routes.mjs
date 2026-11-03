@@ -118,7 +118,7 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
   }));
 
   app.get('/api/admin/gam-sync/runs', requireAuth, requireAdmin, (_req, res) => {
-    res.json({ ok: true, items: db.prepare('SELECT r.id,r.soap_account_id gamAccountId,s.name gamAccountName,r.window_start windowStart,r.window_end windowEnd,r.status,r.rows_read rowsRead,r.rows_written rowsWritten,r.error,r.started_at startedAt,r.finished_at finishedAt FROM soap_sync_runs r JOIN soap_accounts s ON s.id=r.soap_account_id ORDER BY r.id DESC LIMIT 100').all() });
+    res.json({ ok: true, items: db.prepare('SELECT r.id,r.soap_account_id gamAccountId,s.name gamAccountName,r.window_start windowStart,r.window_end windowEnd,r.status,r.stage,r.rows_read rowsRead,r.rows_written rowsWritten,r.timings_json timingsJson,r.error,r.started_at startedAt,r.finished_at finishedAt FROM soap_sync_runs r JOIN soap_accounts s ON s.id=r.soap_account_id ORDER BY r.id DESC LIMIT 100').all() });
   });
 
   app.get('/api/admin/gam-accounts/:id/ad-units', requireAuth, requireAdmin, route(async (req, res) => {
@@ -311,9 +311,18 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     if (scheduledSyncRunning) return;
     scheduledSyncRunning = true;
     try {
-      for (const item of db.prepare("SELECT * FROM soap_accounts WHERE status='active' AND rest_sync_enabled=1").all()) {
-        try { await gamSync.execute(item, { write: true }); }
-        catch (error) { console.error('gam_rest_sync_failed', item.id, error.message); }
+      const accounts = db.prepare("SELECT * FROM soap_accounts WHERE status='active' AND rest_sync_enabled=1").all();
+      // Overlap remote GAM work, while keeping the account-level lock and
+      // bounding concurrent report jobs to avoid API quota bursts.
+      for (let offset = 0; offset < accounts.length; offset += 2) {
+        await Promise.all(accounts.slice(offset, offset + 2).map(async item => {
+          try {
+            const result = await gamSync.execute(item, { write: true });
+            console.info('gam_rest_sync_complete', item.id, JSON.stringify(result.timingsMs));
+          } catch (error) {
+            console.error('gam_rest_sync_failed', item.id, error.message);
+          }
+        }));
       }
     } finally { scheduledSyncRunning = false; }
   }

@@ -21,6 +21,38 @@ app.set('trust proxy', 'loopback');
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 const db = new DatabaseSync(dbPath);
 db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;');
+const reportCache = new Map();
+let reportCacheDataVersion = db.prepare('PRAGMA data_version').get().data_version;
+function invalidateReportCache() { reportCache.clear(); }
+function cachedReport(req, res, next) {
+  // SQLite's data_version changes for writes from another connection; local
+  // writes invalidate explicitly after their audit or completed REST import.
+  const dataVersion = db.prepare('PRAGMA data_version').get().data_version;
+  if (dataVersion !== reportCacheDataVersion) {
+    invalidateReportCache();
+    reportCacheDataVersion = dataVersion;
+    dashboardDailyReady = false;
+  }
+  const key = req.user.id + ':' + req.originalUrl;
+  const hit = reportCache.get(key);
+  if (hit) {
+    reportCache.delete(key);
+    reportCache.set(key, hit);
+    res.setHeader('Server-Timing', 'app-cache;desc="hit";dur=0');
+    return res.json(hit);
+  }
+  const began = performance.now();
+  const send = res.json.bind(res);
+  res.json = payload => {
+    if (res.statusCode === 200 && payload?.ok) {
+      reportCache.set(key, payload);
+      if (reportCache.size > 128) reportCache.delete(reportCache.keys().next().value);
+    }
+    res.setHeader('Server-Timing', 'app-cache;desc="miss";dur=' + (performance.now() - began).toFixed(1));
+    return send(payload);
+  };
+  next();
+}
 function transaction(fn) {
   db.exec('BEGIN IMMEDIATE');
   try { const value = fn(); db.exec('COMMIT'); return value; }
@@ -171,12 +203,19 @@ for (const column of ['advertiser', 'bd']) {
 if (!db.prepare("SELECT 1 FROM pragma_table_info('revenue_facts') WHERE name='raw_json'").get()) {
   db.exec("ALTER TABLE revenue_facts ADD COLUMN raw_json TEXT NOT NULL DEFAULT '{}'");
 }
+if (!db.prepare("SELECT 1 FROM pragma_table_info('soap_sync_runs') WHERE name='stage'").get()) {
+  db.exec("ALTER TABLE soap_sync_runs ADD COLUMN stage TEXT NOT NULL DEFAULT ''");
+}
+if (!db.prepare("SELECT 1 FROM pragma_table_info('soap_sync_runs') WHERE name='timings_json'").get()) {
+  db.exec("ALTER TABLE soap_sync_runs ADD COLUMN timings_json TEXT NOT NULL DEFAULT '{}'");
+}
 ensureAdUnitIdDimension(db);
 db.exec('CREATE INDEX IF NOT EXISTS idx_revenue_ad_unit_id ON revenue_facts(ad_unit_id, report_date)');
 db.exec("INSERT OR IGNORE INTO channel_share_versions(channel_id,share_percent,effective_from,created_by) SELECT id,share_percent,'1900-01-01','migration' FROM channels");
 db.exec("CREATE TABLE IF NOT EXISTS upstream_share_versions (id INTEGER PRIMARY KEY AUTOINCREMENT, upstream_account_id INTEGER NOT NULL, share_percent REAL NOT NULL CHECK(share_percent BETWEEN 0 AND 100), effective_from TEXT NOT NULL, created_by TEXT NOT NULL, UNIQUE(upstream_account_id,effective_from), FOREIGN KEY(upstream_account_id) REFERENCES upstream_accounts(id) ON DELETE CASCADE)");
 db.exec("INSERT OR IGNORE INTO upstream_share_versions(upstream_account_id,share_percent,effective_from,created_by) SELECT id,100,'1900-01-01','migration' FROM upstream_accounts");
 db.exec("INSERT OR IGNORE INTO upstream_share_versions(upstream_account_id,share_percent,effective_from,created_by) SELECT id,share_percent,'2026-10-11','migration' FROM upstream_accounts");
+db.exec('CREATE TABLE IF NOT EXISTS dashboard_daily (report_date TEXT NOT NULL, channel_id INTEGER NOT NULL, domain TEXT NOT NULL, requests INTEGER NOT NULL, matched_requests INTEGER NOT NULL, impressions INTEGER NOT NULL, clicks INTEGER NOT NULL, revenue REAL NOT NULL, settled_revenue REAL NOT NULL, PRIMARY KEY(report_date,channel_id,domain)) WITHOUT ROWID');
 
 const normalizeEmail = v => String(v || '').trim().toLowerCase();
 const sha256 = value => crypto.createHash('sha256').update(String(value)).digest('hex');
@@ -192,6 +231,12 @@ function passwordMatches(password, encoded = '') {
 function audit(actor, action, targetType, targetId = '', detail = '', ip = '') {
   db.prepare('INSERT INTO audit_logs(actor_email,action,target_type,target_id,detail,ip) VALUES(?,?,?,?,?,?)')
     .run(actor || '', action, targetType, String(targetId), String(detail).slice(0, 2000), String(ip).slice(0, 80));
+  if (!action.startsWith('auth.') && action !== 'api.revenue' && action !== 'gam.report_preview') invalidateReportCache();
+  if (['upstream_account.create','upstream_account.update','ad_unit_domain.create','ad_unit_domain.update',
+    'share_rule.create','domain_share_rule.create','domain_share_rule.update','channel.update'].includes(action)) {
+    try { refreshDashboardDaily(); }
+    catch (error) { dashboardDailyReady = false; console.error('dashboard_daily_refresh_failed', error.message); }
+  }
 }
 
 const credentialKey = (() => {
@@ -222,15 +267,32 @@ async function issueServiceToken(credentials, scope = 'https://www.googleapis.co
   const tokenResponse = await fetch(tokenUri, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: `${unsigned}.${signature}` }) });
   const body = await tokenResponse.json().catch(() => ({}));
   if (!tokenResponse.ok || !body.access_token) throw new Error(`oauth_${tokenResponse.status}_${body.error || 'failed'}`);
-  return body.access_token;
+  return { token: body.access_token, expiresIn: Number(body.expires_in) || 3600 };
 }
+const gamTokens = new Map();
 async function gamTokenFor(account) {
-  const credentials = decryptCredential(account.credential_ciphertext);
-  if (!credentials.client_email || !credentials.private_key) throw new Error('invalid_service_account_json');
-  return issueServiceToken(credentials);
+  const key = Number(account.id);
+  const cipher = account.credential_ciphertext;
+  const cached = gamTokens.get(key);
+  if (cached?.cipher === cipher && cached.token && cached.expiresAt > Date.now() + 300000) return cached.token;
+  if (cached?.cipher === cipher && cached.promise) return cached.promise;
+  const promise = (async () => {
+    const credentials = decryptCredential(cipher);
+    if (!credentials.client_email || !credentials.private_key) throw new Error('invalid_service_account_json');
+    const result = await issueServiceToken(credentials);
+    gamTokens.set(key, { cipher, token: result.token, expiresAt: Date.now() + result.expiresIn * 1000 });
+    return result.token;
+  })();
+  gamTokens.set(key, { cipher, promise });
+  try { return await promise; }
+  catch (error) { if (gamTokens.get(key)?.promise === promise) gamTokens.delete(key); throw error; }
 }
 function domainFromAdUnit(value) { const raw=String(value||''); const labelled=raw.match(/(?:^|[_-])lb-((?:[a-z0-9](?:[a-z0-9-]*\.)+)[a-z]{2,})(?=$|[-_])/i); if(labelled)return normalizedDomain(labelled[1]); const match=raw.match(/(?:^|[-_])((?:[a-z0-9](?:[a-z0-9-]*\.)+)[a-z]{2,})(?=$|[-_])/i); return match?normalizedDomain(match[1]):''; }
-const gamSync = createGamSync({ db, transaction, tokenFor: gamTokenFor, normalizedDomain, domainFromAdUnit, audit });
+const gamSync = createGamSync({ db, transaction, tokenFor: gamTokenFor, normalizedDomain, domainFromAdUnit, audit,
+  onFactsChanged: (channelId, start, end) => {
+    try { refreshDashboardDaily(channelId, start, end); }
+    catch (error) { dashboardDailyReady = false; console.error('dashboard_daily_refresh_failed', error.message); }
+  } });
 
 const adminEmail = normalizeEmail(process.env.ADX_ADMIN_EMAIL);
 const adminPassword = String(process.env.ADX_ADMIN_PASSWORD || '');
@@ -375,17 +437,41 @@ app.get('/api/admin/ad-units', requireAuth, requireAdmin, (_req,res) => res.json
 
 const { runHourlyGamSync } = registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptCredential, tokenFor: gamTokenFor, gamSync, audit });
 
-app.get('/api/dashboard', requireAuth, (req, res) => {
+let dashboardDailyReady = true;
+function refreshDashboardDaily(channelId, start, end) {
+  const scoped = Number.isSafeInteger(channelId) && channelId > 0 && validDate(start) && validDate(end);
+  const where = scoped ? 'WHERE rf.channel_id=? AND rf.report_date BETWEEN ? AND ?' : '';
+  const params = scoped ? [channelId, start, end] : [];
+  const domain = mappedDomainSql('rf');
+  const settled = settledRevenueSql('rf');
+  const insertSql = 'INSERT INTO dashboard_daily(report_date,channel_id,domain,requests,matched_requests,impressions,clicks,revenue,settled_revenue) '
+    + 'SELECT rf.report_date,rf.channel_id,' + domain + ',SUM(rf.requests),SUM(rf.matched_requests),'
+    + 'SUM(rf.impressions),SUM(rf.clicks),SUM(rf.revenue),SUM(' + settled + ') '
+    + 'FROM revenue_facts rf ' + where + ' GROUP BY rf.report_date,rf.channel_id,' + domain;
+  transaction(() => {
+    if (scoped) db.prepare('DELETE FROM dashboard_daily WHERE channel_id=? AND report_date BETWEEN ? AND ?').run(...params);
+    else db.exec('DELETE FROM dashboard_daily');
+    db.prepare(insertSql).run(...params);
+  });
+  dashboardDailyReady = true;
+  invalidateReportCache();
+}
+if (!db.prepare('SELECT 1 FROM dashboard_daily LIMIT 1').get() &&
+    db.prepare('SELECT 1 FROM revenue_facts LIMIT 1').get()) refreshDashboardDaily();
+
+app.get('/api/dashboard', requireAuth, cachedReport, (req, res) => {
   const scope = reportScope(req), { start, end } = range(req), where = whereScope(scope, start, end);
-  const sums = db.prepare(`SELECT COALESCE(SUM(requests),0) requests,COALESCE(SUM(matched_requests),0) matched,COALESCE(SUM(impressions),0) impressions,COALESCE(SUM(clicks),0) clicks,COALESCE(SUM(revenue),0) revenue FROM revenue_facts WHERE ${where.sql}`).get(...where.params);
-  const share = scope ? Number(db.prepare('SELECT share_percent FROM channels WHERE id=?').get(scope)?.share_percent || 0) : 100;
-  const settled = settledRevenueSql('revenue_facts');
-  const factor = req.user.role === 'channel' ? settled : 'revenue';
-  const trend = db.prepare(`SELECT report_date date,ROUND(SUM(${factor}),6) revenue FROM revenue_facts WHERE ${where.sql} GROUP BY report_date ORDER BY report_date`).all(...where.params);
-  const topUrls = db.prepare(`SELECT ${mappedDomainSql('revenue_facts')} url,ROUND(SUM(${factor}),6) revenue FROM revenue_facts WHERE ${where.sql} GROUP BY ${mappedDomainSql('revenue_facts')} ORDER BY revenue DESC LIMIT 10`).all(...where.params);
+  const source = dashboardDailyReady ? 'dashboard_daily' : 'revenue_facts';
+  const sums = db.prepare('SELECT COALESCE(SUM(requests),0) requests,COALESCE(SUM(matched_requests),0) matched,COALESCE(SUM(impressions),0) impressions,COALESCE(SUM(clicks),0) clicks,COALESCE(SUM(revenue),0) revenue FROM ' + source + ' WHERE ' + where.sql).get(...where.params);
+  const factor = req.user.role === 'channel' ? (dashboardDailyReady ? 'settled_revenue' : settledRevenueSql('revenue_facts')) : 'revenue';
+  const domain = dashboardDailyReady ? 'domain' : mappedDomainSql('revenue_facts');
+  const trend = db.prepare('SELECT report_date date,ROUND(SUM(' + factor + '),6) revenue FROM ' + source + ' WHERE ' + where.sql + ' GROUP BY report_date ORDER BY report_date').all(...where.params);
+  const topUrls = db.prepare('SELECT ' + domain + ' url,ROUND(SUM(' + factor + '),6) revenue FROM ' + source + ' WHERE ' + where.sql + ' GROUP BY ' + domain + ' ORDER BY revenue DESC LIMIT 10').all(...where.params);
   const lastSync = db.prepare('SELECT created_at FROM import_runs ORDER BY id DESC LIMIT 1').get()?.created_at || null;
   const settledWhere = where.sql.replaceAll('report_date', 'rf.report_date').replaceAll('channel_id', 'rf.channel_id');
-  const settledRevenue = db.prepare(`SELECT COALESCE(SUM(${settledRevenueSql('rf')}),0) value FROM revenue_facts rf WHERE ${settledWhere}`).get(...where.params).value;
+  const settledRevenue = dashboardDailyReady
+    ? db.prepare('SELECT COALESCE(SUM(settled_revenue),0) value FROM dashboard_daily WHERE ' + where.sql).get(...where.params).value
+    : db.prepare('SELECT COALESCE(SUM(' + settledRevenueSql('rf') + '),0) value FROM revenue_facts rf WHERE ' + settledWhere).get(...where.params).value;
   res.json({ ok: true, summary: { ...sums, revenue: req.user.role === 'channel' ? settledRevenue : sums.revenue, channelRevenue: settledRevenue, matchRate: sums.requests ? sums.matched * 100 / sums.requests : 0 }, trend, topUrls, lastSync });
 });
 
@@ -530,12 +616,12 @@ function serveReports(req, res, exportCsv = false) {
   }
   res.json({ ok:true, items, total: rows[0]?.totalRows || 0, page, pageSize, dimensions });
 }
-app.get('/api/reports', requireAuth, (req, res) => serveReports(req, res));
+app.get('/api/reports', requireAuth, cachedReport, (req, res) => serveReports(req, res));
 app.get('/api/reports/export', requireAuth, (req, res) => serveReports(req, res, true));
 
 // Account-level report for the admin console. Keep settlement calculations on
 // the server so callers never need to infer the upstream deduction.
-app.get('/api/admin/reports/accounts', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/admin/reports/accounts', requireAuth, requireAdmin, cachedReport, (req, res) => {
   const { start, end } = range(req);
   const filters = ['rf.report_date BETWEEN ? AND ?'];
   const params = [start, end];
@@ -805,6 +891,13 @@ app.post('/api/admin/imports', requireAuth, requireAdmin, (req,res)=>{
   const upsert=db.prepare(`INSERT INTO revenue_facts(channel_id,report_date,hour,url,domain,account,ad_unit,ad_unit_id,country,requests,matched_requests,impressions,clicks,revenue,source_file,raw_json)
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(channel_id,report_date,hour,url,account,ad_unit,ad_unit_id,country) DO UPDATE SET requests=excluded.requests,matched_requests=excluded.matched_requests,impressions=excluded.impressions,clicks=excluded.clicks,revenue=excluded.revenue,domain=excluded.domain,source_file=excluded.source_file,raw_json=excluded.raw_json,imported_at=CURRENT_TIMESTAMP`);
   const runId=transaction(()=>{for(const {fact:f} of valid)upsert.run(f.channelId,f.reportDate,f.hour,f.url,f.domain,f.account,f.adUnit,f.adUnitId,f.country,f.requests,f.matched,f.impressions,f.clicks,f.revenue,f.sourceFile,f.rawJson);const run=db.prepare('INSERT INTO import_runs(actor_email,channel_id,source_file,total_rows,accepted_rows,rejected_rows,status,error_summary) VALUES(?,?,?,?,?,?,?,?)').run(req.user.email,channelId,fileName,rows.length,valid.length,rejected,rejected?'partial':'success',rejected?`${rejected} rows rejected`:'');return Number(run.lastInsertRowid)});
+  let firstDate = valid[0].fact.reportDate, lastDate = firstDate;
+  for (const { fact } of valid) {
+    if (fact.reportDate < firstDate) firstDate = fact.reportDate;
+    if (fact.reportDate > lastDate) lastDate = fact.reportDate;
+  }
+  try { refreshDashboardDaily(channelId, firstDate, lastDate); }
+  catch (error) { dashboardDailyReady = false; console.error('dashboard_daily_refresh_failed', error.message); }
   audit(req.user.email,'data.import','import',runId,JSON.stringify({channelId,fileName,total:rows.length,accepted:valid.length,rejected}),req.ip); res.json({ok:true,runId,total:rows.length,accepted:valid.length,rejected});
 });
 app.get('/api/admin/imports', requireAuth, requireAdmin, (_req,res)=>res.json({ok:true,items:db.prepare(`SELECT r.id,r.source_file sourceFile,r.total_rows totalRows,r.accepted_rows acceptedRows,r.rejected_rows rejectedRows,r.status,r.created_at createdAt,c.name channelName FROM import_runs r JOIN channels c ON c.id=r.channel_id ORDER BY r.id DESC LIMIT 100`).all()}));

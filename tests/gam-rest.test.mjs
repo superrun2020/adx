@@ -1,10 +1,30 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildGamAdUnit, createGamAdUnit, findGamAdUnitByCode, getGamAdUnit, getGamSite, listGamSites } from '../server/gam-beta.mjs';
+import { buildGamAdUnit, createGamAdUnit, findGamAdUnitByCode, gamApiRequest, getGamAdUnit, getGamSite, listGamSites } from '../server/gam-beta.mjs';
 import { buildReportDefinition, fetchRestReport, normalizeRestReportRows, setReportRange, validateReportDefinition } from '../server/gam-reports.mjs';
 
 const network = '123456';
 const parent = 'networks/123456/adUnits/9';
+
+test('GAM retries throttled reads but never duplicates writes', async () => {
+  let reads = 0, writes = 0;
+  const delays = [];
+  const fetchImpl = async (_url, options) => {
+    if (options.method === 'POST') { writes += 1; return json({ error: { message: 'throttled' } }, 429); }
+    reads += 1;
+    return reads === 1 ? json({ error: { message: 'throttled' } }, 429) : json({ name: 'networks/123456' });
+  };
+  const result = await gamApiRequest(network, 'token', 'networks/123456', {
+    fetchImpl, sleep: async ms => { delays.push(ms); }
+  });
+  assert.equal(result.name, 'networks/123456');
+  assert.equal(reads, 2);
+  assert.deepEqual(delays, [250]);
+  await assert.rejects(() => gamApiRequest(network, 'token', 'networks/123456/reports', {
+    method: 'POST', body: {}, fetchImpl, sleep: async () => {}
+  }), /gam_http_429/);
+  assert.equal(writes, 1);
+});
 
 function json(payload, status = 200) {
   return new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } });

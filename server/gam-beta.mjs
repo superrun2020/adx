@@ -68,7 +68,7 @@ export function buildGamAdUnit(plan, network, parent) {
   return adUnit;
 }
 
-export async function gamApiRequest(network, token, relativePath, { method = 'GET', query = {}, body, fetchImpl = fetch } = {}) {
+export async function gamApiRequest(network, token, relativePath, { method = 'GET', query = {}, body, fetchImpl = fetch, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
   const code = networkCode(network);
   if (!token) throw new Error('missing_gam_access_token');
   if (relativePath !== 'networks/' + code && !String(relativePath).startsWith('networks/' + code + '/')) {
@@ -78,18 +78,34 @@ export async function gamApiRequest(network, token, relativePath, { method = 'GE
   for (const [key, value] of Object.entries(query)) {
     if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
   }
-  const response = await fetchImpl(url, {
-    method,
-    headers: { Authorization: 'Bearer ' + token, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-    signal: AbortSignal.timeout(30000)
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
+  // Retrying create/run POSTs can duplicate remote resources or report jobs.
+  const retryableMethod = method === 'GET' || method === 'PATCH';
+  for (let attempt = 0; attempt < (retryableMethod ? 3 : 1); attempt += 1) {
+    let response;
+    try {
+      response = await fetchImpl(url, {
+        method,
+        headers: { Authorization: 'Bearer ' + token, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+        signal: AbortSignal.timeout(30000)
+      });
+    } catch (error) {
+      if (!retryableMethod || attempt === 2) throw error;
+      await sleep(250 * 2 ** attempt);
+      continue;
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (response.ok) return payload;
+    const transient = [429, 500, 502, 503, 504].includes(response.status);
+    if (retryableMethod && transient && attempt < 2) {
+      const retryAfter = Number(response.headers.get('Retry-After'));
+      await sleep(Number.isFinite(retryAfter) && retryAfter > 0
+        ? Math.min(5000, retryAfter * 1000) : 250 * 2 ** attempt);
+      continue;
+    }
     const detail = String(payload?.error?.message || payload?.error?.status || 'request_failed').slice(0, 400);
     throw new Error('gam_http_' + response.status + ': ' + detail);
   }
-  return payload;
 }
 
 function request(network, token, suffix, options) {

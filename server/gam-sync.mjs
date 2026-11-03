@@ -21,7 +21,7 @@ function asDate(value) {
   return date;
 }
 
-export function createGamSync({ db, transaction, tokenFor, normalizedDomain, domainFromAdUnit, audit }) {
+export function createGamSync({ db, transaction, tokenFor, normalizedDomain, domainFromAdUnit, audit, onFactsChanged = () => {} }) {
   const busy = new Set();
   const upsert = db.prepare('INSERT INTO revenue_facts(channel_id,report_date,hour,url,domain,account,ad_unit,ad_unit_id,country,requests,matched_requests,impressions,clicks,revenue,source_file,raw_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(channel_id,report_date,hour,url,account,ad_unit,ad_unit_id,country) DO UPDATE SET requests=excluded.requests,matched_requests=excluded.matched_requests,impressions=excluded.impressions,clicks=excluded.clicks,revenue=excluded.revenue,domain=excluded.domain,source_file=excluded.source_file,raw_json=excluded.raw_json,imported_at=CURRENT_TIMESTAMP');
 
@@ -72,20 +72,30 @@ export function createGamSync({ db, transaction, tokenFor, normalizedDomain, dom
 
   async function execute(account, { start, end, write = false }) {
     return locked(account.id, async () => {
+      const started = performance.now();
+      const timingsMs = {};
+      const checkpoint = stage => { timingsMs[stage] = Math.round(performance.now() - started); };
       const { channelId, accountKey } = mapping(account);
       const from = asDate(start || localDate(account.rest_network_timezone, -1));
       const through = asDate(end || localDate(account.rest_network_timezone));
       if (from > through || Date.parse(through) - Date.parse(from) > 31 * 86400000) throw new Error('invalid_report_range');
       let runId;
       if (write) {
-        runId = Number(db.prepare("INSERT INTO soap_sync_runs(soap_account_id,channel_id,window_start,window_end,status) VALUES(?,?,?,?, 'running')")
+        runId = Number(db.prepare("INSERT INTO soap_sync_runs(soap_account_id,channel_id,window_start,window_end,status,stage) VALUES(?,?,?,?, 'running','authorizing')")
           .run(account.id, channelId, from, through).lastInsertRowid);
       }
+      const stage = value => { if (write) db.prepare('UPDATE soap_sync_runs SET stage=? WHERE id=?').run(value, runId); };
       try {
         const token = await tokenFor(account);
+        checkpoint('oauth');
+        stage('preparing_report');
         const activeReport = await setReportRange(account.network_code, token, account.rest_report_name, from, through);
         validateReportDefinition(activeReport, account.network_code);
+        checkpoint('report_setup');
+        stage('fetching_report');
         const result = await fetchRestReport(account.network_code, token, activeReport.name);
+        checkpoint('remote_report');
+        if (write) db.prepare('UPDATE soap_sync_runs SET rows_read=? WHERE id=?').run(result.rows.length, runId);
         const actual = result.dateRanges[0];
         const dateKey = date => [date?.year, date?.month, date?.day].map(Number).join('-');
         const startKey = from.split('-').map(Number).join('-');
@@ -99,8 +109,10 @@ export function createGamSync({ db, transaction, tokenFor, normalizedDomain, dom
           const url = fact.url || domainFromAdUnit(fact.adUnit);
           return { ...fact, url, domain: normalizedDomain(url) };
         });
+        checkpoint('normalize');
         const revenue = facts.reduce((sum, fact) => sum + fact.revenue, 0);
         if (write) {
+          stage('writing');
           transaction(() => {
             // A completed REST run replaces that account's previous rows for
             // the same dates, including legacy five-dimensional rows.
@@ -115,8 +127,10 @@ export function createGamSync({ db, transaction, tokenFor, normalizedDomain, dom
               db.prepare('UPDATE soap_accounts SET rest_report_name=?,updated_at=CURRENT_TIMESTAMP WHERE id=?')
                 .run(activeReport.name, account.id);
           });
-          db.prepare("UPDATE soap_sync_runs SET status='success',rows_read=?,rows_written=?,finished_at=CURRENT_TIMESTAMP WHERE id=?")
-            .run(result.rows.length, facts.length, runId);
+          onFactsChanged(channelId, from, through);
+          checkpoint('persist');
+          db.prepare("UPDATE soap_sync_runs SET status='success',stage='complete',rows_read=?,rows_written=?,timings_json=?,finished_at=CURRENT_TIMESTAMP WHERE id=?")
+            .run(result.rows.length, facts.length, JSON.stringify(timingsMs), runId);
         } else {
           db.prepare('UPDATE soap_accounts SET rest_last_preview_at=CURRENT_TIMESTAMP,rest_last_preview_rows=? WHERE id=?')
             .run(facts.length, account.id);
@@ -126,12 +140,12 @@ export function createGamSync({ db, transaction, tokenFor, normalizedDomain, dom
         }
         return {
           start: from, end: through, rows: facts.length, revenue,
-          moneyDivisor: account.rest_money_divisor,
+          moneyDivisor: account.rest_money_divisor, timingsMs,
           sample: write ? undefined : facts.slice(0, 10).map(({ rawJson, ...fact }) => fact)
         };
       } catch (error) {
-        if (write) db.prepare("UPDATE soap_sync_runs SET status='failed',error=?,finished_at=CURRENT_TIMESTAMP WHERE id=?")
-          .run(String(error.message).slice(0, 1000), runId);
+        if (write) db.prepare("UPDATE soap_sync_runs SET status='failed',stage='failed',error=?,timings_json=?,finished_at=CURRENT_TIMESTAMP WHERE id=?")
+          .run(String(error.message).slice(0, 1000), JSON.stringify(timingsMs), runId);
         throw error;
       }
     });

@@ -243,3 +243,49 @@ test('reports keep distinct ad unit IDs, page safely, and drill into exact rows'
   assert.equal((await request('/api/reports?dimensions=advertiser',
     { headers:{ 'X-Forwarded-Host':'adxpub.geekforest.ai' } })).response.status, 403);
 });
+
+test('report cache is user scoped and invalidates after an import', async () => {
+  cookie = '';
+  const login = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: 'admin@example.test', password: 'AdminPass123!' }) });
+  cookie = login.response.headers.get('set-cookie').split(';')[0];
+  const channelId = (await request('/api/admin/channels')).body.items[0].id;
+  const route = '/api/dashboard?start=2026-10-20&end=2026-10-20';
+  const payload = revenue => [{ date: '2026-10-20', url: 'https://cache-check.example/a', ad_unit: 'cache', revenue }];
+  const firstImport = await request('/api/admin/imports', { method: 'POST', body: JSON.stringify({ channelId, fileName: 'cache-check.json', payload: payload(10) }) });
+  assert.equal(firstImport.response.status, 200);
+  const first = await request(route);
+  assert.equal(first.body.summary.revenue, 10);
+  assert.match(first.response.headers.get('server-timing'), /miss/);
+  const cached = await request(route);
+  assert.equal(cached.body.summary.revenue, 10);
+  assert.match(cached.response.headers.get('server-timing'), /hit/);
+  const secondImport = await request('/api/admin/imports', { method: 'POST', body: JSON.stringify({ channelId, fileName: 'cache-check.json', payload: payload(25) }) });
+  assert.equal(secondImport.response.status, 200);
+  const refreshed = await request(route);
+  assert.equal(refreshed.body.summary.revenue, 25);
+  assert.match(refreshed.response.headers.get('server-timing'), /miss/);
+});
+
+test('dashboard daily totals rebuild after domain and share changes', async () => {
+  cookie = '';
+  const login = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: 'admin@example.test', password: 'AdminPass123!' }) });
+  cookie = login.response.headers.get('set-cookie').split(';')[0];
+  const channelId = (await request('/api/admin/channels')).body.items[0].id;
+  const adUnit = 'dashboard-rule-unique';
+  const imported = await request('/api/admin/imports', { method: 'POST', body: JSON.stringify({
+    channelId, fileName: 'dashboard-rule.json', payload: [{ date: '2026-10-21', url: 'https://original.example.test/p', ad_unit: adUnit, revenue: 20 }]
+  }) });
+  assert.equal(imported.response.status, 200);
+  const route = '/api/dashboard?start=2026-10-21&end=2026-10-21';
+  assert.equal((await request(route)).body.topUrls[0].url, 'original.example.test');
+  const mapped = await request('/api/admin/ad-unit-domains', { method: 'POST', body: JSON.stringify({ adUnit, domain: 'https://mapped.example.test/p' }) });
+  assert.equal(mapped.response.status, 201);
+  assert.equal((await request(route)).body.topUrls[0].url, 'mapped.example.test');
+  const rule = await request('/api/admin/share-rules', { method: 'POST', body: JSON.stringify({
+    channelId, scopeType: 'ad_unit', scopeValue: adUnit, sharePercent: 50, effectiveFrom: '2026-10-21'
+  }) });
+  assert.equal(rule.response.status, 201);
+  const refreshed = await request(route);
+  assert.equal(refreshed.body.summary.revenue, 20);
+  assert.equal(refreshed.body.summary.channelRevenue, 10);
+});
