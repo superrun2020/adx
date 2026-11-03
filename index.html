@@ -14,7 +14,13 @@
       .boot-card form{margin-top:28px}.boot-card label{display:block;margin:16px 0 8px}.boot-card input{width:100%;height:42px;padding:8px 12px;border:1px solid #b8c8d1;border-radius:4px;font:inherit}
       .boot-card button{width:100%;height:42px;margin-top:24px;border:0;border-radius:4px;background:#1677ff;color:#fff;font:inherit;cursor:pointer}.boot-card button:disabled{opacity:.6;cursor:wait}
       #boot-status{min-height:22px;color:#b42318;font-size:14px}#boot-status.loading{color:#587184}
+      .boot-page[hidden]{display:none}.boot-shell{min-height:100vh;display:grid;grid-template-columns:238px 1fr;background:#f4f7f9;color:#172b3a}
+      .boot-shell aside{background:#12293a;color:#fff;padding:20px 18px}.boot-shell aside strong{display:inline-grid;place-items:center;width:40px;height:40px;margin-right:12px;background:#0b7189}.boot-shell aside p{padding:12px 16px;color:#c4d6e0}
+      .boot-shell nav{display:grid;gap:3px;margin-top:28px}.boot-shell nav button{padding:12px 16px;border:0;border-radius:4px;background:none;color:#c4d6e0;text-align:left;font:inherit;cursor:pointer}.boot-shell nav button:hover,.boot-shell nav button.selected{background:#1b4057;color:#fff}
+      .boot-shell main header{height:72px;padding:24px 28px;background:#fff;border-bottom:1px solid #e4ebef}.boot-shell main section{margin:24px 28px;padding:32px;background:#fff;border:1px solid #dfe8ed;border-radius:6px}.boot-shell main h1{font-size:20px}.boot-shell main p{color:#587184}
+      .boot-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px}.boot-metrics article{display:flex;flex-direction:column;gap:12px;padding:20px;border:1px solid #dfe8ed;border-radius:6px}.boot-metrics span{color:#6d8391;font-size:14px}.boot-metrics strong{font-size:24px}.boot-shell h2{font-size:18px}.boot-top-urls{list-style:none;padding:0;margin:0}.boot-top-urls li{display:flex;justify-content:space-between;gap:24px;padding:10px 0;border-bottom:1px solid #e4ebef}.boot-top-urls span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       @media(max-width:850px){.boot-page{display:block;padding:48px 20px}.boot-brand{max-width:480px;margin:0 auto 36px}.boot-card{max-width:480px;margin:auto}}
+      @media(max-width:850px){.boot-shell{grid-template-columns:1fr}.boot-shell aside{padding:12px}.boot-shell aside span{display:none}.boot-shell nav{display:flex;gap:4px;overflow-x:auto;margin-top:12px}.boot-shell nav button{flex:none;padding:10px 12px}.boot-shell main section{margin:16px;padding:20px}}
     </style>
   </head>
   <body>
