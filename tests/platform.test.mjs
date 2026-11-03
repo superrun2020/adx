@@ -20,9 +20,11 @@ async function request(route, options = {}) {
 }
 
 before(async () => {
-  child = spawn(process.execPath, ['server/index.mjs'], {
-    cwd: path.resolve(import.meta.dirname, '..'),
-    env: { ...process.env, PORT: String(port), ADX_DB_PATH: path.join(dir, 'test.sqlite'), ADX_ADMIN_EMAIL: 'admin@example.test', ADX_ADMIN_PASSWORD: 'AdminPass123!' },
+  const root = path.resolve(import.meta.dirname, '..');
+  const goBinary = process.env.ADX_TEST_GO_BINARY;
+  child = spawn(goBinary || process.execPath, goBinary ? [] : ['server/index.mjs'], {
+    cwd: root,
+    env: { ...process.env, PORT: String(port), ADX_SITE_ROOT: root, ADX_GAM_WORKER_DISABLED: 'true', ADX_DB_PATH: path.join(dir, 'test.sqlite'), ADX_ADMIN_EMAIL: 'admin@example.test', ADX_ADMIN_PASSWORD: 'AdminPass123!' },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   for (let i = 0; i < 50; i += 1) {

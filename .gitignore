@@ -4,4 +4,6 @@ data/*.sqlite
 data/*.sqlite-shm
 data/*.sqlite-wal
 .env
+backend-go/adx-server
+backend-go/adx-server.exe
 .DS_Store
