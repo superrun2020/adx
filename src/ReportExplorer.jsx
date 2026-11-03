@@ -5,7 +5,7 @@ import { BarChartOutlined, DownloadOutlined, FilterOutlined, ReloadOutlined } fr
 const { Title, Text } = Typography;
 const dimensions = [
   ['date','日期'], ['hour','小时'], ['account','上游账号'], ['channel','渠道'],
-  ['advertiser','广告主'], ['bd','BD'], ['url','网站'], ['country','国家'],
+  ['advertiser','广告主'], ['bd','BD'], ['url','域名'], ['country','国家'],
   ['adUnit','广告单元'], ['adUnitId','广告单元 ID']
 ];
 const coreMetrics = [
@@ -24,6 +24,7 @@ const pct = value => Number(value || 0).toFixed(2) + '%';
 const defaultFilters = { source:'rest', upstreamAccount:'', channelId:'', advertiser:'', bd:'',
   adUnit:'', adUnitId:'', domain:'', country:'', hour:'', minRequests:'',
   minRevenue:'', minMatchRate:'', minEcpm:'' };
+const defaultDimensions = ['url','adUnit','adUnitId'];
 const width = { date:115, hour:75, account:170, channel:140, advertiser:150, bd:130,
   url:240, country:90, adUnit:240, adUnitId:150 };
 
@@ -43,7 +44,7 @@ function metricColumns(selected, admin) {
 }
 
 export default function ReportExplorer({ range, setRange, admin }) {
-  const [selectedDimensions, setSelectedDimensions] = useState(['date','account','url','adUnit','adUnitId']);
+  const [selectedDimensions, setSelectedDimensions] = useState(defaultDimensions);
   const [selectedMetrics, setSelectedMetrics] = useState(coreMetrics.map(([key]) => key));
   const [filters, setFilters] = useState(defaultFilters), [applied, setApplied] = useState(defaultFilters);
   const [options, setOptions] = useState({ accounts:[], channels:[] });
@@ -89,7 +90,7 @@ export default function ReportExplorer({ range, setRange, admin }) {
   }, [drill,detailPage]);
   const search = () => { setPage(1); setApplied({ ...filters }); setFilterOpen(false); };
   const reset = () => { setFilters(defaultFilters); setApplied(defaultFilters); setPage(1);
-    setSelectedDimensions(['date','account','url','adUnit','adUnitId']); setSelectedMetrics(coreMetrics.map(([key]) => key)); };
+    setSelectedDimensions(defaultDimensions); setSelectedMetrics(coreMetrics.map(([key]) => key)); };
   const openDetail = row => {
     const values = Object.fromEntries(selectedDimensions.map(key =>
       [key, key === 'channel' ? row.channelId : key === 'url' ? row.rawUrl : row[key]]));
@@ -114,11 +115,13 @@ export default function ReportExplorer({ range, setRange, admin }) {
   const detailColumns = [...dimensionColumns(detailDimensions),...metricColumns(selectedMetrics,admin)];
   return <Space direction="vertical" size={16} className="page-stack">
     <div className="page-heading"><div><Title level={2}>数据报告</Title>
-      <Text type="secondary">Google Ad Manager REST 同步数据；支持多维查询、指标筛选和点击下钻</Text></div>
+      <Text type="secondary">默认汇总所选日期范围内的域名与广告单元；勾选“日期”可按天拆分，点击行可下钻</Text></div>
       <Button icon={<ReloadOutlined/>} loading={loading} onClick={() => setApplied({ ...applied })}>刷新</Button></div>
     {error && <Alert type="error" showIcon message="报表加载失败" description={error}/>}
     <Card><Space wrap>
-      <DatePicker.RangePicker value={range} onChange={value => value && setRange(value)}/>
+      <DatePicker.RangePicker value={range} onChange={value => {
+        if (value) { setPage(1); setDrill(null); setRange(value); }
+      }}/>
       {admin && <Select allowClear showSearch placeholder="上游账号" value={filters.upstreamAccount || undefined}
         onChange={value => setFilter('upstreamAccount',value)}
         options={options.accounts.map(item => ({ value:item.accountKey, label:item.name + '（' + item.accountKey + '）' }))} style={{width:220}}/>}
@@ -138,7 +141,7 @@ export default function ReportExplorer({ range, setRange, admin }) {
         onChange={value => value.length && setSelectedMetrics(value)}
         options={shownMetrics.map(([value,label]) => ({value,label}))} style={{width:'100%'}}/></Col>
     </Row></Card>
-    <Card title="REST 数据明细" extra={<Space><Text type="secondary">共 {number(total)} 组</Text>
+    <Card title={selectedDimensions.includes('date') ? '按日期拆分的数据明细' : '所选区间汇总'} extra={<Space><Text type="secondary">{range[0].format('YYYY-MM-DD')} 至 {range[1].format('YYYY-MM-DD')} · 共 {number(total)} 组</Text>
       <Button icon={<DownloadOutlined/>} loading={exporting} onClick={exportCsv}>导出 CSV</Button></Space>}>
       <Table size="small" rowKey={(row,index) => String(page) + '-' + index} loading={loading} dataSource={rows}
         columns={columns} scroll={{x:'max-content'}} onRow={row => ({

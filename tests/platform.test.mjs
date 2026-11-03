@@ -177,11 +177,21 @@ test('reports keep distinct ad unit IDs, page safely, and drill into exact rows'
     { date:'2026-10-12', hour:12, account:'acct-layered', ad_unit:'Same name', ad_unit_id:'unit-1',
       url:'https://report.example.test', country:'US', requests:100, matched_requests:80, impressions:60, clicks:3, revenue:10 },
     { date:'2026-10-12', hour:13, account:'acct-layered', ad_unit:'Same name', ad_unit_id:'unit-2',
-      url:'https://report.example.test', country:'US', requests:200, matched_requests:180, impressions:150, clicks:8, revenue:20 }
+      url:'https://report.example.test', country:'US', requests:200, matched_requests:180, impressions:150, clicks:8, revenue:20 },
+    { date:'2026-10-13', hour:12, account:'acct-layered', ad_unit:'Same name', ad_unit_id:'unit-1',
+      url:'https://report.example.test', country:'US', requests:50, matched_requests:40, impressions:30, clicks:2, revenue:5 }
   ];
   const imported = await request('/api/admin/imports', { method:'POST',
     body:JSON.stringify({ channelId, fileName:'six-dimensional.json', payload }) });
-  assert.equal(imported.body.accepted, 2);
+  assert.equal(imported.body.accepted, 3);
+  const period = await request('/api/reports?start=2026-10-12&end=2026-10-13&dimensions=url,adUnit,adUnitId');
+  assert.equal(period.body.total, 2);
+  const unitOne = period.body.items.find(item => item.adUnitId === 'unit-1');
+  assert.equal(unitOne.revenue, 15);
+  assert.equal(unitOne.requests, 150);
+  assert.equal(unitOne.date, undefined);
+  const byDay = await request('/api/reports?start=2026-10-12&end=2026-10-13&dimensions=date,url,adUnit,adUnitId');
+  assert.equal(byDay.body.total, 3);
   const query = new URLSearchParams({ start:'2026-10-12', end:'2026-10-12',
     dimensions:'date,adUnit,adUnitId,channel,advertiser,bd', page:'1', pageSize:'1' });
   const first = await request('/api/reports?' + query);
