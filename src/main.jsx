@@ -38,24 +38,44 @@ async function api(path, options = {}) {
 const money = value => `$${Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const number = value => Number(value || 0).toLocaleString('zh-CN');
 
+function retryAssetLoad(error) {
+  const detail = String(error?.message || error);
+  if (!/Failed to fetch dynamically imported module|Importing a module script failed|Failed to load module script|Loading chunk|ChunkLoadError|CSS_CHUNK_LOAD_FAILED/i.test(detail)) return false;
+  try {
+    if (sessionStorage.getItem('adx_route_retry_once')) return false;
+    sessionStorage.setItem('adx_route_retry_once', '1');
+  } catch { return false; }
+  window.setTimeout(() => window.location.reload(), 300);
+  return true;
+}
+
 class PageErrorBoundary extends React.Component {
-  state = { error: null };
+  state = { error: null, recovering: false };
   static getDerivedStateFromError(error) { return { error }; }
-  componentDidCatch(error) { console.error('page_render_failed', error); }
+  componentDidCatch(error) {
+    console.error('page_render_failed', error);
+    if (retryAssetLoad(error)) this.setState({ recovering: true });
+  }
   render() {
-    if (this.state.error) return <Card title="页面加载失败" extra={<Button onClick={() => window.location.reload()}>刷新页面</Button>}><Alert type="error" showIcon message="页面组件发生异常" description="请刷新后重试；如果仍然失败，请把此页面截图和浏览器控制台错误发给技术人员。" /></Card>;
+    if (this.state.error) return <Card title={this.state.recovering ? '正在恢复页面…' : '页面暂时无法显示'}
+      extra={<Button onClick={() => window.location.reload()}>重新加载</Button>}>
+      <Alert type="warning" showIcon message={this.state.recovering ? '正在重新连接资源' : '请重新加载后继续使用'} />
+    </Card>;
     return this.props.children;
   }
 }
 
 class AppErrorBoundary extends React.Component {
-  state = { error: null };
+  state = { error: null, recovering: false };
   static getDerivedStateFromError(error) { return { error }; }
-  componentDidCatch(error) { console.error('app_render_failed', error); }
+  componentDidCatch(error) {
+    console.error('app_render_failed', error);
+    if (retryAssetLoad(error)) this.setState({ recovering: true });
+  }
   render() {
     if (!this.state.error) return this.props.children;
     return <div style={{ minHeight: '100vh', padding: '10vh 8vw', background: '#f4f7f9', color: '#172b3a' }}>
-      <h1>工作区加载失败</h1><p>网络可能中断，刷新后可继续使用。</p>
+      <h1>{this.state.recovering ? '正在恢复后台…' : '后台暂时无法显示'}</h1><p>请检查网络连接后重新加载。</p>
       <button type="button" onClick={() => window.location.reload()}>重新加载</button>
     </div>;
   }

@@ -50,6 +50,9 @@ export default function ReportExplorer({ range, setRange, admin }) {
   const [options, setOptions] = useState({ accounts:[], channels:[] });
   const [rows, setRows] = useState([]), [total, setTotal] = useState(0);
   const [page, setPage] = useState(1), [pageSize, setPageSize] = useState(50);
+  const [dailyRows, setDailyRows] = useState([]), [dailyTotal, setDailyTotal] = useState(0);
+  const [dailyPage, setDailyPage] = useState(1), [dailyLoading, setDailyLoading] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(null);
   const [loading, setLoading] = useState(false), [error, setError] = useState('');
   const [filterOpen, setFilterOpen] = useState(false), [exporting, setExporting] = useState(false);
   const [drill, setDrill] = useState(null), [detailRows, setDetailRows] = useState([]);
@@ -71,13 +74,24 @@ export default function ReportExplorer({ range, setRange, admin }) {
       .catch(cause => message.error('筛选项加载失败：' + cause.message));
   }, [admin]);
   useEffect(() => {
-    let active = true; setLoading(true); setError('');
-    getJson('/api/reports?' + params(selectedDimensions,page,pageSize))
+    let active = true; setLoading(true); setError(''); setRows([]); setTotal(0);
+    const extra = selectedDate && selectedDimensions.includes('date')
+      ? { drill:JSON.stringify({ date:selectedDate }) } : {};
+    getJson('/api/reports?' + params(selectedDimensions,page,pageSize,extra))
       .then(data => { if (active) { setRows(data.items || []); setTotal(data.total || 0); } })
       .catch(cause => { if (active) { setError(cause.message); setRows([]); setTotal(0); } })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [range[0].valueOf(),range[1].valueOf(),selectedDimensions.join(','),applied,page,pageSize]);
+  }, [range[0].valueOf(),range[1].valueOf(),selectedDimensions.join(','),applied,page,pageSize,selectedDate]);
+  useEffect(() => {
+    if (!selectedDimensions.includes('date')) { setDailyRows([]); setDailyTotal(0); return; }
+    let active = true; setDailyLoading(true); setDailyRows([]); setDailyTotal(0);
+    getJson('/api/reports?' + params(['date'],dailyPage,200))
+      .then(data => { if (active) { setDailyRows(data.items || []); setDailyTotal(data.total || 0); } })
+      .catch(cause => { if (active) message.error('每日汇总加载失败：' + cause.message); })
+      .finally(() => { if (active) setDailyLoading(false); });
+    return () => { active = false; };
+  }, [range[0].valueOf(),range[1].valueOf(),applied,dailyPage,selectedDimensions.includes('date')]);
   const detailDimensions = shownDimensions.map(([key]) => key);
   useEffect(() => {
     if (!drill) return;
@@ -88,8 +102,8 @@ export default function ReportExplorer({ range, setRange, admin }) {
       .finally(() => { if (active) setDetailLoading(false); });
     return () => { active = false; };
   }, [drill,detailPage]);
-  const search = () => { setPage(1); setApplied({ ...filters }); setFilterOpen(false); };
-  const reset = () => { setFilters(defaultFilters); setApplied(defaultFilters); setPage(1);
+  const search = () => { setPage(1); setDailyPage(1); setSelectedDate(null); setApplied({ ...filters }); setFilterOpen(false); };
+  const reset = () => { setFilters(defaultFilters); setApplied(defaultFilters); setPage(1); setDailyPage(1); setSelectedDate(null);
     setSelectedDimensions(defaultDimensions); setSelectedMetrics(coreMetrics.map(([key]) => key)); };
   const openDetail = row => {
     const values = Object.fromEntries(selectedDimensions.map(key =>
@@ -99,7 +113,10 @@ export default function ReportExplorer({ range, setRange, admin }) {
   const exportCsv = async () => {
     setExporting(true);
     try {
-      const query = params(selectedDimensions,1,50000,{ metrics:selectedMetrics.join(',') });
+      const query = params(selectedDimensions,1,50000,{
+        metrics:selectedMetrics.join(','),
+        ...(selectedDate && selectedDimensions.includes('date') ? {drill:JSON.stringify({date:selectedDate})} : {})
+      });
       const response = await fetch('/api/reports/export?' + query, { credentials:'include' });
       if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.error || 'http_' + response.status); }
       const blob = await response.blob(), url = URL.createObjectURL(blob);
@@ -120,7 +137,7 @@ export default function ReportExplorer({ range, setRange, admin }) {
     {error && <Alert type="error" showIcon message="报表加载失败" description={error}/>}
     <Card><Space wrap>
       <DatePicker.RangePicker value={range} onChange={value => {
-        if (value) { setPage(1); setDrill(null); setRange(value); }
+        if (value) { setPage(1); setDailyPage(1); setSelectedDate(null); setDrill(null); setRange(value); }
       }}/>
       {admin && <Select allowClear showSearch placeholder="上游账号" value={filters.upstreamAccount || undefined}
         onChange={value => setFilter('upstreamAccount',value)}
@@ -135,13 +152,32 @@ export default function ReportExplorer({ range, setRange, admin }) {
       <Button onClick={reset}>重置</Button>
     </Space><Row gutter={[16,12]} style={{marginTop:16}}>
       <Col xs={24} xl={12}><Text>分组维度</Text><Select mode="multiple" value={selectedDimensions}
-        onChange={value => { if (value.length) { setPage(1); setSelectedDimensions(value); } }}
+        onChange={value => { if (value.length) {
+          setPage(1); setDailyPage(1);
+          if (!value.includes('date')) setSelectedDate(null);
+          setSelectedDimensions(value.includes('date') ? ['date', ...value.filter(key => key !== 'date')] : value);
+        } }}
         options={shownDimensions.map(([value,label]) => ({value,label}))} style={{width:'100%'}}/></Col>
       <Col xs={24} xl={12}><Text>显示指标</Text><Select mode="multiple" value={selectedMetrics}
         onChange={value => value.length && setSelectedMetrics(value)}
         options={shownMetrics.map(([value,label]) => ({value,label}))} style={{width:'100%'}}/></Col>
     </Row></Card>
+    {selectedDimensions.includes('date') && <Card title="所选区间每日汇总"
+      extra={<Text type="secondary">{range[0].format('YYYY-MM-DD')} 至 {range[1].format('YYYY-MM-DD')} · {number(dailyTotal)} 个有数据日期</Text>}>
+      <Text type="secondary">按最新日期排序；点击日期可查看该日明细，再点一次或选择“全部日期”恢复整个区间。</Text>
+      <Table style={{marginTop:12}} size="small" rowKey="date" loading={dailyLoading} dataSource={dailyRows}
+        columns={[{title:'日期',dataIndex:'date',width:130},{title:'请求',dataIndex:'requests',align:'right',render:number},
+          {title:'展示',dataIndex:'impressions',align:'right',render:number},
+          {title:'收入',dataIndex:'revenue',align:'right',render:money}]}
+        scroll={{x:520,y:240}} onRow={row => ({
+          onClick:() => { setPage(1); setSelectedDate(current => current === row.date ? null : row.date); },
+          style:{cursor:'pointer',background:selectedDate === row.date ? '#e6f4ff' : undefined}
+        })} pagination={dailyTotal > 200 ? {current:dailyPage,pageSize:200,total:dailyTotal,
+          showSizeChanger:false,onChange:setDailyPage} : false}
+        locale={{emptyText:'所选日期范围内没有已同步的数据'}}/>
+    </Card>}
     <Card title={selectedDimensions.includes('date') ? '按日期拆分的数据明细' : '所选区间汇总'} extra={<Space><Text type="secondary">{range[0].format('YYYY-MM-DD')} 至 {range[1].format('YYYY-MM-DD')} · 共 {number(total)} 组</Text>
+      {selectedDate && <Button size="small" onClick={() => { setPage(1); setSelectedDate(null); }}>全部日期</Button>}
       <Button icon={<DownloadOutlined/>} loading={exporting} onClick={exportCsv}>导出 CSV</Button></Space>}>
       <Table size="small" rowKey={(row,index) => String(page) + '-' + index} loading={loading} dataSource={rows}
         columns={columns} scroll={{x:'max-content'}} onRow={row => ({

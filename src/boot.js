@@ -13,18 +13,44 @@ if (portal) {
 
 let mounted = false;
 let appReady = false;
+let retryMode = false;
+const retryKey = 'adx_asset_retry_once';
 button.disabled = true;
 button.textContent = '正在准备完整后台…';
 status.classList.add('loading');
 status.textContent = '工作区资源加载中，完成后即可登录。';
 
-// Load every navigation page and its styles before login is allowed.
-const appPromise = Promise.all([
+function retryAutomatically() {
+  try {
+    if (sessionStorage.getItem(retryKey)) return false;
+    sessionStorage.setItem(retryKey, '1');
+  } catch { return false; }
+  status.classList.add('loading');
+  status.textContent = '网络中断，正在自动恢复后台…';
+  window.setTimeout(() => window.location.reload(), 800);
+  return true;
+}
+function offerRetry() {
+  retryMode = true;
+  form.hidden = false;
+  button.disabled = false;
+  button.textContent = '重新加载';
+  status.classList.remove('loading');
+  status.textContent = '连接暂时不稳定，点击重新加载继续。';
+}
+
+// The core includes the complete layout and styles. Optional pages may recover later.
+const appPromise = Promise.allSettled([
   import('./main.jsx'),
   import('./ReportExplorer.jsx'),
   import('./AdminPages.jsx'),
   import('./RevenueChart.jsx')
-]).then(([app]) => {
+]).then(([core, ...pages]) => {
+  const incomplete = core.status === 'rejected' || pages.some(page => page.status === 'rejected');
+  if (incomplete && retryAutomatically()) return new Promise(() => {});
+  if (core.status === 'rejected') throw core.reason;
+  if (incomplete) console.warn('optional_page_preload_failed');
+  else { try { sessionStorage.removeItem(retryKey); } catch {} }
   appReady = true;
   button.disabled = false;
   button.textContent = '登录';
@@ -32,11 +58,10 @@ const appPromise = Promise.all([
     status.classList.remove('loading');
     status.textContent = '';
   }
-  return app;
+  return core.value;
 }).catch(error => {
   console.error('app_load_failed', error);
-  status.classList.remove('loading');
-  status.textContent = '工作区资源加载失败，请刷新页面重试。';
+  if (!retryAutomatically()) offerRetry();
   throw error;
 });
 void appPromise.catch(() => {});
@@ -50,6 +75,7 @@ async function openApp(user) {
 
 form.addEventListener('submit', async event => {
   event.preventDefault();
+  if (retryMode) { window.location.reload(); return; }
   if (!appReady) return;
   button.disabled = true;
   status.textContent = '';
@@ -66,10 +92,11 @@ form.addEventListener('submit', async event => {
     if (!response.ok || result.ok === false) throw new Error(result.error || 'login_failed');
     await openApp(result.user);
   } catch (error) {
+    if (retryMode) return;
     status.classList.remove('loading');
     status.textContent = error.message === 'invalid_credentials' ? '账号或密码错误' : '登录失败，请稍后重试。';
   } finally {
-    if (!mounted) button.disabled = !appReady;
+    if (!mounted) button.disabled = !appReady && !retryMode;
   }
 });
 
@@ -84,6 +111,7 @@ fetch('/api/auth/me', { credentials: 'include', cache: 'no-store' })
   })
   .catch(() => {
     if (mounted) return;
+    if (retryMode) return;
     form.hidden = false;
     if (appReady) {
       status.classList.remove('loading');

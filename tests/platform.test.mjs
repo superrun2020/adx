@@ -192,6 +192,11 @@ test('reports keep distinct ad unit IDs, page safely, and drill into exact rows'
   assert.equal(unitOne.date, undefined);
   const byDay = await request('/api/reports?start=2026-10-12&end=2026-10-13&dimensions=date,url,adUnit,adUnitId');
   assert.equal(byDay.body.total, 3);
+  assert.deepEqual([...new Set(byDay.body.items.map(item => item.date))].sort(), ['2026-10-12','2026-10-13']);
+  const selectedDay = await request('/api/reports?start=2026-10-12&end=2026-10-13&dimensions=date,url,adUnit,adUnitId&drill=' +
+    encodeURIComponent(JSON.stringify({ date:'2026-10-12' })));
+  assert.equal(selectedDay.body.total, 2);
+  assert.ok(selectedDay.body.items.every(item => item.date === '2026-10-12'));
   const query = new URLSearchParams({ start:'2026-10-12', end:'2026-10-12',
     dimensions:'date,adUnit,adUnitId,channel,advertiser,bd', page:'1', pageSize:'1' });
   const first = await request('/api/reports?' + query);
