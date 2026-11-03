@@ -1,6 +1,7 @@
 const API_ROOT = 'https://admanager.googleapis.com/v1/';
 const NETWORK_CODE = /^\d{6,}$/;
 const AD_UNIT_NAME = /^networks\/(\d+)\/adUnits\/(\d+)$/;
+const SITE_NAME = /^networks\/(\d+)\/sites\/(\d+)$/;
 
 function networkCode(value) {
   const code = String(value || '').trim();
@@ -15,28 +16,48 @@ export function adUnitResource(value, network) {
   return name;
 }
 
+export function gamSiteResource(value, network) {
+  const name = String(value || '').trim();
+  const match = SITE_NAME.exec(name);
+  if (!match || match[1] !== networkCode(network)) throw new Error('invalid_gam_site');
+  return name;
+}
+
+export function parseGamAdUnitSizes(values) {
+  const entries = Array.isArray(values) ? values : [values];
+  if (!entries.length || entries.length > 20) throw new Error('invalid_ad_unit_sizes');
+  const special = { fluid: 'FLUID', responsive: 'FLUID', '自适应尺寸': 'FLUID',
+    'out-of-page': 'INTERSTITIAL', '页外': 'INTERSTITIAL',
+    native: 'NATIVE', 'custom rendering': 'NATIVE', '自定义呈现': 'NATIVE' };
+  const sizes = entries.map(value => {
+    const raw = String(value || '').trim().toLowerCase();
+    const fixed = /^(\d{1,4})\s*[x×]\s*(\d{1,4})$/.exec(raw);
+    let size;
+    if (fixed) {
+      const width = Number(fixed[1]), height = Number(fixed[2]);
+      if (!width || !height) throw new Error('invalid_ad_unit_size');
+      size = { width, height, sizeType: 'PIXEL' };
+    } else if (special[raw]) {
+      size = { width: 1, height: 1, sizeType: special[raw] };
+    } else {
+      throw new Error('unsupported_ad_unit_size_use_WxH_or_fluid');
+    }
+    return { size, environmentType: 'BROWSER' };
+  });
+  if (new Set(sizes.map(item => JSON.stringify(item.size))).size !== sizes.length) throw new Error('duplicate_ad_unit_size');
+  return sizes;
+}
+
 export function buildGamAdUnit(plan, network, parent) {
   const parentAdUnit = adUnitResource(parent, network);
   const displayName = String(plan?.name || '').trim();
-  const adUnitCode = String(plan?.code || '').trim();
-  if (!displayName || displayName.length > 255 || !adUnitCode) throw new Error('invalid_ad_unit_plan');
-
-  const rawSize = String(plan?.size || '').trim();
-  const fixed = /^(\d{1,4})\s*[xX×]\s*(\d{1,4})$/.exec(rawSize);
-  let size;
-  if (fixed) {
-    const width = Number(fixed[1]), height = Number(fixed[2]);
-    if (!width || !height) throw new Error('invalid_ad_unit_size');
-    size = { width, height, sizeType: 'PIXEL' };
-  } else if (rawSize.toLowerCase() === 'fluid') {
-    size = { width: 1, height: 1, sizeType: 'FLUID' };
-  } else {
-    throw new Error('unsupported_ad_unit_size_use_WxH_or_fluid');
-  }
+  const adUnitCode = String(plan?.gam_ad_unit_code || plan?.code || '').trim();
+  if (!displayName || displayName.length > 255 || !adUnitCode || adUnitCode.length > 120) throw new Error('invalid_ad_unit_plan');
+  const sizes = plan?.sizes_json ? JSON.parse(plan.sizes_json) : plan?.sizes || plan?.size;
 
   const adUnit = {
     parentAdUnit, displayName, adUnitCode,
-    adUnitSizes: [{ size, environmentType: 'BROWSER' }]
+    adUnitSizes: parseGamAdUnitSizes(sizes)
   };
   const description = String(plan?.description || '').trim();
   if (description) adUnit.description = description;
@@ -78,6 +99,16 @@ function request(network, token, suffix, options) {
 
 export function listGamAdUnits(network, token, { pageToken = '', filter = '', pageSize = 100 } = {}, fetchImpl) {
   return request(network, token, '', { query: { pageSize, pageToken, filter }, fetchImpl });
+}
+
+export function listGamSites(network, token, { pageToken = '', pageSize = 100 } = {}, fetchImpl) {
+  const code = networkCode(network);
+  return gamApiRequest(code, token, 'networks/' + code + '/sites', { query: { pageSize, pageToken }, fetchImpl });
+}
+
+export function getGamSite(network, token, name, fetchImpl) {
+  const resource = gamSiteResource(name, network);
+  return gamApiRequest(network, token, resource, { fetchImpl });
 }
 
 export function getGamAdUnit(network, token, name, fetchImpl) {

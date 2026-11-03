@@ -117,6 +117,16 @@ CREATE TABLE IF NOT EXISTS soap_accounts (
   last_test_summary TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS gam_ad_unit_creations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, gam_account_id INTEGER NOT NULL, network_code TEXT NOT NULL,
+  site_name TEXT NOT NULL, site_url TEXT NOT NULL, domain TEXT NOT NULL, parent_ad_unit TEXT NOT NULL,
+  display_name TEXT NOT NULL, ad_unit_code TEXT NOT NULL COLLATE NOCASE, sizes_json TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '', adsense_enabled INTEGER NOT NULL DEFAULT 0,
+  target_window TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'planned'
+    CHECK(status IN ('planned','created','failed')), provider_id TEXT, publish_error TEXT NOT NULL DEFAULT '',
+  created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, published_at TEXT,
+  UNIQUE(network_code,ad_unit_code), FOREIGN KEY(gam_account_id) REFERENCES soap_accounts(id)
+);
 CREATE TABLE IF NOT EXISTS soap_sync_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, soap_account_id INTEGER NOT NULL, channel_id INTEGER,
   window_start TEXT NOT NULL, window_end TEXT NOT NULL, status TEXT NOT NULL,

@@ -10,6 +10,7 @@ import {
   UploadOutlined, UserSwitchOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import GamAdUnitCreator from './GamAdUnitCreator.jsx';
 
 const { Title, Text } = Typography;
 const money = value => '$' + Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -68,9 +69,10 @@ function AdUnitBuilder() {
   };
   const options=(values,setter)=><Select mode="tags" allowClear value={values} onChange={setter} style={{width:'100%'}} tokenSeparators={[',','，']} placeholder="可输入多个值"/>;
   return <Space direction="vertical" size={16} className="page-stack">
-    <div className="page-heading"><div><Title level={2}>广告单元创建</Title><Text type="secondary">先生成任务，再通过 Google Ad Manager REST v1 发布</Text></div></div>
-    <Alert type="info" showIcon message="发布要求" description="尺寸支持宽×高或 fluid；发布前选择可用 REST 账户和父广告单元。系统先检查远端同编码广告单元，再执行创建并记录 REST 资源名。"/>
-    <Card title="生成规则"><Row gutter={[16,16]}><Col xs={24} md={8}><Text strong>子域名</Text>{options(subdomains,setSubdomains)}</Col><Col xs={24} md={8}><Text strong>广告位类型</Text>{options(types,setTypes)}</Col><Col xs={24} md={8}><Text strong>尺寸</Text>{options(sizes,setSizes)}</Col></Row>
+    <div className="page-heading"><div><Title level={2}>广告单元创建</Title><Text type="secondary">选择账户、域名和模板，批量预览后同步到 GAM</Text></div></div>
+    <GamAdUnitCreator accounts={accounts}/>
+    <Alert type="info" showIcon message="JSON 导入兼容模式" description="已有 JSON 任务仍可在下方发布。新建广告单元推荐使用上方的 GAM Sites 域名和尺寸模板批量同步。"/>
+    <Card title="JSON 任务生成规则"><Row gutter={[16,16]}><Col xs={24} md={8}><Text strong>子域名</Text>{options(subdomains,setSubdomains)}</Col><Col xs={24} md={8}><Text strong>广告位类型</Text>{options(types,setTypes)}</Col><Col xs={24} md={8}><Text strong>尺寸</Text>{options(sizes,setSizes)}</Col></Row>
       <Space wrap style={{marginTop:16}}><label className="file-button"><UploadOutlined/> {file?.name||'上传广告单元表 JSON'}<input type="file" accept="application/json,.json" onChange={choose}/></label><Button type="primary" loading={busy==='preview'} disabled={!payload} onClick={runPreview}>预览广告单元</Button></Space>
     </Card>
     {preview&&<Card title={'预览结果：'+preview.total+' 个'} extra={<Space><Button onClick={download}>下载</Button><Button type="primary" loading={busy==='create'} onClick={create}>保存创建任务</Button></Space>}>
@@ -80,13 +82,13 @@ function AdUnitBuilder() {
         {title:'AdSense',dataIndex:'adsenseEnabled',render:v=>v?'是':'否'},{title:'刊登位置',dataIndex:'placement'},{title:'目标窗口',dataIndex:'targetWindow'}
       ]}/>
     </Card>}
-    <Card title="REST 发布设置"><Space wrap>
+    <Card title="JSON 任务 REST 发布设置"><Space wrap>
       <Select style={{minWidth:230}} placeholder="选择 REST 账户" value={gamAccountId} onChange={v=>{setGamAccountId(v);setParents([]);setParentAdUnit('')}} options={accounts.filter(x=>x.status==='active').map(x=>({value:x.id,label:x.name+'（'+x.networkCode+'）'}))}/>
       <Button onClick={loadParents} loading={busy==='parents'} disabled={!gamAccountId}>加载父广告单元</Button>
       <Select showSearch allowClear style={{minWidth:380}} placeholder="选择已加载的父广告单元" value={parentAdUnit||undefined} onChange={v=>setParentAdUnit(v||'')} options={parents.map(x=>({value:x.name,label:x.displayName+'（'+x.name+'）'}))}/>
       <Input style={{width:380}} placeholder="也可输入 networks/编号/adUnits/编号" value={parentAdUnit} onChange={e=>setParentAdUnit(e.target.value)}/>
     </Space></Card>
-    <Card title="创建任务" extra={<Button onClick={download} disabled={!items.length}>导出 CSV</Button>}><Table rowKey="id" dataSource={items} scroll={{x:1300}} columns={[
+    <Card title="原有 JSON 创建任务" extra={<Button onClick={download} disabled={!items.length}>导出 CSV</Button>}><Table rowKey="id" dataSource={items} scroll={{x:1300}} columns={[
       {title:'编码',dataIndex:'code'},{title:'名称',dataIndex:'name'},{title:'尺寸',dataIndex:'size'},
       {title:'状态',dataIndex:'status',render:v=><Tag color={v==='created'?'green':v==='failed'?'red':'orange'}>{v==='created'?'已创建':v==='failed'?'失败':'待发布'}</Tag>},
       {title:'REST 资源名',dataIndex:'providerId',ellipsis:true},{title:'错误',dataIndex:'publishError',ellipsis:true},

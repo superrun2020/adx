@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildGamAdUnit, createGamAdUnit, findGamAdUnitByCode, getGamAdUnit } from '../server/gam-beta.mjs';
+import { buildGamAdUnit, createGamAdUnit, findGamAdUnitByCode, getGamAdUnit, getGamSite, listGamSites } from '../server/gam-beta.mjs';
 import { buildReportDefinition, fetchRestReport, normalizeRestReportRows, setReportRange, validateReportDefinition } from '../server/gam-reports.mjs';
 
 const network = '123456';
@@ -32,6 +32,26 @@ test('REST ad unit creation validates the plan and uses the v1 endpoint', async 
   assert.equal(calls[2].method, 'POST');
   assert.equal(calls[2].headers.Authorization, 'Bearer token');
   assert.deepEqual(JSON.parse(calls[2].body), adUnit);
+});
+
+test('GAM Sites stay within the selected network and template sizes map to REST types', async () => {
+  const adUnit = buildGamAdUnit({ name: 'Interstitial', code: 'inter', sizes: [
+    '1x1', 'out-of-page', 'native', 'fluid', '320x480'
+  ] }, network, parent);
+  assert.deepEqual(adUnit.adUnitSizes.map(item => item.size.sizeType),
+    ['PIXEL', 'INTERSTITIAL', 'NATIVE', 'FLUID', 'PIXEL']);
+  assert.throws(() => buildGamAdUnit({ name: 'X', code: 'x', sizes: ['300x250', '300×250'] }, network, parent), /duplicate_ad_unit_size/);
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    calls.push(url.pathname + url.search);
+    assert.equal(options.headers.Authorization, 'Bearer token');
+    return url.pathname.endsWith('/sites') ? json({ sites: [{ name: 'networks/123456/sites/7', url: 'example.com' }] })
+      : json({ name: 'networks/123456/sites/7', url: 'example.com' });
+  };
+  assert.equal((await listGamSites(network, 'token', {}, fetchImpl)).sites.length, 1);
+  assert.equal((await getGamSite(network, 'token', 'networks/123456/sites/7', fetchImpl)).url, 'example.com');
+  assert.deepEqual(calls, ['/v1/networks/123456/sites?pageSize=100', '/v1/networks/123456/sites/7']);
+  assert.throws(() => getGamSite(network, 'token', 'networks/999999/sites/7', fetchImpl), /invalid_gam_site/);
 });
 
 test('REST report definition is fixed and mismatched columns fail closed', () => {
