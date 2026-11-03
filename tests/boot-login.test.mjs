@@ -7,32 +7,45 @@ const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 const boot = (await readFile(new URL('../src/boot.js', import.meta.url), 'utf8'))
   .replace("import('./main.jsx')", 'globalThis.__loadApp()');
 
-function start({ loginResponse, loadApp }) {
+function start({ loginResponse, loadApp, dashboardResponse }) {
   const listeners = {};
   const button = { disabled: false, textContent: '登录' };
   const form = {
-    hidden: false,
     querySelector: () => button,
     addEventListener: (name, handler) => { listeners[name] = handler; },
     elements: { namedItem: name => ({ value: name === 'email' ? 'admin@example.test' : 'secret' }) }
   };
-  const status = { textContent: '', classList: { add() {}, remove() {} } };
-  const retry = { hidden: true, addEventListener() {} };
+  const makeNode = () => ({ hidden: false, textContent: '', style: {}, firstChild: { textContent: '' },
+    classList: { toggle() {} }, addEventListener() {}, replaceChildren() {}, append() {},
+    setAttribute() {}, removeAttribute() {} });
+  const status = makeNode();
+  const retry = makeNode();
+  const loginPage = makeNode();
+  const nav = makeNode();
+  const navItems = ['dashboard', 'reports'].map(view => ({ ...makeNode(), dataset: { view } }));
+  const workspace = { ...makeNode(), querySelector: () => nav,
+    querySelectorAll: selector => selector === '[data-view]' ? navItems : [] };
   const calls = [];
-  const nodes = new Map([['boot-login', form], ['boot-status', status], ['boot-retry', retry]]);
-  const document = { getElementById: id => nodes.get(id) || { textContent: '' } };
+  const nodes = new Map([['boot-login', form], ['boot-status', status], ['boot-retry', retry], ['boot-workspace', workspace]]);
+  const document = { getElementById: id => {
+    if (!nodes.has(id)) nodes.set(id, makeNode());
+    return nodes.get(id);
+  }, querySelector: () => loginPage, createElement: () => makeNode() };
   const context = {
     document, URLSearchParams, console,
-    window: { location: { hostname: 'adx.geekforest.ai', search: '', reload() {} }, requestIdleCallback() {} },
+    window: { location: { hostname: 'adx.geekforest.ai', search: '', reload() {} }, setTimeout() {} },
     sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     fetch: async (path, options) => {
       calls.push({ path, options });
-      return path === '/api/auth/me' ? { ok: false } : loginResponse;
+      if (path === '/api/auth/me') return { ok: false };
+      if (path.startsWith('/api/dashboard')) return dashboardResponse || { ok: true,
+        json: async () => ({ summary: { revenue: 12, impressions: 34 }, trend: [], topUrls: [] }) };
+      return loginResponse;
     },
     __loadApp: loadApp
   };
   vm.runInNewContext(boot, context);
-  return { listeners, button, form, status, calls };
+  return { listeners, button, form, status, calls, loginPage, workspace, nodes };
 }
 
 test('login is enabled before the application bundle loads', async () => {
@@ -47,15 +60,19 @@ test('login is enabled before the application bundle loads', async () => {
   assert.equal(page.button.disabled, false);
 });
 
-test('successful login opens the shell when its bundle becomes ready', async () => {
+test('successful login shows a styled workspace before its bundle becomes ready', async () => {
   let resolveApp;
   let mountedUser;
   const page = start({ loginResponse: { ok: true, json: async () => ({ user: { role: 'admin' } }) },
     loadApp: () => new Promise(resolve => { resolveApp = resolve; }) });
   const submit = page.listeners.submit({ preventDefault() {} });
   for (let i = 0; i < 10 && !resolveApp; i++) await new Promise(setImmediate);
+  await new Promise(setImmediate);
   assert.equal(page.calls.some(call => call.path === '/api/auth/login'), true);
-  assert.equal(page.form.hidden, true);
+  assert.equal(page.loginPage.hidden, true);
+  assert.equal(page.workspace.hidden, false);
+  assert.equal(page.nodes.get('quick-revenue').textContent, '$12.00');
+  assert.equal(page.calls.some(call => call.path.startsWith('/api/dashboard?')), true);
   resolveApp({ mountApp: user => { mountedUser = user; } });
   await submit;
   assert.equal(mountedUser.role, 'admin');

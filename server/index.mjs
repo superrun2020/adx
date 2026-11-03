@@ -135,6 +135,7 @@ CREATE TABLE IF NOT EXISTS soap_sync_runs (
   FOREIGN KEY(soap_account_id) REFERENCES soap_accounts(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_revenue_scope_date ON revenue_facts(channel_id, report_date);
+CREATE INDEX IF NOT EXISTS idx_revenue_dashboard ON revenue_facts(report_date, channel_id, account, ad_unit, domain, revenue, requests, matched_requests, impressions, clicks);
 CREATE INDEX IF NOT EXISTS idx_revenue_domain ON revenue_facts(domain, report_date);
 CREATE INDEX IF NOT EXISTS idx_revenue_account_unit ON revenue_facts(account, ad_unit, report_date);
 `);
@@ -320,14 +321,14 @@ function range(req) {
 }
 function whereScope(scope, start, end) { return { sql: `report_date BETWEEN ? AND ?${scope ? ' AND channel_id=?' : ''}`, params: scope ? [start, end, scope] : [start, end] }; }
 function effectiveShareSql(alias = 'revenue_facts') { return `(SELECT v.share_percent FROM channel_share_versions v WHERE v.channel_id=${alias}.channel_id AND v.effective_from<=${alias}.report_date ORDER BY v.effective_from DESC,v.id DESC LIMIT 1)`; }
-function upstreamShareSql(alias = 'revenue_facts') { return `COALESCE((SELECT v.share_percent FROM upstream_share_versions v JOIN upstream_accounts u ON u.id=v.upstream_account_id WHERE u.account_key=${alias}.account AND u.status='active' AND v.effective_from<=${alias}.report_date ORDER BY v.effective_from DESC,v.id DESC LIMIT 1),(SELECT u.share_percent FROM upstream_accounts u WHERE u.account_key=${alias}.account AND u.status='active' LIMIT 1),100)`; }
+function upstreamShareSql(alias = 'revenue_facts') { return `COALESCE((SELECT v.share_percent FROM upstream_share_versions v JOIN upstream_accounts u ON u.id=v.upstream_account_id WHERE u.account_key=${alias}.account COLLATE NOCASE AND u.status='active' AND v.effective_from<=${alias}.report_date ORDER BY v.effective_from DESC,v.id DESC LIMIT 1),(SELECT u.share_percent FROM upstream_accounts u WHERE u.account_key=${alias}.account COLLATE NOCASE AND u.status='active' LIMIT 1),100)`; }
 function channelRuleShareSql(alias = 'revenue_facts') {
   const fallback = effectiveShareSql(alias);
   const domain = mappedDomainSql(alias);
-  return `COALESCE((SELECT r.share_percent FROM channel_domain_share_rules r JOIN upstream_accounts u ON u.id=r.upstream_account_id WHERE r.channel_id=${alias}.channel_id AND lower(u.account_key)=lower(${alias}.account) AND (r.domain='' OR lower(r.domain)=lower(${domain})) AND r.effective_from<=${alias}.report_date ORDER BY CASE WHEN r.domain='' THEN 1 ELSE 0 END,r.effective_from DESC,r.id DESC LIMIT 1),(SELECT r.share_percent FROM channel_share_rules r WHERE r.channel_id=${alias}.channel_id AND r.scope_type='ad_unit' AND lower(r.scope_value)=lower(${alias}.ad_unit) AND r.effective_from<=${alias}.report_date ORDER BY r.effective_from DESC,r.id DESC LIMIT 1),(SELECT r.share_percent FROM channel_share_rules r WHERE r.channel_id=${alias}.channel_id AND r.scope_type='account' AND lower(r.scope_value)=lower(${alias}.account) AND r.effective_from<=${alias}.report_date ORDER BY r.effective_from DESC,r.id DESC LIMIT 1),${fallback})`;
+  return `COALESCE((SELECT r.share_percent FROM channel_domain_share_rules r JOIN upstream_accounts u ON u.id=r.upstream_account_id WHERE r.channel_id=${alias}.channel_id AND u.account_key=${alias}.account COLLATE NOCASE AND (r.domain='' OR r.domain=${domain} COLLATE NOCASE) AND r.effective_from<=${alias}.report_date ORDER BY CASE WHEN r.domain='' THEN 1 ELSE 0 END,r.effective_from DESC,r.id DESC LIMIT 1),(SELECT r.share_percent FROM channel_share_rules r WHERE r.channel_id=${alias}.channel_id AND r.scope_type='ad_unit' AND r.scope_value=${alias}.ad_unit COLLATE NOCASE AND r.effective_from<=${alias}.report_date ORDER BY r.effective_from DESC,r.id DESC LIMIT 1),(SELECT r.share_percent FROM channel_share_rules r WHERE r.channel_id=${alias}.channel_id AND r.scope_type='account' AND r.scope_value=${alias}.account COLLATE NOCASE AND r.effective_from<=${alias}.report_date ORDER BY r.effective_from DESC,r.id DESC LIMIT 1),${fallback})`;
 }
 function settledRevenueSql(alias = 'revenue_facts') { return `(${alias}.revenue*(${upstreamShareSql(alias)}/100.0)*(${channelRuleShareSql(alias)}/100.0))`; }
-function mappedDomainSql(alias = 'revenue_facts') { return `COALESCE((SELECT m.domain FROM ad_unit_domains m WHERE lower(m.ad_unit)=lower(${alias}.ad_unit) LIMIT 1),${alias}.domain)`; }
+function mappedDomainSql(alias = 'revenue_facts') { return `COALESCE((SELECT m.domain FROM ad_unit_domains m WHERE m.ad_unit=${alias}.ad_unit COLLATE NOCASE LIMIT 1),${alias}.domain)`; }
 
 const builderAliases = {
   subdomain: ['subdomain','sub_domain','domain','hostname','url','site','子域名','域名'],
@@ -421,7 +422,7 @@ function serveReports(req, res, exportCsv = false) {
   const params = [start, end];
   const addExact = (expression, value) => {
     if (value !== undefined && value !== null && String(value).trim() !== '') {
-      where.push(`lower(${expression})=lower(?)`); params.push(String(value).trim());
+      where.push(expression + '=? COLLATE NOCASE'); params.push(String(value).trim());
     }
   };
   if (!isAdmin) { where.push('rf.channel_id=?'); params.push(req.user.channel_id); }
@@ -829,7 +830,12 @@ app.get('/api/public/channel/revenue', (req,res)=>{
 app.get('/api/admin/audit', requireAuth, requireAdmin, (_req,res)=>res.json({ok:true,items:db.prepare('SELECT * FROM audit_logs ORDER BY id DESC LIMIT 200').all()}));
 app.get('/api/health', (req,res)=>res.json({ok:true,status:'ok',portal:portalRole(req)||'local'}));
 
-const dist=path.join(root,'dist'); app.use(express.static(dist,{index:false,maxAge:'1h'}));
+const dist=path.join(root,'dist');
+app.use(express.static(dist, { index:false, maxAge:'1h', setHeaders(res, file) {
+  // Vite fingerprints assets, so a long cache avoids re-downloading the UI on every login.
+  if (file.startsWith(path.join(dist, 'assets') + path.sep))
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+} }));
 app.all('/api/{*path}',(_req,res)=>res.status(404).json({ok:false,error:'not_found'}));
 app.get('/{*splat}',(_req,res)=>res.sendFile(path.join(dist,'index.html')));
 app.use((error,_req,res,_next)=>{console.error('request_failed',error.message);res.status(500).json({ok:false,error:'internal_error'})});

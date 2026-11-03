@@ -100,7 +100,7 @@ function AdUnitBuilder() {
 
 function Channels() {
   const [items,setItems]=useState([]); const [open,setOpen]=useState(false); const [editing,setEditing]=useState(null); const [form]=Form.useForm();
-  const load=()=>api('/api/admin/channels').then(r=>setItems(r.items)).catch(e=>message.error(e.message)); useEffect(load,[]);
+  const load=()=>api('/api/admin/channels').then(r=>setItems(r.items)).catch(e=>message.error(e.message)); useEffect(()=>{ void load(); },[]);
   const save=async values=>{try{const payload={...values,effectiveFrom:values.effectiveFrom?.format('YYYY-MM-DD')};await api(editing?`/api/admin/channels/${editing.id}`:'/api/admin/channels',{method:editing?'PUT':'POST',body:JSON.stringify(payload)});message.success('已保存并读回');setOpen(false);load()}catch(e){message.error(e.message)}};
   const show=item=>{setEditing(item||null);form.setFieldsValue(item?{...item,effectiveFrom:dayjs() }:{sharePercent:80,status:'active',effectiveFrom:dayjs()});setOpen(true)};
   const resetPassword=r=>Modal.confirm({title:`重置 ${r.name} 的登录密码`,content:<Input.Password id="channel-new-password" placeholder="至少10位"/>,onOk:async()=>{const password=document.getElementById('channel-new-password')?.value||'';await api(`/api/admin/channels/${r.id}/password`,{method:'POST',body:JSON.stringify({password})});message.success('密码已更新，旧会话已退出')}});
