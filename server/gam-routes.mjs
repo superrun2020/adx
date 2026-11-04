@@ -31,7 +31,7 @@ async function rootAdUnit(network, token) {
   catch { throw new Error('gam_root_ad_unit_unavailable'); }
 }
 
-export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptCredential, tokenFor, gamSync, audit }) {
+export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptCredential, tokenFor, gamSync, audit, onScheduledSync = async () => {} }) {
   const publishing = new Set();
   const creating = new Set();
   let scheduledSyncRunning = false;
@@ -388,6 +388,7 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
           try {
             const result = await gamSync.execute(item, { write: true });
             console.info('gam_rest_sync_complete', item.id, JSON.stringify(result.timingsMs));
+            await onScheduledSync(db.prepare('SELECT * FROM soap_accounts WHERE id=?').get(item.id));
           } catch (error) {
             console.error('gam_rest_sync_failed', item.id, error.message);
           }

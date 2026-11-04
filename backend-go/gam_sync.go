@@ -338,13 +338,16 @@ func (a *app) runScheduledGamSync() {
 		done := make(chan struct{}, len(group))
 		for _, account := range group {
 			go func(account map[string]any) {
-				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+				ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
 				defer cancel()
 				result, err := a.executeGam(ctx, account, "", "", true)
 				if err != nil {
 					log.Printf("gam_rest_sync_failed account=%d error=%v", intMap(account, "id"), err)
 				} else {
 					log.Printf("gam_rest_sync_complete account=%d timings=%s", intMap(account, "id"), marshalText(result["timingsMs"]))
+					if refreshed, loadErr := a.gamAccount(intMap(account, "id")); loadErr == nil {
+						a.runRegressionForAccount(ctx, refreshed)
+					}
 				}
 				done <- struct{}{}
 			}(account)

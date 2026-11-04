@@ -64,6 +64,24 @@ test('channel account cannot access administration endpoints', async () => {
   assert.equal(report.body.items[0].channelRevenue, 15);
 });
 
+test('regression settings are admin-only and never expose the Feishu webhook', async () => {
+  cookie = '';
+  const login = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: 'admin@example.test', password: 'AdminPass123!' }) });
+  cookie = login.response.headers.get('set-cookie').split(';')[0];
+  const initial = await request('/api/admin/regression/settings');
+  assert.equal(initial.body.settings.minRevenue, 50);
+  assert.equal(initial.body.settings.minDropPercent, 2);
+  const invalid = await request('/api/admin/regression/settings', { method: 'PUT', body: JSON.stringify({ feishuEnabled: true, minRevenue: 50, minDropPercent: 2, webhook: 'http://127.0.0.1/hook' }) });
+  assert.equal(invalid.response.status, 400);
+  const saved = await request('/api/admin/regression/settings', { method: 'PUT', body: JSON.stringify({ feishuEnabled: false, minRevenue: 75, minDropPercent: 3, webhook: 'https://open.feishu.cn/open-apis/bot/v2/hook/test' }) });
+  assert.equal(saved.body.settings.minRevenue, 75);
+  assert.equal(saved.body.settings.webhookConfigured, true);
+  assert.equal(JSON.stringify(saved.body).includes('/hook/test'), false);
+  const records = await request('/api/admin/regression/events?cadence=day');
+  assert.equal(records.response.status, 200);
+  assert.deepEqual(records.body.items, []);
+});
+
 test('Google Ad Manager API-style field names are mapped during preflight and import', async () => {
   cookie = '';
   const login = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: 'admin@example.test', password: 'AdminPass123!' }) });

@@ -101,6 +101,40 @@ CREATE TABLE IF NOT EXISTS users (
   status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS regression_settings (
+  id INTEGER PRIMARY KEY CHECK(id=1), feishu_enabled INTEGER NOT NULL DEFAULT 0,
+  min_revenue REAL NOT NULL DEFAULT 50, min_drop_percent REAL NOT NULL DEFAULT 2,
+  webhook_ciphertext TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS regression_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, soap_account_id INTEGER NOT NULL,
+  cadence TEXT NOT NULL, period_start TEXT NOT NULL, period_end TEXT NOT NULL,
+  baseline_start TEXT NOT NULL DEFAULT '', baseline_end TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '',
+  started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(soap_account_id) REFERENCES soap_accounts(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS regression_snapshots (
+  run_id INTEGER NOT NULL, domain TEXT NOT NULL, revenue REAL NOT NULL,
+  requests INTEGER NOT NULL, impressions INTEGER NOT NULL, clicks INTEGER NOT NULL,
+  PRIMARY KEY(run_id,domain), FOREIGN KEY(run_id) REFERENCES regression_runs(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS regression_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER NOT NULL, soap_account_id INTEGER NOT NULL,
+  cadence TEXT NOT NULL, period_start TEXT NOT NULL, period_end TEXT NOT NULL,
+  domain TEXT NOT NULL, old_revenue REAL NOT NULL, new_revenue REAL NOT NULL,
+  old_requests INTEGER NOT NULL, new_requests INTEGER NOT NULL,
+  old_impressions INTEGER NOT NULL, new_impressions INTEGER NOT NULL,
+  old_clicks INTEGER NOT NULL, new_clicks INTEGER NOT NULL,
+  alert_status TEXT NOT NULL DEFAULT 'not_triggered', alert_error TEXT NOT NULL DEFAULT '',
+  notified_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(run_id) REFERENCES regression_runs(id) ON DELETE CASCADE,
+  FOREIGN KEY(soap_account_id) REFERENCES soap_accounts(id) ON DELETE CASCADE
+);
+INSERT OR IGNORE INTO regression_settings(id) VALUES(1);
+CREATE INDEX IF NOT EXISTS idx_regression_runs_due ON regression_runs(soap_account_id,cadence,finished_at);
+CREATE INDEX IF NOT EXISTS idx_regression_runs_retention ON regression_runs(cadence,finished_at);
+CREATE INDEX IF NOT EXISTS idx_regression_events_filter ON regression_events(created_at,soap_account_id,cadence,domain);
 CREATE INDEX IF NOT EXISTS idx_revenue_account_unit ON revenue_facts(account, ad_unit, report_date);
 CREATE INDEX IF NOT EXISTS idx_revenue_ad_unit_id ON revenue_facts(ad_unit_id, report_date);
 CREATE INDEX IF NOT EXISTS idx_revenue_dashboard ON revenue_facts(report_date, channel_id, account, ad_unit, domain, revenue, requests, matched_requests, impressions, clicks);
