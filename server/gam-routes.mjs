@@ -9,6 +9,13 @@ function siteDomain(value) {
   throw new Error('invalid_gam_site_url');
 }
 
+function selectedSiteDomain(siteUrl, selected) {
+  const base = siteDomain(siteUrl);
+  const domain = selected ? siteDomain(selected) : base;
+  if (domain !== base && !domain.endsWith('.' + base)) throw new Error('invalid_gam_site_domain');
+  return domain;
+}
+
 function sameRemoteAdUnit(remote, expected) {
   const sizeKey = unit => JSON.stringify((unit.adUnitSizes || []).map(entry => [
     Number(entry.size?.width), Number(entry.size?.height), entry.size?.sizeType, entry.environmentType
@@ -199,6 +206,18 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     })), nextPageToken: result.nextPageToken || '' });
   }));
 
+  app.get('/api/admin/gam-accounts/:id/site-domains', requireAuth, requireAdmin, route((req, res) => {
+    const item = account(req.params.id);
+    if (!item) return res.status(404).json({ ok: false, error: 'gam_account_not_found' });
+    if (item.status !== 'active') throw new Error('invalid_gam_account_status');
+    const prefix = 'gam-rest:' + item.network_code;
+    const rows = db.prepare("SELECT domain FROM (SELECT domain FROM revenue_facts WHERE source_file>=? AND source_file<? AND domain<>'' " +
+      "UNION SELECT domain FROM gam_ad_unit_creations WHERE gam_account_id=? AND domain<>'') ORDER BY domain LIMIT 5000")
+      .all(prefix + ':', prefix + ';', item.id);
+    const items = rows.flatMap(row => { try { return [siteDomain(row.domain)]; } catch { return []; } });
+    res.json({ ok: true, items });
+  }));
+
   const creation = id => {
     const number = Number(id);
     return Number.isSafeInteger(number) && number > 0 ? db.prepare('SELECT * FROM gam_ad_unit_creations WHERE id=?').get(number) : null;
@@ -240,7 +259,7 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
       site = await site;
       if (site.name !== siteName) throw new Error('invalid_gam_site');
       if (await findGamAdUnitByCode(network, token, adUnit.adUnitCode)) throw new Error('ad_unit_already_exists_in_gam');
-      const domain = siteDomain(site.url);
+      const domain = selectedSiteDomain(site.url, input?.domain);
       const inserted = db.prepare('INSERT INTO gam_ad_unit_creations(gam_account_id,network_code,site_name,site_url,domain,parent_ad_unit,display_name,ad_unit_code,sizes_json,description,adsense_enabled,target_window,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
         .run(gamAccount.id, network, siteName, site.url, domain, parentName, adUnit.displayName, adUnit.adUnitCode,
           JSON.stringify(input.sizes || [input.size]), adUnit.description || '', adUnit.appliedAdsenseEnabled ? 1 : 0,
@@ -314,7 +333,7 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
         getGamSite(row.network_code, token, row.site_name),
         findGamAdUnitByCode(row.network_code, token, row.ad_unit_code)
       ]);
-      if (site.name !== row.site_name || siteDomain(site.url) !== row.domain) throw new Error('gam_site_mismatch');
+      if (site.name !== row.site_name || selectedSiteDomain(site.url, row.domain) !== row.domain) throw new Error('gam_site_mismatch');
       if (existing && !sameRemoteAdUnit(existing, adUnit)) throw new Error('ad_unit_already_exists_in_gam');
       const remote = existing || await createGamAdUnit(row.network_code, token, adUnit);
       res.json({ ok: true, item: saveCreated(row, remote, req.user.email, req.ip) });

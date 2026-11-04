@@ -34,6 +34,20 @@ func gamSiteDomain(raw string) (string, error) {
 	}
 	return host, nil
 }
+func gamSelectedSiteDomain(siteURL, selected string) (string, error) {
+	base, err := gamSiteDomain(siteURL)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(selected) == "" {
+		return base, nil
+	}
+	domain, err := gamSiteDomain(selected)
+	if err != nil || (domain != base && !strings.HasSuffix(domain, "."+base)) {
+		return "", errors.New("invalid_gam_site_domain")
+	}
+	return domain, nil
+}
 func parseGamSizes(value any) ([]map[string]any, error) {
 	entries := array(value)
 	if entries == nil {
@@ -252,7 +266,7 @@ func (a *app) createGamDirect(r *http.Request, input map[string]any, actor, ip, 
 	if existing != nil {
 		return nil, errors.New("ad_unit_already_exists_in_gam")
 	}
-	domain, err := gamSiteDomain(importString(site["url"]))
+	domain, err := gamSelectedSiteDomain(importString(site["url"]), fieldString(input, "domain"))
 	if err != nil {
 		return nil, err
 	}
@@ -447,7 +461,7 @@ func (a *app) retryGamAdUnit(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return a.failGamCreation(row, err)
 	}
-	domain, err := gamSiteDomain(importString(site["url"]))
+	domain, err := gamSelectedSiteDomain(importString(site["url"]), importString(row["domain"]))
 	if err != nil {
 		return a.failGamCreation(row, err)
 	}

@@ -105,4 +105,5 @@ CREATE INDEX IF NOT EXISTS idx_revenue_account_unit ON revenue_facts(account, ad
 CREATE INDEX IF NOT EXISTS idx_revenue_ad_unit_id ON revenue_facts(ad_unit_id, report_date);
 CREATE INDEX IF NOT EXISTS idx_revenue_dashboard ON revenue_facts(report_date, channel_id, account, ad_unit, domain, revenue, requests, matched_requests, impressions, clicks);
 CREATE INDEX IF NOT EXISTS idx_revenue_domain ON revenue_facts(domain, report_date);
+CREATE INDEX IF NOT EXISTS idx_revenue_source_domain ON revenue_facts(source_file, domain);
 CREATE INDEX IF NOT EXISTS idx_revenue_scope_date ON revenue_facts(channel_id, report_date);

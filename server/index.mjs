@@ -172,6 +172,7 @@ CREATE TABLE IF NOT EXISTS soap_sync_runs (
 CREATE INDEX IF NOT EXISTS idx_revenue_scope_date ON revenue_facts(channel_id, report_date);
 CREATE INDEX IF NOT EXISTS idx_revenue_dashboard ON revenue_facts(report_date, channel_id, account, ad_unit, domain, revenue, requests, matched_requests, impressions, clicks);
 CREATE INDEX IF NOT EXISTS idx_revenue_domain ON revenue_facts(domain, report_date);
+CREATE INDEX IF NOT EXISTS idx_revenue_source_domain ON revenue_facts(source_file, domain);
 CREATE INDEX IF NOT EXISTS idx_revenue_account_unit ON revenue_facts(account, ad_unit, report_date);
 `);
 try { db.exec('ALTER TABLE channels ADD COLUMN api_secret_ciphertext TEXT'); } catch (error) { if (!String(error.message).includes('duplicate column')) throw error; }

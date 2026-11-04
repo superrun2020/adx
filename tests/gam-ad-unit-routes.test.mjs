@@ -7,6 +7,7 @@ import { registerGamRoutes } from '../server/gam-routes.mjs';
 const db = new DatabaseSync(':memory:');
 db.exec(
   'CREATE TABLE soap_accounts(id INTEGER PRIMARY KEY,name TEXT,network_code TEXT,status TEXT);' +
+  'CREATE TABLE revenue_facts(domain TEXT,source_file TEXT);' +
   'CREATE TABLE gam_ad_unit_creations(' +
   'id INTEGER PRIMARY KEY,gam_account_id INTEGER,network_code TEXT,site_name TEXT,site_url TEXT,domain TEXT,' +
   'parent_ad_unit TEXT,display_name TEXT,ad_unit_code TEXT COLLATE NOCASE,sizes_json TEXT,description TEXT,' +
@@ -15,6 +16,13 @@ db.exec(
 );
 db.prepare("INSERT INTO soap_accounts(id,name,network_code,status) VALUES(1,'A','123456','active')").run();
 db.prepare("INSERT INTO soap_accounts(id,name,network_code,status) VALUES(2,'B','999999','active')").run();
+for (const [domain, source] of [
+  ['news.123456.example.com', 'gam-rest:123456:2026-11-01_2026-11-01'],
+  ['sports.123456.example.com', 'gam-rest:123456:2026-11-01_2026-11-01'],
+  ['shop.999999.example.com', 'gam-rest:999999:2026-11-01_2026-11-01'],
+  ['fake.123456.example.com', 'manual-import'],
+  ['leak.123456.example.com', 'gam-rest:1234567:2026-11-01_2026-11-01']
+]) db.prepare('INSERT INTO revenue_facts(domain,source_file) VALUES(?,?)').run(domain, source);
 
 const app = express();
 app.use(express.json());
@@ -85,6 +93,15 @@ async function request(path, method = 'GET', body) {
   return { status: result.status, body: await result.json() };
 }
 
+test('site domains are drawn from the selected account only', async () => {
+  const first = await request('/api/admin/gam-accounts/1/site-domains');
+  const second = await request('/api/admin/gam-accounts/2/site-domains');
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  assert.deepEqual(first.body.items, ['news.123456.example.com', 'sports.123456.example.com']);
+  assert.deepEqual(second.body.items, ['shop.999999.example.com']);
+});
+
 test('batch creates real REST resources, isolates networks, and reconciles a failed response', async () => {
   const sites = await request('/api/admin/gam-accounts/1/sites');
   assert.equal(sites.status, 200);
@@ -103,6 +120,20 @@ test('batch creates real REST resources, isolates networks, and reconciles a fai
   assert.deepEqual(posts[0].unit.adUnitSizes.map(item => item.size.sizeType), ['PIXEL', 'PIXEL']);
   assert.deepEqual(posts[1].unit.adUnitSizes.map(item => item.size.sizeType), ['INTERSTITIAL', 'FLUID']);
   assert.equal(batch.body.results[0].item.domain, '123456.example.com');
+  const child = await request('/api/admin/gam-ad-units', 'POST', { gamAccountId: 1,
+    siteName: site, domain: 'https://news.123456.example.com/path',
+    name: 'Child Banner', code: 'child-banner', size: '300x250' });
+  assert.equal(child.status, 201);
+  assert.equal(child.body.item.domain, 'news.123456.example.com');
+  const beforeInvalid = posts.length;
+  const external = await request('/api/admin/gam-ad-units', 'POST', { gamAccountId: 1,
+    siteName: site, domain: 'other.example.com', name: 'External', code: 'external', size: '300x250' });
+  assert.equal(external.status, 400);
+  assert.equal(posts.length, beforeInvalid);
+  const deceptive = await request('/api/admin/gam-ad-units', 'POST', { gamAccountId: 1,
+    siteName: site, domain: '123456.example.com.other.net', name: 'Deceptive', code: 'deceptive', size: '300x250' });
+  assert.equal(deceptive.status, 400);
+  assert.equal(posts.length, beforeInvalid);
   const listing = await request('/api/admin/gam-accounts/1/ad-units?search=Banner&statuses=ACTIVE,INACTIVE');
   assert.equal(listing.status, 200);
   assert.equal(listing.body.items[0].adUnitSizes.length, 2);
@@ -113,15 +144,15 @@ test('batch creates real REST resources, isolates networks, and reconciles a fai
   const duplicate = await request('/api/admin/gam-ad-units/batch', 'POST', { gamAccountId: 1,
     items: [{ siteName: site, name: 'Banner A', code: 'banner-a', sizes: ['300x250'] }] });
   assert.equal(duplicate.body.failed, 1);
-  assert.equal(posts.length, 2);
+  assert.equal(posts.length, beforeInvalid);
   const wrongSite = await request('/api/admin/gam-ad-units', 'POST', { gamAccountId: 2,
     siteName: site, name: 'Wrong', code: 'wrong', size: '300x250' });
   assert.equal(wrongSite.status, 400);
-  assert.equal(posts.length, 2);
+  assert.equal(posts.length, beforeInvalid);
   const nested = await request('/api/admin/gam-ad-units', 'POST', { gamAccountId: 1,
     siteName: site, parentAdUnit: 'networks/123456/adUnits/8', name: 'Nested', code: 'nested', size: '300x250' });
   assert.equal(nested.status, 400);
-  assert.equal(posts.length, 2);
+  assert.equal(posts.length, beforeInvalid);
 
   const other = await request('/api/admin/gam-ad-units', 'POST', { gamAccountId: 2,
     siteName: 'networks/999999/sites/1',
@@ -131,14 +162,16 @@ test('batch creates real REST resources, isolates networks, and reconciles a fai
 
   failAfterCreate = true;
   const failed = await request('/api/admin/gam-ad-units', 'POST', { gamAccountId: 1,
-    siteName: site, name: 'Flaky', code: 'flaky', sizes: ['320x50'] });
+    siteName: site, domain: 'retry.123456.example.com', name: 'Flaky', code: 'flaky', sizes: ['320x50'] });
   assert.equal(failed.status, 502);
   const listed = await request('/api/admin/gam-ad-units');
   const row = listed.body.items.find(item => item.adUnitCode === 'flaky');
   assert.equal(row.status, 'failed');
+  assert.equal(row.domain, 'retry.123456.example.com');
   const postsBeforeRetry = posts.length;
   const retried = await request('/api/admin/gam-ad-units/' + row.id + '/retry', 'POST');
   assert.equal(retried.status, 200);
   assert.equal(retried.body.item.status, 'created');
+  assert.equal(retried.body.item.domain, 'retry.123456.example.com');
   assert.equal(posts.length, postsBeforeRetry);
 });

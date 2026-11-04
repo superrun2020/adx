@@ -377,3 +377,28 @@ func (a *app) listGamAccountSites(w http.ResponseWriter, r *http.Request) error 
 	writeJSON(w, 200, map[string]any{"ok": true, "items": items, "nextPageToken": importString(result["nextPageToken"])})
 	return nil
 }
+func (a *app) gamAccountSiteDomains(w http.ResponseWriter, r *http.Request) error {
+	account, err := a.gamAccount(pathID(r))
+	if err != nil {
+		writeError(w, 404, "gam_account_not_found")
+		return nil
+	}
+	if account["status"] != "active" {
+		return errors.New("invalid_gam_account_status")
+	}
+	prefix := "gam-rest:" + importString(account["network_code"])
+	query := "SELECT domain FROM (SELECT domain FROM revenue_facts WHERE source_file>=? AND source_file<? AND domain<>'' " +
+		"UNION SELECT domain FROM gam_ad_unit_creations WHERE gam_account_id=? AND domain<>'') ORDER BY domain LIMIT 5000"
+	rows, err := queryMaps(a.db, query, prefix+":", prefix+";", intMap(account, "id"))
+	if err != nil {
+		return err
+	}
+	items := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if domain := normalizedDomain(importString(row["domain"])); hostnamePattern.MatchString(domain) {
+			items = append(items, domain)
+		}
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "items": items})
+	return nil
+}

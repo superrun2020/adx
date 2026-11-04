@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Button, Card, Col, Collapse, Empty, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Switch, Table, Tabs, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Checkbox, Col, Collapse, Empty, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Switch, Table, Tabs, Tag, Typography, message } from 'antd';
 import { DeleteOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 
 const { Text, Title } = Typography;
@@ -27,8 +27,41 @@ async function api(path, options = {}) {
 }
 
 function siteDomain(url) {
-  try { return new URL(String(url).startsWith('http://') || String(url).startsWith('https://') ? url : 'https://' + url).hostname.toLowerCase(); }
+  try {
+    const value = String(url || '').trim();
+    const domain = new URL(/^https?:\/\//i.test(value) ? value : 'https://' + value).hostname.toLowerCase();
+    return /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(domain) ? domain : '';
+  }
   catch { return ''; }
+}
+const belongsToSite = (domain, base) => Boolean(domain && base && (domain === base || domain.endsWith('.' + base)));
+
+function SiteDomainPicker({ site, knownDomains, selected, search, single, onSearch, onSelect }) {
+  const base = siteDomain(site.url);
+  const children = [...new Set(knownDomains.filter(domain => domain !== base && belongsToSite(domain, base)))];
+  const query = search.trim();
+  const inputDomain = siteDomain(query);
+  const validChild = inputDomain !== base && belongsToSite(inputDomain, base);
+  const matched = children.includes(inputDomain);
+  const searchPart = query.replace(/^https?:\/\//i, '').toLowerCase();
+  const shown = children.filter(domain => domain.includes(searchPart));
+  const choose = domain => onSelect(single ? [domain] : [...new Set([...selected, domain])]);
+  return <Card size="small" title={<Space><span>{base || site.url}</span><Tag>{children.length} 个已知子网站</Tag></Space>} style={{ marginTop: 12 }} bodyStyle={{ padding: 12 }}>
+    <Text type="secondary">来自此 GAM 账号的已同步报表及本站创建记录。{single ? '创建单个时选择一个。' : '可多选，按子网站分别创建。'}不选时使用主网站。</Text>
+    {children.length > 0 ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginTop: 10 }}>
+      {shown.map(domain => <Checkbox key={domain} checked={selected.includes(domain)} onChange={event => onSelect(event.target.checked ? (single ? [domain] : [...new Set([...selected, domain])]) : selected.filter(value => value !== domain))}>{domain}</Checkbox>)}
+      {!shown.length && <Text type="secondary">没有匹配的已知子网站</Text>}
+    </div> : <div style={{ marginTop: 8 }}><Text type="secondary">暂无已同步的子网站，可在下方输入。</Text></div>}
+    <Input.Search style={{ marginTop: 12 }} value={search} onChange={event => onSearch(event.target.value)}
+      placeholder={'输入子网站或完整网址，例如 news.' + base} enterButton="选择此网站"
+      onSearch={() => { if (validChild) choose(inputDomain); }}
+      disabled={!base} />
+    {query && <div style={{ marginTop: 8 }}>
+      {validChild ? <Text type={matched ? 'success' : 'warning'}>{matched ? '匹配成功：该账号已有子网站记录' : '域名属于所选主网站，但尚无同步记录；可手动使用'}：{inputDomain}</Text>
+        : <Text type="danger">{inputDomain === base ? '输入的是主网站，无需添加；不选子网站即可使用' : '未匹配：请输入属于 ' + base + ' 的子网站'}</Text>}
+    </div>}
+    {selected.length > 0 && <div style={{ marginTop: 10 }}><Text type="secondary">本次使用：</Text>{selected.map(domain => <Tag closable key={domain} onClose={() => onSelect(selected.filter(value => value !== domain))}>{domain}{children.includes(domain) ? '' : ' · 手动输入'}</Tag>)}</div>}
+  </Card>;
 }
 function suffix(row) {
   return row.type === 'banner' ? 'banner' + row.bannerNo : row.type === 'anchor' ? 'ANC' : 'INT';
@@ -62,7 +95,8 @@ export default function GamAdUnitCreator({ accounts = [] }) {
   const [nextUnits, setNextUnits] = useState(''), [lastQuery, setLastQuery] = useState(null), [listBusy, setListBusy] = useState(false);
   const [open, setOpen] = useState(false), [mode, setMode] = useState('batch');
   const [accountId, setAccountId] = useState(null), [siteNames, setSiteNames] = useState([]);
-  const [sites, setSites] = useState([]);
+  const [sites, setSites] = useState([]), [knownDomains, setKnownDomains] = useState([]);
+  const [domainChoices, setDomainChoices] = useState({}), [domainSearch, setDomainSearch] = useState({});
   const [nextSites, setNextSites] = useState('');
   const [inventoryBusy, setInventoryBusy] = useState(false), [inventoryError, setInventoryError] = useState('');
   const [inventoryVersion, setInventoryVersion] = useState(0);
@@ -78,10 +112,17 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     if (!open || !accountId) return;
     let current = true;
     setInventoryBusy(true); setInventoryError('');
-    api('/api/admin/gam-accounts/' + accountId + '/sites').then(siteResult => {
+    Promise.allSettled([
+      api('/api/admin/gam-accounts/' + accountId + '/sites'),
+      api('/api/admin/gam-accounts/' + accountId + '/site-domains')
+    ]).then(([siteResult, domainResult]) => {
       if (!current) return;
-      setSites(siteResult.items || []); setNextSites(siteResult.nextPageToken || '');
-    }).catch(error => { if (current) setInventoryError(error.message); })
+      if (siteResult.status === 'fulfilled') {
+        setSites(siteResult.value.items || []); setNextSites(siteResult.value.nextPageToken || '');
+      } else setInventoryError(siteResult.reason.message);
+      if (domainResult.status === 'fulfilled') setKnownDomains(domainResult.value.items || []);
+      else message.warning('已同步子网站暂未加载，仍可手动输入');
+    })
       .finally(() => { if (current) setInventoryBusy(false); });
     return () => { current = false; };
   }, [open, accountId, inventoryVersion]);
@@ -99,8 +140,8 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     finally { setListBusy(false); }
   };
   const chooseAccount = value => {
-    setAccountId(value); setSites([]); setNextSites('');
-    setSiteNames([]); setInventoryError('');
+    setAccountId(value); setSites([]); setKnownDomains([]); setNextSites('');
+    setSiteNames([]); setDomainChoices({}); setDomainSearch({}); setInventoryError('');
   };
   const loadMoreSites = async () => {
     if (!nextSites || !accountId) return;
@@ -122,21 +163,29 @@ export default function GamAdUnitCreator({ accounts = [] }) {
   const preparedItems = () => {
     if (!accountId || !siteNames.length) throw new Error('请选择账号和网站');
     const rows = mode === 'single' ? [single] : batchRows;
-    if (!rows.length || rows.length > 100 || rows.length * siteNames.length > 100) throw new Error('每批最多创建 100 个广告单元');
-    const items = siteNames.flatMap(siteName => {
-      const domain = siteDomain(sites.find(item => item.name === siteName)?.url || '');
-      if (!domain) throw new Error('所选网站域名无效，请重新加载 GAM Sites');
-      return rows.map(row => {
+    const targets = siteNames.flatMap(siteName => {
+      const base = siteDomain(sites.find(item => item.name === siteName)?.url || '');
+      if (!base) throw new Error('所选网站域名无效，请重新加载 GAM Sites');
+      const selected = domainChoices[siteName]?.length ? domainChoices[siteName] : [base];
+      if (mode === 'single' && selected.length > 1) throw new Error('创建单个时只能选择一个子网站');
+      return selected.map(value => {
+        const domain = siteDomain(value);
+        if (!belongsToSite(domain, base)) throw new Error('子网站必须属于所选主网站：' + base);
+        return { siteName, domain };
+      });
+    });
+    if (!rows.length || rows.length > 100 || rows.length * targets.length > 100) throw new Error('每批最多创建 100 个广告单元');
+    const items = targets.flatMap(({ siteName, domain }) =>
+      rows.map(row => {
         if (row.type === 'banner' && (!Number.isInteger(row.bannerNo) || row.bannerNo < 1)) throw new Error('Banner 序号必须是正整数');
         if (!row.sizes?.length) throw new Error('每个广告单元至少选择一个尺寸');
         const defaultCode = domain + '-' + suffix(row);
-        if (siteNames.length > 1 && row.code.trim() && !row.code.includes('{domain}')) throw new Error('多网站自定义代码请包含 {domain}');
+        if (targets.length > 1 && row.code.trim() && !row.code.includes('{domain}')) throw new Error('多网站自定义代码请包含 {domain}');
         const code = row.code.trim() ? row.code.trim().replaceAll('{domain}', domain) : defaultCode;
         const name = row.name.trim() ? row.name.trim().replaceAll('{domain}', domain) : code;
-        return { gamAccountId: accountId, siteName, code, name, sizes: row.sizes,
+        return { gamAccountId: accountId, siteName, domain, code, name, sizes: row.sizes,
           description, adsenseEnabled, targetWindow };
-      });
-    });
+      }));
     if (new Set(items.map(item => item.code.toLowerCase())).size !== items.length) throw new Error('广告单元代码重复，请调整 Banner 序号或代码');
     return items;
   };
@@ -199,7 +248,14 @@ export default function GamAdUnitCreator({ accounts = [] }) {
           <Col span={24}><Alert type="info" showIcon message="创建层级：顶级广告单元" description="系统自动使用当前 GAM 账号的网络根单元，无需选择现有广告单元。"/></Col>
         </Row>
         {inventoryError && <Alert type="error" style={{ marginTop: 12 }} showIcon message={'GAM 目录加载失败：' + inventoryError} action={<Button size="small" onClick={() => setInventoryVersion(value => value + 1)}>重试</Button>}/>}
-        <Tabs style={{ marginTop: 16 }} activeKey={mode} onChange={value => { setMode(value); if (value === 'single') setSiteNames(previous => previous.slice(0, 1)); }} items={[
+        {siteNames.map(siteName => {
+          const site = sites.find(item => item.name === siteName);
+          return site && <SiteDomainPicker key={siteName} site={site} knownDomains={knownDomains}
+            selected={domainChoices[siteName] || []} search={domainSearch[siteName] || ''} single={mode === 'single'}
+            onSearch={value => setDomainSearch(previous => ({ ...previous, [siteName]: value }))}
+            onSelect={value => setDomainChoices(previous => ({ ...previous, [siteName]: value }))}/>;
+        })}
+        <Tabs style={{ marginTop: 16 }} activeKey={mode} onChange={value => { setMode(value); if (value === 'single') { setSiteNames(previous => previous.slice(0, 1)); setDomainChoices(previous => Object.fromEntries(Object.entries(previous).map(([key, domains]) => [key, domains.slice(0, 1)]))); } }} items={[
           { key: 'single', label: '创建单个', children: <UnitFields row={single} index={0} onChange={changes => setSingle(previous => ({ ...previous, ...changes }))}/> },
           { key: 'batch', label: '批量创建', children: <><div style={{ maxHeight: '42vh', overflowY: 'auto', paddingRight: 6 }}>{batchRows.map((row, index) => <UnitFields key={row.id} row={row} index={index} onChange={changes => updateBatchRow(row.id, changes)} onRemove={() => setBatchRows(previous => previous.filter(item => item.id !== row.id))} removable={batchRows.length > 1}/>)}</div><Button block icon={<PlusOutlined/>} disabled={batchRows.length >= 100} onClick={() => setBatchRows(previous => [...previous, newRow()])}>添加广告单元（{batchRows.length}/100）</Button></> }
         ]}/>
@@ -208,7 +264,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
           <Col xs={12}><Text>目标窗口</Text><Select style={{ width: '100%', marginTop: 6 }} value={targetWindow} onChange={setTargetWindow} options={[{ value: '', label: '继承网络根单元' }, { value: 'TOP', label: 'TOP' }, { value: 'BLANK', label: 'BLANK' }]}/></Col>
           <Col xs={12}><Text>启用 AdSense</Text><div style={{ marginTop: 10 }}><Switch checked={adsenseEnabled} onChange={setAdsenseEnabled}/></div></Col>
         </Row> }]}/>
-        <Text type="secondary">所选网站用于本站域名关联；创建操作会直接写入 GAM。</Text>
+        <Text type="secondary">所选域名用于本站关联；GAM 广告单元创建在网络根单元下。手动输入仅验证所属主域名，不代表已通过 GAM 网站审核。</Text>
       </div>
     </Modal>
   </Space>;
