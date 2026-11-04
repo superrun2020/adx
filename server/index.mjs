@@ -20,7 +20,7 @@ const app = express();
 app.set('trust proxy', 'loopback');
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 const db = new DatabaseSync(dbPath);
-db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;');
+db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=30000;');
 const reportCache = new Map();
 let reportCacheDataVersion = db.prepare('PRAGMA data_version').get().data_version;
 function invalidateReportCache() { reportCache.clear(); }

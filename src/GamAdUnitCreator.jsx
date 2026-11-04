@@ -70,7 +70,7 @@ function UnitFields({ row, index, onChange, onRemove, removable }) {
       {row.type === 'banner' && <Col xs={24} sm={12}><Text>Banner 序号</Text><InputNumber min={1} max={999} precision={0} style={{ width: '100%', marginTop: 6 }} value={row.bannerNo} onChange={bannerNo => onChange({ bannerNo })}/></Col>}
       <Col span={24}><Text type="secondary">尺寸模板：{template.sizes.map(size => sizeLabels[size] || size).join('、')}</Text><Select mode="tags" tokenSeparators={[',', '，']} style={{ width: '100%', marginTop: 6 }} value={row.sizes} options={sizeOptions(template.sizes)} placeholder="选择尺寸，或输入宽x高" onChange={sizes => onChange({ sizes })}/></Col>
       <Col xs={24} sm={12}><Text>广告单元名称（可选）</Text><Input style={{ marginTop: 6 }} value={row.name} maxLength={255} placeholder="默认：域名-类型序号" onChange={event => onChange({ name: event.target.value })}/></Col>
-      <Col xs={24} sm={12}><Text>广告单元代码（可选）</Text><Input style={{ marginTop: 6 }} value={row.code} maxLength={120} placeholder="默认：域名-类型序号" onChange={event => onChange({ code: event.target.value })}/></Col>
+      <Col xs={24} sm={12}><Text>广告单元代码（可选）</Text><Input style={{ marginTop: 6 }} value={row.code} maxLength={100} placeholder="默认：域名-类型序号" onChange={event => onChange({ code: event.target.value })}/></Col>
     </Row>
   </Card>;
 }
@@ -90,7 +90,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
   const [inventoryVersion, setInventoryVersion] = useState(0);
   const [single, setSingle] = useState(newRow()), [batchRows, setBatchRows] = useState(initialBatch);
   const [description, setDescription] = useState(''), [adsenseEnabled, setAdsenseEnabled] = useState(false);
-  const [targetWindow, setTargetWindow] = useState('');
+  const [targetWindow, setTargetWindow] = useState('TOP');
   const [creations, setCreations] = useState([]), [results, setResults] = useState([]);
   const [publishing, setPublishing] = useState(false), [retrying, setRetrying] = useState(null);
 
@@ -143,7 +143,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
   };
   const openCreator = () => {
     setMode('batch'); setSingle(newRow()); setBatchRows(initialBatch()); setResults([]);
-    setDescription(''); setAdsenseEnabled(false); setTargetWindow('');
+    setDescription(''); setAdsenseEnabled(false); setTargetWindow('TOP');
     chooseAccount(filterAccountId && activeAccounts.some(item => item.id === filterAccountId) ? filterAccountId : null);
     setOpen(true);
   };
@@ -158,11 +158,12 @@ export default function GamAdUnitCreator({ accounts = [] }) {
       const result = mode === 'single'
         ? await api('/api/admin/gam-ad-units', { method: 'POST', body: JSON.stringify(items[0]) })
         : await api('/api/admin/gam-ad-units/batch', { method: 'POST', body: JSON.stringify({ gamAccountId: accountId, items }) });
-      const rows = mode === 'single' ? [{ status: 'created', code: items[0].code, item: result.item }] : (result.results || []);
+      const rows = mode === 'single' ? [{ status: 'created', code: items[0].code, domain: items[0].domain, item: result.item }]
+        : (result.results || []).map(row => ({ ...row, domain: items[row.index]?.domain || '' }));
       setResults(rows); setOpen(false); await loadCreations();
       if (lastQuery?.accountId === accountId) await searchUnits(lastQuery);
       const failures = rows.filter(row => row.status === 'failed').length;
-      if (failures) message.warning('已创建 ' + (rows.length - failures) + ' 个，失败 ' + failures + ' 个；请查看同步记录');
+      if (failures) message.warning('已创建 ' + (rows.length - failures) + ' 个，失败 ' + failures + ' 个；请查看下方逐条错误');
       else message.success('已同步 ' + rows.length + ' 个广告单元到 GAM');
     } catch (error) {
       message.error('创建失败：' + error.message + '；如已生成失败记录，请在同步记录中重试');
@@ -201,7 +202,13 @@ export default function GamAdUnitCreator({ accounts = [] }) {
       <Button icon={<SearchOutlined/>} loading={listBusy} onClick={() => searchUnits()}>查询广告单元</Button>
     </Space></Card>
     <Card bodyStyle={{ padding: 0 }}><Table rowKey="name" loading={listBusy} dataSource={remoteUnits} columns={remoteColumns} pagination={{ pageSize: 20 }} scroll={{ x: 900 }} locale={{ emptyText: <Empty description={queried ? '没有匹配的广告单元' : '选择账号后点击查询广告单元'}/> }}/>{nextUnits && <div style={{ textAlign: 'center', padding: 12 }}><Button loading={listBusy} onClick={() => searchUnits(lastQuery, nextUnits)}>加载更多</Button></div>}</Card>
-    {results.length > 0 && <Alert type={results.some(row => row.status === 'failed') ? 'warning' : 'success'} showIcon message={'本次同步：成功 ' + results.filter(row => row.status === 'created').length + ' 个，失败 ' + results.filter(row => row.status === 'failed').length + ' 个'}/>}
+    {results.length > 0 && <Alert type={results.some(row => row.status === 'failed') ? 'warning' : 'success'} showIcon
+      message={'本次同步：成功 ' + results.filter(row => row.status === 'created').length + ' 个，失败 ' + results.filter(row => row.status === 'failed').length + ' 个'}
+      description={results.some(row => row.status === 'failed') && <div style={{ maxHeight: 220, overflowY: 'auto', overflowWrap: 'anywhere' }}>
+        {results.filter(row => row.status === 'failed').map(row => <div key={row.index} style={{ marginTop: 6 }}>
+          {row.domain ? row.domain + ' · ' : ''}{row.code}：{row.error || '接口未返回错误详情'}
+        </div>)}
+      </div>}/>}
     <Collapse items={[{ key: 'history', label: '同步记录与失败重试', children: <Table rowKey="id" size="small" dataSource={creations} columns={historyColumns} pagination={{ pageSize: 10 }} scroll={{ x: 1100 }}/> }]}/>
     <Modal title="新建广告单元" open={open} width={760} onCancel={() => { if (!publishing) setOpen(false); }} maskClosable={!publishing} closable={!publishing} footer={<Space><Button disabled={publishing} onClick={() => setOpen(false)}>取消</Button><Button type="primary" loading={publishing} onClick={publish}>{mode === 'batch' ? '批量创建' : '创建并同步'}</Button></Space>}>
       <div style={{ maxHeight: '68vh', overflowY: 'auto', paddingRight: 8 }}>

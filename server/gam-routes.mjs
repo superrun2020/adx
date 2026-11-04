@@ -258,14 +258,15 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
       if (!site) { site = getGamSite(network, token, siteName); sites.set(siteName, site); }
       site = await site;
       if (site.name !== siteName) throw new Error('invalid_gam_site');
-      if (await findGamAdUnitByCode(network, token, adUnit.adUnitCode)) throw new Error('ad_unit_already_exists_in_gam');
+      const existing = await findGamAdUnitByCode(network, token, adUnit.adUnitCode);
+      if (existing && !sameRemoteAdUnit(existing, adUnit)) throw new Error('ad_unit_already_exists_in_gam');
       const domain = selectedSiteDomain(site.url, input?.domain);
       const inserted = db.prepare('INSERT INTO gam_ad_unit_creations(gam_account_id,network_code,site_name,site_url,domain,parent_ad_unit,display_name,ad_unit_code,sizes_json,description,adsense_enabled,target_window,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
         .run(gamAccount.id, network, siteName, site.url, domain, parentName, adUnit.displayName, adUnit.adUnitCode,
           JSON.stringify(input.sizes || [input.size]), adUnit.description || '', adUnit.appliedAdsenseEnabled ? 1 : 0,
           adUnit.appliedTargetWindow || '', actor);
       const row = creation(inserted.lastInsertRowid);
-      try { return saveCreated(row, await createGamAdUnit(network, token, adUnit), actor, ip); }
+      try { return saveCreated(row, existing || await createGamAdUnit(network, token, adUnit), actor, ip); }
       catch (error) {
         db.prepare("UPDATE gam_ad_unit_creations SET status='failed',publish_error=? WHERE id=?")
           .run(String(error.message).slice(0, 500), row.id);

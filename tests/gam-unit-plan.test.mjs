@@ -28,9 +28,9 @@ test('unique explicit codes stay exact; suffix collisions receive a sequence', (
 });
 
 test('long repeated prefixes fit the GAM code limit', () => {
-  const items = prepareGamUnitItems(options([row('banner', 1, 'x'.repeat(120)), row('banner', 2, 'x'.repeat(120))]));
-  assert.equal(items[0].code.length, 120);
-  assert.equal(items[1].code.length, 120);
+  const items = prepareGamUnitItems(options([row('banner', 1, 'x'.repeat(100)), row('banner', 2, 'x'.repeat(100))]));
+  assert.equal(items[0].code.length, 100);
+  assert.equal(items[1].code.length, 100);
   assert.notEqual(items[0].code, items[1].code);
 });
 
@@ -39,6 +39,10 @@ test('repeated default banner numbers receive numeric suffixes', () => {
   const items = prepareGamUnitItems(inputs);
   assert.deepEqual(items.map(item => item.code),
     ['news.nextvisiona.com-banner1-2', 'news.nextvisiona.com-banner1-3']);
+});
+
+test('rejects a single code beyond the GAM limit', () => {
+  assert.throws(() => prepareGamUnitItems(options([row('banner', 1, 'x'.repeat(101))])), /最多 100 字符/);
 });
 
 test('multiple sites still require a domain placeholder for a custom code', () => {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -92,7 +93,7 @@ func buildGamAdUnit(plan map[string]any, network, parent string) (map[string]any
 	if code == "" {
 		code = fieldString(plan, "code")
 	}
-	if name == "" || len(name) > 255 || code == "" || len(code) > 120 {
+	if name == "" || len(name) > 255 || code == "" || len(code) > 100 {
 		return nil, errors.New("invalid_ad_unit_plan")
 	}
 	raw := plan["sizes"]
@@ -263,7 +264,7 @@ func (a *app) createGamDirect(r *http.Request, input map[string]any, actor, ip, 
 	if err != nil {
 		return nil, err
 	}
-	if existing != nil {
+	if existing != nil && !sameRemoteGamUnit(existing, unit) {
 		return nil, errors.New("ad_unit_already_exists_in_gam")
 	}
 	domain, err := gamSelectedSiteDomain(importString(site["url"]), fieldString(input, "domain"))
@@ -280,7 +281,10 @@ func (a *app) createGamDirect(r *http.Request, input map[string]any, actor, ip, 
 		return nil, err
 	}
 	row := a.gamCreation(id)
-	remote, err := a.remoteCreateGamAdUnit(r, network, token, unit)
+	remote := existing
+	if remote == nil {
+		remote, err = a.remoteCreateGamAdUnit(r, network, token, unit)
+	}
 	if err == nil {
 		var created map[string]any
 		created, err = a.saveGamCreated(row, remote, actor, ip)
@@ -380,6 +384,7 @@ func (a *app) batchGamAdUnits(w http.ResponseWriter, r *http.Request) error {
 					if len(detail) > 500 {
 						detail = detail[:500]
 					}
+					log.Printf("gam_ad_unit_batch_failed account=%d index=%d error=%s", intMap(account, "id"), index, detail)
 					results[index] = map[string]any{"index": index, "code": code, "siteName": item["siteName"], "status": "failed", "error": detail}
 				} else {
 					results[index] = map[string]any{"index": index, "code": code, "siteName": item["siteName"], "status": "created", "item": created}

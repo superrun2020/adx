@@ -125,6 +125,27 @@ test('batch creates real REST resources, isolates networks, and reconciles a fai
     name: 'Child Banner', code: 'child-banner', size: '300x250' });
   assert.equal(child.status, 201);
   assert.equal(child.body.item.domain, 'news.123456.example.com');
+  const existingCode = 'existing-in-gam';
+  const existingName = 'Existing in GAM';
+  const existingResource = 'networks/123456/adUnits/999';
+  remoteUnits.set('123456/' + existingCode, { name: existingResource, parentAdUnit: parent,
+    displayName: existingName, adUnitCode: existingCode, adUnitSizes: [
+      { size: { width: 300, height: 250, sizeType: 'PIXEL' }, environmentType: 'BROWSER' }
+    ] });
+  const postsBeforeLink = posts.length;
+  const linked = await request('/api/admin/gam-ad-units', 'POST', { gamAccountId: 1,
+    siteName: site, domain: 'news.123456.example.com', name: existingName, code: existingCode, size: '300x250' });
+  assert.equal(linked.status, 201);
+  assert.equal(linked.body.item.providerId, existingResource);
+  assert.equal(linked.body.item.status, 'created');
+  assert.equal(posts.length, postsBeforeLink);
+  remoteUnits.set('123456/conflicting-in-gam', { name: 'networks/123456/adUnits/1000',
+    parentAdUnit: parent, displayName: 'Different name', adUnitCode: 'conflicting-in-gam',
+    adUnitSizes: [{ size: { width: 300, height: 250, sizeType: 'PIXEL' }, environmentType: 'BROWSER' }] });
+  const conflict = await request('/api/admin/gam-ad-units', 'POST', { gamAccountId: 1,
+    siteName: site, name: 'Requested name', code: 'conflicting-in-gam', size: '300x250' });
+  assert.equal(conflict.status, 409);
+  assert.equal(posts.length, postsBeforeLink);
   const beforeInvalid = posts.length;
   const external = await request('/api/admin/gam-ad-units', 'POST', { gamAccountId: 1,
     siteName: site, domain: 'other.example.com', name: 'External', code: 'external', size: '300x250' });

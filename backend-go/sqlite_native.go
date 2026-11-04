@@ -10,5 +10,5 @@ import (
 const sqliteDriver = "sqlite3"
 
 func sqliteDSN(path string) string {
-	return "file:" + filepath.ToSlash(path) + "?_busy_timeout=5000&_foreign_keys=on"
+	return "file:" + filepath.ToSlash(path) + "?_busy_timeout=30000&_foreign_keys=on"
 }

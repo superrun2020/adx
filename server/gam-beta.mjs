@@ -52,7 +52,7 @@ export function buildGamAdUnit(plan, network, parent) {
   const parentAdUnit = adUnitResource(parent, network);
   const displayName = String(plan?.name || '').trim();
   const adUnitCode = String(plan?.gam_ad_unit_code || plan?.code || '').trim();
-  if (!displayName || displayName.length > 255 || !adUnitCode || adUnitCode.length > 120) throw new Error('invalid_ad_unit_plan');
+  if (!displayName || displayName.length > 255 || !adUnitCode || adUnitCode.length > 100) throw new Error('invalid_ad_unit_plan');
   const sizes = plan?.sizes_json ? JSON.parse(plan.sizes_json) : plan?.sizes || plan?.size;
 
   const adUnit = {

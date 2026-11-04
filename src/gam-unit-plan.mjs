@@ -60,8 +60,10 @@ export function prepareGamUnitItems({ accountId, siteNames, sites, domainChoices
       name: customName ? customName.replaceAll('{domain}', domain) : code,
       sizes: row.sizes, description, adsenseEnabled, targetWindow, unitSuffix: suffix(row), customName: Boolean(customName) };
   }));
-  const uniqueCodes = makeUnique(drafts, 'code', 120);
+  const uniqueCodes = makeUnique(drafts, 'code', 100);
   const adjustedNames = uniqueCodes.map(item => item.customName ? item : { ...item, name: item.code });
   const uniqueNames = makeUnique(adjustedNames, 'name', 255);
+  if (uniqueNames.some(item => item.code.length > 100 || item.name.length > 255))
+    throw new Error('广告单元代码最多 100 字符，名称最多 255 字符');
   return uniqueNames.map(({ unitSuffix, customName, ...item }) => item);
 }
