@@ -12,6 +12,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { clearCachedUser, readCached, rememberRead } from './readCache.js';
+import { viewForPath, viewPaths } from './navigation.js';
 import './styles.css';
 
 
@@ -125,9 +126,24 @@ function Dashboard({ range, setRange, admin, user, initialDashboard }) {
 }
 
 function Shell({ user, onLogout, initialView = 'dashboard', initialDashboard, onReady }) {
-  const [view,setView]=useState(initialView); const [collapsed,setCollapsed]=useState(false); const [range,setRange]=useState([dayjs().startOf('month'),dayjs()]);
   const admin=user.role==='admin';
+  const [view,setView]=useState(() => viewForPath(window.location.pathname, initialView, user.role)); const [collapsed,setCollapsed]=useState(false); const [range,setRange]=useState([dayjs().startOf('month'),dayjs()]);
   useEffect(() => { onReady(); }, []);
+  useEffect(() => {
+    const onPopState = () => {
+      const requested = viewForPath(window.location.pathname, 'dashboard', 'admin');
+      const next = viewForPath(window.location.pathname, 'dashboard', user.role);
+      if (requested !== next) window.history.replaceState({ view: next }, '', viewPaths[next]);
+      setView(next);
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [user.role]);
+  const navigate = key => {
+    const path = viewPaths[key] || '/';
+    if (window.location.pathname !== path) window.history.pushState({ view: key }, '', path);
+    setView(key);
+  };
   const menu=useMemo(()=>[
     ...(admin?[{key:'gam',icon:<SafetyOutlined/>,label:'账号管理'}]:[]),
     {key:'dashboard',icon:<DashboardOutlined/>,label:'经营总览'},
@@ -136,7 +152,7 @@ function Shell({ user, onLogout, initialView = 'dashboard', initialDashboard, on
     {type:'group',label:'开发能力',children:[{key:'api',icon:<ApiOutlined/>,label:'渠道 API'}]}
   ],[admin]);
   const body=view==='dashboard'?<Dashboard range={range} setRange={setRange} admin={admin} user={user} initialDashboard={initialDashboard}/>:view==='reports'?<Reports range={range} setRange={setRange} admin={admin} user={user}/>:<AdminPages view={view} user={user}/>;
-  return <Layout className="app-shell"><Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={238}><div className="side-brand"><span>AX</span>{!collapsed&&<div><b>{admin?'AdX Control':'AdX Publisher'}</b><small>{admin?'平台管理端':'渠道工作台'}</small></div>}</div><Menu theme="dark" mode="inline" selectedKeys={[view]} items={menu} onClick={({key})=>setView(key)}/></Sider><Layout><Header><div><Text strong>{user.name||user.email}</Text><Tag color={admin?'blue':'cyan'}>{admin?'平台管理员':'渠道账号'}</Tag></div><Popconfirm title="确认退出登录？" onConfirm={onLogout}><Button icon={<LogoutOutlined/>}>退出</Button></Popconfirm></Header><Content><PageErrorBoundary key={view}><React.Suspense fallback={<Card className="route-loading">正在加载页面…</Card>}>{body}</React.Suspense></PageErrorBoundary></Content></Layout></Layout>;
+  return <Layout className="app-shell"><Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={238}><div className="side-brand"><span>AX</span>{!collapsed&&<div><b>{admin?'AdX Control':'AdX Publisher'}</b><small>{admin?'平台管理端':'渠道工作台'}</small></div>}</div><Menu theme="dark" mode="inline" selectedKeys={[view]} items={menu} onClick={({key})=>navigate(key)}/></Sider><Layout><Header><div><Text strong>{user.name||user.email}</Text><Tag color={admin?'blue':'cyan'}>{admin?'平台管理员':'渠道账号'}</Tag></div><Popconfirm title="确认退出登录？" onConfirm={onLogout}><Button icon={<LogoutOutlined/>}>退出</Button></Popconfirm></Header><Content><PageErrorBoundary key={view}><React.Suspense fallback={<Card className="route-loading">正在加载页面…</Card>}>{body}</React.Suspense></PageErrorBoundary></Content></Layout></Layout>;
 }
 
 function Root({ initialUser, initialView, initialDashboard, onReady }) {
