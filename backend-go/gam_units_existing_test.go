@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestCreateGamDirectExistingRemoteUnit(t *testing.T) {
@@ -93,5 +96,86 @@ func TestCreateGamDirectExistingRemoteUnit(t *testing.T) {
 				t.Fatalf("local rows=%d, remote POSTs=%d; want rows=%d, POSTs=0", count, postCount, wantCount)
 			}
 		})
+	}
+}
+
+func TestBatchGamAdUnitsAcceptsInternalAccountID(t *testing.T) {
+	const network = "123456"
+	const siteName = "networks/123456/sites/1"
+	const root = "networks/123456/adUnits/0"
+
+	t.Setenv("ADX_DB_PATH", filepath.Join(t.TempDir(), "adx.sqlite"))
+	t.Setenv("ADX_ADMIN_EMAIL", "admin@example.test")
+	t.Setenv("ADX_ADMIN_PASSWORD", "test-password-123")
+	a, err := newApp(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.db.Close()
+	defer a.reportCache.close()
+	if _, err := a.db.Exec("INSERT INTO soap_accounts(name,network_code,credential_ciphertext,status,created_by) VALUES(?,?,'stub','active',?)", "Test network", network, "admin@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	a.gamTokens[1] = &gamTokenEntry{cipher: "stub", token: "test-token", expires: time.Now().Add(time.Hour)}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			t.Errorf("unexpected authorization header")
+		}
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/networks/"+network:
+			_ = json.NewEncoder(w).Encode(map[string]any{"name": "networks/" + network, "effectiveRootAdUnit": root})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/"+siteName:
+			_ = json.NewEncoder(w).Encode(map[string]any{"name": siteName, "url": "https://example.com"})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/networks/"+network+"/adUnits":
+			_ = json.NewEncoder(w).Encode(map[string]any{"adUnits": []any{}})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/networks/"+network+"/adUnits":
+			var unit map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&unit); err != nil {
+				t.Errorf("decode create request: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			unit["name"] = "networks/" + network + "/adUnits/42"
+			_ = json.NewEncoder(w).Encode(unit)
+		default:
+			t.Errorf("unexpected GAM request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	a.gamClient = server.Client()
+	a.gamAPIBase = server.URL + "/v1/"
+
+	body := `{"gamAccountId":1,"items":[{"siteName":"` + siteName + `","domain":"news.example.com","name":"news.example.com-banner2","code":"news.example.com-banner2","sizes":["320x50"]}]}`
+	r := httptest.NewRequest(http.MethodPost, "http://localhost/api/admin/gam-ad-units/batch", strings.NewReader(body))
+	r = r.WithContext(context.WithValue(r.Context(), userKey{}, user{Email: "admin@example.test"}))
+	response := httptest.NewRecorder()
+	if err := a.batchGamAdUnits(response, r); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK {
+		t.Fatalf("batch status=%d body=%s", response.Code, response.Body.String())
+	}
+	var result struct {
+		Created int `json:"created"`
+		Failed  int `json:"failed"`
+		Results []struct {
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Created != 1 || result.Failed != 0 || len(result.Results) != 1 || result.Results[0].Status != "created" {
+		t.Fatalf("unexpected batch result: %+v", result)
+	}
+	var count int
+	if err := a.db.QueryRow("SELECT COUNT(*) FROM gam_ad_unit_creations WHERE status='created'").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("created records=%d, want 1", count)
 	}
 }

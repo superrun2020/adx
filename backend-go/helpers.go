@@ -69,6 +69,10 @@ func fieldFloat(input map[string]any, key string) (float64, bool) {
 	switch v := value.(type) {
 	case float64:
 		result = v
+	case int:
+		result = float64(v)
+	case int64:
+		result = float64(v)
 	case string:
 		var err error
 		result, err = strconv.ParseFloat(v, 64)
