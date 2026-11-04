@@ -61,9 +61,9 @@ export default function GamAdUnitCreator({ accounts = [] }) {
   const [queried, setQueried] = useState(false), [remoteUnits, setRemoteUnits] = useState([]);
   const [nextUnits, setNextUnits] = useState(''), [lastQuery, setLastQuery] = useState(null), [listBusy, setListBusy] = useState(false);
   const [open, setOpen] = useState(false), [mode, setMode] = useState('batch');
-  const [accountId, setAccountId] = useState(null), [siteNames, setSiteNames] = useState([]), [parentAdUnit, setParentAdUnit] = useState('');
-  const [sites, setSites] = useState([]), [parents, setParents] = useState([]);
-  const [nextSites, setNextSites] = useState(''), [nextParents, setNextParents] = useState('');
+  const [accountId, setAccountId] = useState(null), [siteNames, setSiteNames] = useState([]);
+  const [sites, setSites] = useState([]);
+  const [nextSites, setNextSites] = useState('');
   const [inventoryBusy, setInventoryBusy] = useState(false), [inventoryError, setInventoryError] = useState('');
   const [inventoryVersion, setInventoryVersion] = useState(0);
   const [single, setSingle] = useState(newRow()), [batchRows, setBatchRows] = useState(initialBatch);
@@ -78,13 +78,9 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     if (!open || !accountId) return;
     let current = true;
     setInventoryBusy(true); setInventoryError('');
-    Promise.all([
-      api('/api/admin/gam-accounts/' + accountId + '/sites'),
-      api('/api/admin/gam-accounts/' + accountId + '/ad-units')
-    ]).then(([siteResult, unitResult]) => {
+    api('/api/admin/gam-accounts/' + accountId + '/sites').then(siteResult => {
       if (!current) return;
       setSites(siteResult.items || []); setNextSites(siteResult.nextPageToken || '');
-      setParents(unitResult.items || []); setNextParents(unitResult.nextPageToken || '');
     }).catch(error => { if (current) setInventoryError(error.message); })
       .finally(() => { if (current) setInventoryBusy(false); });
     return () => { current = false; };
@@ -103,22 +99,16 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     finally { setListBusy(false); }
   };
   const chooseAccount = value => {
-    setAccountId(value); setSites([]); setParents([]); setNextSites(''); setNextParents('');
-    setSiteNames([]); setParentAdUnit(''); setInventoryError('');
+    setAccountId(value); setSites([]); setNextSites('');
+    setSiteNames([]); setInventoryError('');
   };
-  const loadMoreInventory = async kind => {
-    const pageToken = kind === 'sites' ? nextSites : nextParents;
-    if (!pageToken || !accountId) return;
+  const loadMoreSites = async () => {
+    if (!nextSites || !accountId) return;
     setInventoryBusy(true);
     try {
-      const result = await api('/api/admin/gam-accounts/' + accountId + '/' + (kind === 'sites' ? 'sites' : 'ad-units') + '?pageToken=' + encodeURIComponent(pageToken));
-      if (kind === 'sites') {
-        setSites(previous => [...new Map([...previous, ...(result.items || [])].map(item => [item.name, item])).values()]);
-        setNextSites(result.nextPageToken || '');
-      } else {
-        setParents(previous => [...new Map([...previous, ...(result.items || [])].map(item => [item.name, item])).values()]);
-        setNextParents(result.nextPageToken || '');
-      }
+      const result = await api('/api/admin/gam-accounts/' + accountId + '/sites?pageToken=' + encodeURIComponent(nextSites));
+      setSites(previous => [...new Map([...previous, ...(result.items || [])].map(item => [item.name, item])).values()]);
+      setNextSites(result.nextPageToken || '');
     } catch (error) { message.error(error.message); }
     finally { setInventoryBusy(false); }
   };
@@ -130,7 +120,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
   };
   const updateBatchRow = (id, changes) => setBatchRows(previous => previous.map(row => row.id === id ? { ...row, ...changes } : row));
   const preparedItems = () => {
-    if (!accountId || !siteNames.length || !parentAdUnit) throw new Error('请选择账号、网站和父广告单元');
+    if (!accountId || !siteNames.length) throw new Error('请选择账号和网站');
     const rows = mode === 'single' ? [single] : batchRows;
     if (!rows.length || rows.length > 100 || rows.length * siteNames.length > 100) throw new Error('每批最多创建 100 个广告单元');
     const items = siteNames.flatMap(siteName => {
@@ -143,7 +133,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
         if (siteNames.length > 1 && row.code.trim() && !row.code.includes('{domain}')) throw new Error('多网站自定义代码请包含 {domain}');
         const code = row.code.trim() ? row.code.trim().replaceAll('{domain}', domain) : defaultCode;
         const name = row.name.trim() ? row.name.trim().replaceAll('{domain}', domain) : code;
-        return { gamAccountId: accountId, siteName, parentAdUnit, code, name, sizes: row.sizes,
+        return { gamAccountId: accountId, siteName, code, name, sizes: row.sizes,
           description, adsenseEnabled, targetWindow };
       });
     });
@@ -205,8 +195,8 @@ export default function GamAdUnitCreator({ accounts = [] }) {
       <div style={{ maxHeight: '68vh', overflowY: 'auto', paddingRight: 8 }}>
         <Row gutter={[16, 12]}>
           <Col xs={24} sm={12}><Text><Text type="danger">* </Text>账号</Text><Select showSearch optionFilterProp="label" style={{ width: '100%', marginTop: 6 }} placeholder="请选择账号" value={accountId} onChange={chooseAccount} options={accountOptions}/></Col>
-          <Col xs={24} sm={12}><Text><Text type="danger">* </Text>网站</Text><Select mode={mode === 'batch' ? 'multiple' : undefined} showSearch optionFilterProp="label" style={{ width: '100%', marginTop: 6 }} placeholder="从 GAM Sites 选择网站" value={mode === 'batch' ? siteNames : siteNames[0]} onChange={value => setSiteNames(Array.isArray(value) ? value : value ? [value] : [])} loading={inventoryBusy} disabled={!accountId} options={sites.map(item => ({ value: item.name, label: siteDomain(item.url) + (item.approvalStatus ? ' · ' + item.approvalStatus : '') }))}/>{nextSites && <Button size="small" onClick={() => loadMoreInventory('sites')} loading={inventoryBusy}>加载更多网站</Button>}</Col>
-          <Col span={24}><Text><Text type="danger">* </Text>父广告单元</Text><Select showSearch optionFilterProp="label" style={{ width: '100%', marginTop: 6 }} placeholder="从当前账号选择父广告单元" value={parentAdUnit || undefined} onChange={setParentAdUnit} loading={inventoryBusy} disabled={!accountId} options={parents.map(item => ({ value: item.name, label: item.displayName + '（' + item.name + '）' }))}/>{nextParents && <Button size="small" onClick={() => loadMoreInventory('ad-units')} loading={inventoryBusy}>加载更多父单元</Button>}</Col>
+          <Col xs={24} sm={12}><Text><Text type="danger">* </Text>网站</Text><Select mode={mode === 'batch' ? 'multiple' : undefined} showSearch optionFilterProp="label" style={{ width: '100%', marginTop: 6 }} placeholder="从 GAM Sites 选择网站" value={mode === 'batch' ? siteNames : siteNames[0]} onChange={value => setSiteNames(Array.isArray(value) ? value : value ? [value] : [])} loading={inventoryBusy} disabled={!accountId} options={sites.map(item => ({ value: item.name, label: siteDomain(item.url) + (item.approvalStatus ? ' · ' + item.approvalStatus : '') }))}/>{nextSites && <Button size="small" onClick={loadMoreSites} loading={inventoryBusy}>加载更多网站</Button>}</Col>
+          <Col span={24}><Alert type="info" showIcon message="创建层级：顶级广告单元" description="系统自动使用当前 GAM 账号的网络根单元，无需选择现有广告单元。"/></Col>
         </Row>
         {inventoryError && <Alert type="error" style={{ marginTop: 12 }} showIcon message={'GAM 目录加载失败：' + inventoryError} action={<Button size="small" onClick={() => setInventoryVersion(value => value + 1)}>重试</Button>}/>}
         <Tabs style={{ marginTop: 16 }} activeKey={mode} onChange={value => { setMode(value); if (value === 'single') setSiteNames(previous => previous.slice(0, 1)); }} items={[
@@ -215,10 +205,10 @@ export default function GamAdUnitCreator({ accounts = [] }) {
         ]}/>
         <Collapse size="small" items={[{ key: 'advanced', label: '更多设置', children: <Row gutter={[16, 12]}>
           <Col span={24}><Text>说明</Text><Input maxLength={500} style={{ marginTop: 6 }} value={description} onChange={event => setDescription(event.target.value)}/></Col>
-          <Col xs={12}><Text>目标窗口</Text><Select style={{ width: '100%', marginTop: 6 }} value={targetWindow} onChange={setTargetWindow} options={[{ value: '', label: '继承父单元' }, { value: 'TOP', label: 'TOP' }, { value: 'BLANK', label: 'BLANK' }]}/></Col>
+          <Col xs={12}><Text>目标窗口</Text><Select style={{ width: '100%', marginTop: 6 }} value={targetWindow} onChange={setTargetWindow} options={[{ value: '', label: '继承网络根单元' }, { value: 'TOP', label: 'TOP' }, { value: 'BLANK', label: 'BLANK' }]}/></Col>
           <Col xs={12}><Text>启用 AdSense</Text><div style={{ marginTop: 10 }}><Switch checked={adsenseEnabled} onChange={setAdsenseEnabled}/></div></Col>
         </Row> }]}/>
-        <Text type="secondary">所选网站来自当前 GAM 账号；域名关联保存在本站，创建操作会直接写入 GAM。</Text>
+        <Text type="secondary">所选网站用于本站域名关联；创建操作会直接写入 GAM。</Text>
       </div>
     </Modal>
   </Space>;

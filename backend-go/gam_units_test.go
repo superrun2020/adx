@@ -23,6 +23,8 @@ func TestGamCreateRetryReconcilesRemoteSuccess(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var value any
 		switch r.URL.Path {
+		case "/v1/networks/123456":
+			value = map[string]any{"name": "networks/123456", "effectiveRootAdUnit": "networks/123456/adUnits/9"}
 		case "/v1/networks/123456/sites/1":
 			value = map[string]any{"name": "networks/123456/sites/1", "url": "https://example.test"}
 		case "/v1/networks/123456/adUnits/9":
@@ -53,7 +55,7 @@ func TestGamCreateRetryReconcilesRemoteSuccess(t *testing.T) {
 	defer server.Close()
 	a.gamClient = server.Client()
 	a.gamAPIBase = server.URL + "/v1/"
-	plan := map[string]any{"gamAccountId": 1, "siteName": "networks/123456/sites/1", "parentAdUnit": "networks/123456/adUnits/9", "name": "Banner", "code": "banner-300x250", "sizes": []string{"300x250"}}
+	plan := map[string]any{"gamAccountId": 1, "siteName": "networks/123456/sites/1", "name": "Banner", "code": "banner-300x250", "sizes": []string{"300x250"}}
 	body, _ := json.Marshal(plan)
 	request := httptest.NewRequest(http.MethodPost, "/api/admin/gam-ad-units", strings.NewReader(string(body)))
 	request.Header.Set("Authorization", "Bearer test-session")
@@ -65,6 +67,9 @@ func TestGamCreateRetryReconcilesRemoteSuccess(t *testing.T) {
 	if !a.exists("SELECT id FROM gam_ad_unit_creations WHERE status='failed' AND ad_unit_code='banner-300x250'") {
 		t.Fatal("missing failed creation")
 	}
+	if remote["parentAdUnit"] != "networks/123456/adUnits/9" {
+		t.Fatalf("expected top-level ad unit, got parent %v", remote["parentAdUnit"])
+	}
 	retry := httptest.NewRequest(http.MethodPost, "/api/admin/gam-ad-units/1/retry", nil)
 	retry.Header.Set("Authorization", "Bearer test-session")
 	retried := httptest.NewRecorder()
@@ -74,5 +79,16 @@ func TestGamCreateRetryReconcilesRemoteSuccess(t *testing.T) {
 	}
 	if posts != 1 || !a.exists("SELECT id FROM gam_ad_unit_creations WHERE status='created' AND provider_id='networks/123456/adUnits/10'") {
 		t.Fatalf("posts=%d retry=%s", posts, retried.Body.String())
+	}
+	plan["parentAdUnit"] = "networks/123456/adUnits/8"
+	plan["code"] = "nested"
+	plan["name"] = "Nested"
+	badBody, _ := json.Marshal(plan)
+	badRequest := httptest.NewRequest(http.MethodPost, "/api/admin/gam-ad-units", strings.NewReader(string(badBody)))
+	badRequest.Header.Set("Authorization", "Bearer test-session")
+	badResponse := httptest.NewRecorder()
+	a.routes().ServeHTTP(badResponse, badRequest)
+	if badResponse.Code != 400 || posts != 1 {
+		t.Fatalf("nested ad unit accepted: status=%d posts=%d", badResponse.Code, posts)
 	}
 }

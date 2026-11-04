@@ -36,6 +36,8 @@ before(async () => {
     if (url.hostname !== 'admanager.googleapis.com') return realFetch(target, options);
     const network = url.pathname.split('/')[3];
     const path = url.pathname.split('/').slice(4).join('/');
+    if (path === '') return response({ name: 'networks/' + network,
+      effectiveRootAdUnit: 'networks/' + network + '/adUnits/9' });
     if (path === 'sites') return response({ sites: [
       { name: 'networks/' + network + '/sites/1', url: 'https://' + network + '.example.com', approvalStatus: 'APPROVED' }
     ] });
@@ -89,13 +91,15 @@ test('batch creates real REST resources, isolates networks, and reconciles a fai
   assert.equal(sites.body.items[0].url, 'https://123456.example.com');
   const parent = 'networks/123456/adUnits/9', site = 'networks/123456/sites/1';
   const batch = await request('/api/admin/gam-ad-units/batch', 'POST', { gamAccountId: 1, items: [
-    { siteName: site, parentAdUnit: parent, name: 'Banner A', code: 'banner-a', sizes: ['300x250', '336x280'] },
-    { siteName: site, parentAdUnit: parent, name: 'Inter', code: 'inter', sizes: ['out-of-page', 'fluid'] }
+    { siteName: site, name: 'Banner A', code: 'banner-a', sizes: ['300x250', '336x280'] },
+    { siteName: site, name: 'Inter', code: 'inter', sizes: ['out-of-page', 'fluid'] }
   ] });
   assert.equal(batch.status, 200);
   assert.equal(batch.body.created, 2);
   assert.equal(batch.body.failed, 0);
   assert.equal(posts.length, 2);
+  assert.equal(posts[0].unit.parentAdUnit, parent);
+  assert.equal(posts[1].unit.parentAdUnit, parent);
   assert.deepEqual(posts[0].unit.adUnitSizes.map(item => item.size.sizeType), ['PIXEL', 'PIXEL']);
   assert.deepEqual(posts[1].unit.adUnitSizes.map(item => item.size.sizeType), ['INTERSTITIAL', 'FLUID']);
   assert.equal(batch.body.results[0].item.domain, '123456.example.com');
@@ -107,23 +111,27 @@ test('batch creates real REST resources, isolates networks, and reconciles a fai
   assert.equal((await request('/api/admin/gam-ad-units/batch', 'POST', { gamAccountId: 1, items: Array(101).fill({}) })).status, 400);
 
   const duplicate = await request('/api/admin/gam-ad-units/batch', 'POST', { gamAccountId: 1,
-    items: [{ siteName: site, parentAdUnit: parent, name: 'Banner A', code: 'banner-a', sizes: ['300x250'] }] });
+    items: [{ siteName: site, name: 'Banner A', code: 'banner-a', sizes: ['300x250'] }] });
   assert.equal(duplicate.body.failed, 1);
   assert.equal(posts.length, 2);
   const wrongSite = await request('/api/admin/gam-ad-units', 'POST', { gamAccountId: 2,
-    siteName: site, parentAdUnit: 'networks/999999/adUnits/9', name: 'Wrong', code: 'wrong', size: '300x250' });
+    siteName: site, name: 'Wrong', code: 'wrong', size: '300x250' });
   assert.equal(wrongSite.status, 400);
+  assert.equal(posts.length, 2);
+  const nested = await request('/api/admin/gam-ad-units', 'POST', { gamAccountId: 1,
+    siteName: site, parentAdUnit: 'networks/123456/adUnits/8', name: 'Nested', code: 'nested', size: '300x250' });
+  assert.equal(nested.status, 400);
   assert.equal(posts.length, 2);
 
   const other = await request('/api/admin/gam-ad-units', 'POST', { gamAccountId: 2,
-    siteName: 'networks/999999/sites/1', parentAdUnit: 'networks/999999/adUnits/9',
+    siteName: 'networks/999999/sites/1',
     name: 'Banner A', code: 'banner-a', sizes: ['300x250'] });
   assert.equal(other.status, 201);
   assert.equal(other.body.item.networkCode, '999999');
 
   failAfterCreate = true;
   const failed = await request('/api/admin/gam-ad-units', 'POST', { gamAccountId: 1,
-    siteName: site, parentAdUnit: parent, name: 'Flaky', code: 'flaky', sizes: ['320x50'] });
+    siteName: site, name: 'Flaky', code: 'flaky', sizes: ['320x50'] });
   assert.equal(failed.status, 502);
   const listed = await request('/api/admin/gam-ad-units');
   const row = listed.body.items.find(item => item.adUnitCode === 'flaky');

@@ -1,4 +1,4 @@
-import { adUnitResource, buildGamAdUnit, createGamAdUnit, findGamAdUnitByCode, gamSiteResource, getGamAdUnit, getGamSite, listGamAdUnits, listGamSites } from './gam-beta.mjs';
+import { adUnitResource, buildGamAdUnit, createGamAdUnit, findGamAdUnitByCode, gamApiRequest, gamSiteResource, getGamSite, listGamAdUnits, listGamSites } from './gam-beta.mjs';
 
 function siteDomain(value) {
   const raw = String(value || '').trim();
@@ -15,6 +15,13 @@ function sameRemoteAdUnit(remote, expected) {
   ]).sort());
   return remote.parentAdUnit === expected.parentAdUnit && remote.displayName === expected.displayName &&
     remote.adUnitCode === expected.adUnitCode && sizeKey(remote) === sizeKey(expected);
+}
+
+async function rootAdUnit(network, token) {
+  const result = await gamApiRequest(network, token, 'networks/' + network);
+  if (result.name !== 'networks/' + network) throw new Error('gam_root_ad_unit_unavailable');
+  try { return adUnitResource(result.effectiveRootAdUnit, network); }
+  catch { throw new Error('gam_root_ad_unit_unavailable'); }
 }
 
 export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptCredential, tokenFor, gamSync, audit }) {
@@ -217,7 +224,9 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     if (!gamAccount || gamAccount.status !== 'active') throw new Error('invalid_gam_account_status');
     const network = gamAccount.network_code;
     const siteName = gamSiteResource(input?.siteName, network);
-    const parentName = adUnitResource(input?.parentAdUnit, network);
+    const token = context.token || await tokenFor(gamAccount);
+    const parentName = context.root || await rootAdUnit(network, token);
+    if (input?.parentAdUnit && input.parentAdUnit !== parentName) throw new Error('invalid_nested_ad_unit');
     const adUnit = buildGamAdUnit(input, network, parentName);
     const key = network + ':' + adUnit.adUnitCode.toLowerCase();
     if (creating.has(key)) throw new Error('gam_account_busy');
@@ -225,16 +234,11 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     try {
       if (db.prepare('SELECT id FROM gam_ad_unit_creations WHERE network_code=? AND ad_unit_code=?').get(network, adUnit.adUnitCode))
         throw new Error('ad_unit_already_created');
-      const token = context.token || await tokenFor(gamAccount);
-      const sites = context.sites || new Map(), parents = context.parents || new Map();
+      const sites = context.sites || new Map();
       let site = sites.get(siteName);
       if (!site) { site = getGamSite(network, token, siteName); sites.set(siteName, site); }
       site = await site;
-      let parent = parents.get(parentName);
-      if (!parent) { parent = getGamAdUnit(network, token, parentName); parents.set(parentName, parent); }
-      parent = await parent;
       if (site.name !== siteName) throw new Error('invalid_gam_site');
-      if (parent.name !== parentName) throw new Error('invalid_parent_ad_unit');
       if (await findGamAdUnitByCode(network, token, adUnit.adUnitCode)) throw new Error('ad_unit_already_exists_in_gam');
       const domain = siteDomain(site.url);
       const inserted = db.prepare('INSERT INTO gam_ad_unit_creations(gam_account_id,network_code,site_name,site_url,domain,parent_ad_unit,display_name,ad_unit_code,sizes_json,description,adsense_enabled,target_window,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
@@ -260,17 +264,19 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     const gamAccount = account(req.body?.gamAccountId);
     if (!gamAccount || gamAccount.status !== 'active') throw new Error('invalid_gam_account_status');
     if (!Array.isArray(inputs) || !inputs.length || inputs.length > 100) throw new Error('invalid_ad_unit_batch');
+    const token = await tokenFor(gamAccount);
+    const root = await rootAdUnit(gamAccount.network_code, token);
     const seen = new Set();
     const prepared = inputs.map(input => {
       gamSiteResource(input?.siteName, gamAccount.network_code);
-      adUnitResource(input?.parentAdUnit, gamAccount.network_code);
-      const adUnit = buildGamAdUnit(input, gamAccount.network_code, input.parentAdUnit);
+      if (input?.parentAdUnit && input.parentAdUnit !== root) throw new Error('invalid_nested_ad_unit');
+      const adUnit = buildGamAdUnit(input, gamAccount.network_code, root);
       const code = adUnit.adUnitCode.toLowerCase();
       if (seen.has(code)) throw new Error('duplicate_ad_unit_code');
       seen.add(code);
       return { ...input, gamAccountId: gamAccount.id, code: adUnit.adUnitCode };
     });
-    const context = { token: await tokenFor(gamAccount), sites: new Map(), parents: new Map() };
+    const context = { token, root, sites: new Map() };
     const results = [];
     for (let offset = 0; offset < prepared.length; offset += 3) {
       const group = prepared.slice(offset, offset + 3);
@@ -298,16 +304,17 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     if (creating.has(row.network_code + ':' + row.ad_unit_code.toLowerCase())) throw new Error('gam_account_busy');
     creating.add(row.network_code + ':' + row.ad_unit_code.toLowerCase());
     try {
+      const token = await tokenFor(gamAccount);
+      const root = await rootAdUnit(row.network_code, token);
+      if (row.parent_ad_unit !== root) throw new Error('invalid_nested_ad_unit');
       const adUnit = buildGamAdUnit({ name: row.display_name, code: row.ad_unit_code, sizes_json: row.sizes_json,
         description: row.description, adsense_enabled: row.adsense_enabled, target_window: row.target_window },
-      row.network_code, row.parent_ad_unit);
-      const token = await tokenFor(gamAccount);
-      const [site, parent, existing] = await Promise.all([
-        getGamSite(row.network_code, token, row.site_name), getGamAdUnit(row.network_code, token, row.parent_ad_unit),
+      row.network_code, root);
+      const [site, existing] = await Promise.all([
+        getGamSite(row.network_code, token, row.site_name),
         findGamAdUnitByCode(row.network_code, token, row.ad_unit_code)
       ]);
       if (site.name !== row.site_name || siteDomain(site.url) !== row.domain) throw new Error('gam_site_mismatch');
-      if (parent.name !== row.parent_ad_unit) throw new Error('invalid_parent_ad_unit');
       if (existing && !sameRemoteAdUnit(existing, adUnit)) throw new Error('ad_unit_already_exists_in_gam');
       const remote = existing || await createGamAdUnit(row.network_code, token, adUnit);
       res.json({ ok: true, item: saveCreated(row, remote, req.user.email, req.ip) });
@@ -328,11 +335,10 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     if (publishing.has(id)) throw new Error('gam_account_busy');
     publishing.add(id);
     try {
-      const parentName = String(req.body?.parentAdUnit || '').trim();
-      const adUnit = buildGamAdUnit(item, gamAccount.network_code, parentName);
       const token = await tokenFor(gamAccount);
-      const parent = await getGamAdUnit(gamAccount.network_code, token, parentName);
-      if (parent.name !== parentName) throw new Error('invalid_parent_ad_unit');
+      const parentName = await rootAdUnit(gamAccount.network_code, token);
+      if (req.body?.parentAdUnit && req.body.parentAdUnit !== parentName) throw new Error('invalid_nested_ad_unit');
+      const adUnit = buildGamAdUnit(item, gamAccount.network_code, parentName);
       let remote = await findGamAdUnitByCode(gamAccount.network_code, token, item.code);
       if (remote && remote.parentAdUnit !== parentName) throw new Error('parent_ad_unit_mismatch');
       if (!remote) remote = await createGamAdUnit(gamAccount.network_code, token, adUnit);

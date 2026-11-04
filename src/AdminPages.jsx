@@ -37,7 +37,7 @@ function SettlementConfig() {
 function AdUnitBuilder() {
   const [file,setFile] = useState(null), [payload,setPayload] = useState(null), [preview,setPreview] = useState(null), [items,setItems] = useState([]), [accounts,setAccounts] = useState([]);
   const [busy,setBusy] = useState(''), [subdomains,setSubdomains] = useState([]), [types,setTypes] = useState([]), [sizes,setSizes] = useState([]);
-  const [gamAccountId,setGamAccountId] = useState(null), [parentAdUnit,setParentAdUnit] = useState(''), [parents,setParents] = useState([]);
+  const [gamAccountId,setGamAccountId] = useState(null);
   const load = async () => { const [u,a] = await Promise.all([api('/api/admin/ad-units'),api('/api/admin/gam-accounts')]); setItems(u.items); setAccounts(a.items); };
   useEffect(() => { load().catch(e=>message.error(e.message)); }, []);
   const choose = async e => { const picked=e.target.files?.[0]; if(!picked)return; try { setPayload(JSON.parse(await picked.text())); setFile(picked); setPreview(null); } catch { message.error('JSON 文件无法解析'); } };
@@ -51,15 +51,10 @@ function AdUnitBuilder() {
     try { const result=await api('/api/admin/ad-units/create',{method:'POST',body:JSON.stringify({items:preview.items})}); message.success('已保存 '+result.created+' 个创建任务'); setPreview(null); await load(); }
     catch(e) { message.error(e.message); } finally { setBusy(''); }
   };
-  const loadParents = async () => {
-    if(!gamAccountId)return message.warning('先选择 REST 账户'); setBusy('parents');
-    try { const result=await api('/api/admin/gam-accounts/'+gamAccountId+'/ad-units'); setParents(result.items); message.success('已加载 '+result.items.length+' 个广告单元'); }
-    catch(e) { message.error(e.message); } finally { setBusy(''); }
-  };
   const publish = async item => {
-    if(!gamAccountId || !parentAdUnit.trim())return message.warning('请选择 REST 账户并填写父广告单元资源名');
+    if(!gamAccountId)return message.warning('请选择 REST 账户');
     setBusy('publish:'+item.id);
-    try { const result=await api('/api/admin/ad-units/'+item.id+'/publish',{method:'POST',body:JSON.stringify({gamAccountId,parentAdUnit:parentAdUnit.trim()})}); message.success('已通过 REST 创建：'+result.name); await load(); }
+    try { const result=await api('/api/admin/ad-units/'+item.id+'/publish',{method:'POST',body:JSON.stringify({gamAccountId})}); message.success('已通过 REST 创建顶级广告单元：'+result.name); await load(); }
     catch(e) { message.error(e.message); await load(); } finally { setBusy(''); }
   };
   const download = () => {
@@ -83,10 +78,8 @@ function AdUnitBuilder() {
       ]}/>
     </Card>}
     <Card title="JSON 任务 REST 发布设置"><Space wrap>
-      <Select style={{minWidth:230}} placeholder="选择 REST 账户" value={gamAccountId} onChange={v=>{setGamAccountId(v);setParents([]);setParentAdUnit('')}} options={accounts.filter(x=>x.status==='active').map(x=>({value:x.id,label:x.name+'（'+x.networkCode+'）'}))}/>
-      <Button onClick={loadParents} loading={busy==='parents'} disabled={!gamAccountId}>加载父广告单元</Button>
-      <Select showSearch allowClear style={{minWidth:380}} placeholder="选择已加载的父广告单元" value={parentAdUnit||undefined} onChange={v=>setParentAdUnit(v||'')} options={parents.map(x=>({value:x.name,label:x.displayName+'（'+x.name+'）'}))}/>
-      <Input style={{width:380}} placeholder="也可输入 networks/编号/adUnits/编号" value={parentAdUnit} onChange={e=>setParentAdUnit(e.target.value)}/>
+      <Select style={{minWidth:230}} placeholder="选择 REST 账户" value={gamAccountId} onChange={setGamAccountId} options={accounts.filter(x=>x.status==='active').map(x=>({value:x.id,label:x.name+'（'+x.networkCode+'）'}))}/>
+      <Text type="secondary">发布时自动使用该账号的网络根单元，创建顶级广告单元。</Text>
     </Space></Card>
     <Card title="原有 JSON 创建任务" extra={<Button onClick={download} disabled={!items.length}>导出 CSV</Button>}><Table rowKey="id" dataSource={items} scroll={{x:1300}} columns={[
       {title:'编码',dataIndex:'code'},{title:'名称',dataIndex:'name'},{title:'尺寸',dataIndex:'size'},

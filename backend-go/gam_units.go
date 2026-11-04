@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -124,6 +125,17 @@ func (a *app) getGamAdUnit(r *http.Request, network, token, name string) (map[st
 	}
 	return a.gamRequest(r.Context(), network, token, name, http.MethodGet, nil, nil)
 }
+func (a *app) gamRootAdUnit(ctx context.Context, network, token string) (string, error) {
+	result, err := a.gamRequest(ctx, network, token, "networks/"+network, http.MethodGet, nil, nil)
+	if err != nil {
+		return "", err
+	}
+	root := importString(result["effectiveRootAdUnit"])
+	if result["name"] != "networks/"+network || resourceForNetwork(adUnitPattern, root, network, "invalid_gam_root_ad_unit") != nil {
+		return "", errors.New("gam_root_ad_unit_unavailable")
+	}
+	return root, nil
+}
 func (a *app) findGamAdUnitByCode(r *http.Request, network, token, code string) (map[string]any, error) {
 	encoded, _ := json.Marshal(code)
 	values := url.Values{"pageSize": {"100"}, "filter": {"adUnitCode = " + string(encoded)}}
@@ -186,15 +198,32 @@ func (a *app) unlockCreating(key string) {
 	delete(a.gamCreating, key)
 	a.gamMu.Unlock()
 }
-func (a *app) createGamDirect(r *http.Request, input map[string]any, actor, ip string, providedToken string) (map[string]any, error) {
+func (a *app) createGamDirect(r *http.Request, input map[string]any, actor, ip, providedToken, providedRoot string) (map[string]any, error) {
 	account, err := a.gamAccount(fieldID(input, "gamAccountId"))
 	if err != nil || account["status"] != "active" {
 		return nil, errors.New("invalid_gam_account_status")
 	}
 	network := importString(account["network_code"])
-	siteName, parent := fieldString(input, "siteName"), fieldString(input, "parentAdUnit")
+	siteName := fieldString(input, "siteName")
 	if err := resourceForNetwork(sitePattern, siteName, network, "invalid_gam_site"); err != nil {
 		return nil, err
+	}
+	token := providedToken
+	if token == "" {
+		token, err = a.tokenFor(r.Context(), account)
+		if err != nil {
+			return nil, err
+		}
+	}
+	parent := providedRoot
+	if parent == "" {
+		parent, err = a.gamRootAdUnit(r.Context(), network, token)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if requested := fieldString(input, "parentAdUnit"); requested != "" && requested != parent {
+		return nil, errors.New("invalid_nested_ad_unit")
 	}
 	unit, err := buildGamAdUnit(input, network, parent)
 	if err != nil {
@@ -209,26 +238,12 @@ func (a *app) createGamDirect(r *http.Request, input map[string]any, actor, ip s
 	if a.exists("SELECT id FROM gam_ad_unit_creations WHERE network_code=? AND ad_unit_code=?", network, code) {
 		return nil, errors.New("ad_unit_already_created")
 	}
-	token := providedToken
-	if token == "" {
-		token, err = a.tokenFor(r.Context(), account)
-		if err != nil {
-			return nil, err
-		}
-	}
 	site, err := a.getGamSite(r, network, token, siteName)
-	if err != nil {
-		return nil, err
-	}
-	parentUnit, err := a.getGamAdUnit(r, network, token, parent)
 	if err != nil {
 		return nil, err
 	}
 	if site["name"] != siteName {
 		return nil, errors.New("invalid_gam_site")
-	}
-	if parentUnit["name"] != parent {
-		return nil, errors.New("invalid_parent_ad_unit")
 	}
 	existing, err := a.findGamAdUnitByCode(r, network, token, code)
 	if err != nil {
@@ -277,7 +292,7 @@ func (a *app) createGamAdUnit(w http.ResponseWriter, r *http.Request) error {
 	if !ok {
 		return nil
 	}
-	item, err := a.createGamDirect(r, input, currentUser(r).Email, clientIP(r), "")
+	item, err := a.createGamDirect(r, input, currentUser(r).Email, clientIP(r), "", "")
 	if err != nil {
 		return err
 	}
@@ -298,6 +313,14 @@ func (a *app) batchGamAdUnits(w http.ResponseWriter, r *http.Request) error {
 		return errors.New("invalid_ad_unit_batch")
 	}
 	network := importString(account["network_code"])
+	token, err := a.tokenFor(r.Context(), account)
+	if err != nil {
+		return err
+	}
+	root, err := a.gamRootAdUnit(r.Context(), network, token)
+	if err != nil {
+		return err
+	}
 	prepared := make([]map[string]any, len(entries))
 	seen := make(map[string]bool)
 	for index, value := range entries {
@@ -305,14 +328,14 @@ func (a *app) batchGamAdUnits(w http.ResponseWriter, r *http.Request) error {
 		if item == nil {
 			return errors.New("invalid_ad_unit_plan")
 		}
-		site, parent := fieldString(item, "siteName"), fieldString(item, "parentAdUnit")
+		site := fieldString(item, "siteName")
 		if err := resourceForNetwork(sitePattern, site, network, "invalid_gam_site"); err != nil {
 			return err
 		}
-		if err := resourceForNetwork(adUnitPattern, parent, network, "invalid_parent_ad_unit"); err != nil {
-			return err
+		if requested := fieldString(item, "parentAdUnit"); requested != "" && requested != root {
+			return errors.New("invalid_nested_ad_unit")
 		}
-		unit, err := buildGamAdUnit(item, network, parent)
+		unit, err := buildGamAdUnit(item, network, root)
 		if err != nil {
 			return err
 		}
@@ -323,10 +346,6 @@ func (a *app) batchGamAdUnits(w http.ResponseWriter, r *http.Request) error {
 		seen[code] = true
 		item["gamAccountId"] = intMap(account, "id")
 		prepared[index] = item
-	}
-	token, err := a.tokenFor(r.Context(), account)
-	if err != nil {
-		return err
 	}
 	results := make([]map[string]any, len(entries))
 	jobs := make(chan int)
@@ -341,7 +360,7 @@ func (a *app) batchGamAdUnits(w http.ResponseWriter, r *http.Request) error {
 				if code == "" {
 					code = fieldString(item, "gam_ad_unit_code")
 				}
-				created, err := a.createGamDirect(r, item, currentUser(r).Email, clientIP(r), token)
+				created, err := a.createGamDirect(r, item, currentUser(r).Email, clientIP(r), token, root)
 				if err != nil {
 					detail := err.Error()
 					if len(detail) > 500 {
@@ -409,19 +428,22 @@ func (a *app) retryGamAdUnit(w http.ResponseWriter, r *http.Request) error {
 	}
 	defer a.unlockCreating(key)
 	plan := map[string]any{"name": row["display_name"], "code": code, "sizes_json": row["sizes_json"], "description": row["description"], "adsense_enabled": row["adsense_enabled"], "target_window": row["target_window"]}
-	unit, err := buildGamAdUnit(plan, network, importString(row["parent_ad_unit"]))
-	if err != nil {
-		return err
-	}
 	token, err := a.tokenFor(r.Context(), account)
 	if err != nil {
 		return err
 	}
-	site, err := a.getGamSite(r, network, token, importString(row["site_name"]))
+	root, err := a.gamRootAdUnit(r.Context(), network, token)
 	if err != nil {
 		return a.failGamCreation(row, err)
 	}
-	parent, err := a.getGamAdUnit(r, network, token, importString(row["parent_ad_unit"]))
+	if row["parent_ad_unit"] != root {
+		return a.failGamCreation(row, errors.New("invalid_nested_ad_unit"))
+	}
+	unit, err := buildGamAdUnit(plan, network, root)
+	if err != nil {
+		return a.failGamCreation(row, err)
+	}
+	site, err := a.getGamSite(r, network, token, importString(row["site_name"]))
 	if err != nil {
 		return a.failGamCreation(row, err)
 	}
@@ -431,9 +453,6 @@ func (a *app) retryGamAdUnit(w http.ResponseWriter, r *http.Request) error {
 	}
 	if site["name"] != row["site_name"] || domain != row["domain"] {
 		return a.failGamCreation(row, errors.New("gam_site_mismatch"))
-	}
-	if parent["name"] != row["parent_ad_unit"] {
-		return a.failGamCreation(row, errors.New("invalid_parent_ad_unit"))
 	}
 	remote, err := a.findGamAdUnitByCode(r, network, token, code)
 	if err != nil {
@@ -490,21 +509,20 @@ func (a *app) publishManagedAdUnit(w http.ResponseWriter, r *http.Request) error
 	a.gamMu.Unlock()
 	defer func() { a.gamMu.Lock(); delete(a.gamPublishing, id); a.gamMu.Unlock() }()
 	network := importString(account["network_code"])
-	parentName := fieldString(input, "parentAdUnit")
-	unit, err := buildGamAdUnit(item, network, parentName)
-	if err != nil {
-		return a.failManagedUnit(id, err)
-	}
 	token, err := a.tokenFor(r.Context(), account)
 	if err != nil {
 		return a.failManagedUnit(id, err)
 	}
-	parent, err := a.getGamAdUnit(r, network, token, parentName)
+	parentName, err := a.gamRootAdUnit(r.Context(), network, token)
 	if err != nil {
 		return a.failManagedUnit(id, err)
 	}
-	if parent["name"] != parentName {
-		return a.failManagedUnit(id, errors.New("invalid_parent_ad_unit"))
+	if requested := fieldString(input, "parentAdUnit"); requested != "" && requested != parentName {
+		return a.failManagedUnit(id, errors.New("invalid_nested_ad_unit"))
+	}
+	unit, err := buildGamAdUnit(item, network, parentName)
+	if err != nil {
+		return a.failManagedUnit(id, err)
 	}
 	remote, err := a.findGamAdUnitByCode(r, network, token, importString(item["code"]))
 	if err != nil {
