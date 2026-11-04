@@ -3,7 +3,7 @@ import { Alert, Button, Card, DatePicker, Form, Input, InputNumber, Modal, Selec
 import { ReloadOutlined, SettingOutlined } from '@ant-design/icons';
 
 const { Title, Text } = Typography;
-const cadenceNames = { day: '今天 · 前次快照', three_days: '近 3 天 · 前 3 天', week: '近 7 天 · 前 7 天', month: '近 30 天 · 前 30 天' };
+const cadenceNames = { day: '最近有数据日 · 前次快照', three_days: '近 3 天 · 前 3 天', week: '近 7 天 · 前 7 天', month: '近 30 天 · 前 30 天' };
 const money = value => '$' + Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const signedMoney = value => (Number(value) > 0 ? '+' : Number(value) < 0 ? '-' : '') + money(Math.abs(Number(value || 0)));
 const signed = (value, suffix = '') => (Number(value) > 0 ? '+' : '') + Number(value || 0).toLocaleString('en-US', { maximumFractionDigits: suffix ? 2 : 0 }) + suffix;
@@ -97,9 +97,10 @@ export default function RegressionMonitor() {
       <Space><Button icon={<ReloadOutlined/>} loading={loading} onClick={() => { loadMeta(); loadEvents(); }}>刷新记录</Button><Button type="primary" icon={<SettingOutlined/>} onClick={openSettings}>通知条件设置</Button></Space></div>
     <Alert showIcon type="info" message={
       '飞书条件：原收入 > ' + money(settings?.minRevenue ?? 50) + ' 且收入下降 ≥ ' + Number(settings?.minDropPercent ?? 2).toFixed(2) + '%；' + (settings?.feishuEnabled ? '通知已启用' : '通知未启用')
-    } description="今天每 15 分钟与同日上次快照比较；近 3 天每 24 小时、近 7 天每 3 天、近 30 天每 7 天重新拉取，与前一等长时段比较。首次今日同步只建立基准；空报表不会被当作零收入回退。"/>
+    } description="最近有数据的一天每 15 分钟与该日上次快照比较（优先今天，否则昨天）；近 3 天每 24 小时、近 7 天每 3 天、近 30 天每 7 天重新拉取，与前一等长时段比较。首次同步只建立基准；空报表不会被当作零收入回退。"/>
     {latest && <Text type="secondary">最近完成：{latest.accountName} · {cadenceNames[latest.cadence]} · {stamp(latest.finishedAt)}（{latest.timeZone}）</Text>}
     {runs[0]?.status === 'failed' && <Alert type="warning" showIcon message={'最近一次监测失败：' + runs[0].accountName + ' · ' + cadenceNames[runs[0].cadence]} description={runs[0].detail || '请检查 GAM 账号同步状态'} />}
+    {runs[0]?.status === 'skipped' && <Alert type="info" showIcon message={'最近一次监测暂未比较：' + runs[0].accountName + ' · ' + cadenceNames[runs[0].cadence]} description={runs[0].detail || '等待 GAM 返回可比较的完整数据'} />}
     <Card className="regression-filters"><Space wrap size={12}>
       <DatePicker.RangePicker value={range} onChange={updateFilter(setRange)} />
       <Select allowClear showSearch optionFilterProp="label" placeholder="全部账号" style={{width:210}} value={accountId} onChange={updateFilter(setAccountId)} options={accounts.map(account => ({value:account.id,label:account.name + ' (' + account.networkCode + ')'}))}/>

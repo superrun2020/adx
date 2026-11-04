@@ -175,7 +175,13 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
       let window;
       try { window = regressionWindow(account.rest_network_timezone, cadence.name); }
       catch (error) { console.error('regression_timezone_invalid', account.id, error.message); return; }
-      const previous = db.prepare("SELECT MAX(finished_at) finished_at FROM regression_runs WHERE soap_account_id=? AND cadence=? AND status IN ('success','skipped')").get(account.id, window.cadence);
+      if (cadence.days === 1 && !facts(account, window.start, window.end).size) {
+        window.start = localDate(account.rest_network_timezone, -1);
+        window.end = window.start;
+      }
+      const previous = window.cadence === 'day'
+        ? db.prepare("SELECT MAX(finished_at) finished_at FROM regression_runs WHERE soap_account_id=? AND cadence=? AND period_start=? AND status IN ('success','skipped')").get(account.id, window.cadence, window.start)
+        : db.prepare("SELECT MAX(finished_at) finished_at FROM regression_runs WHERE soap_account_id=? AND cadence=? AND status IN ('success','skipped')").get(account.id, window.cadence);
       if (previous.finished_at && Date.now() - Date.parse(previous.finished_at.replace(' ', 'T') + 'Z') < window.interval - 60_000) continue;
       try {
         let old = null;

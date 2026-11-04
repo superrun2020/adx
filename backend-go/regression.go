@@ -267,7 +267,13 @@ func (a *app) regressionRuns(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) regressionDue(accountID int64, window regressionWindow) bool {
 	var latest sql.NullString
-	err := a.db.QueryRow("SELECT MAX(finished_at) FROM regression_runs WHERE soap_account_id=? AND cadence=? AND status IN ('success','skipped')", accountID, window.Cadence).Scan(&latest)
+	query := "SELECT MAX(finished_at) FROM regression_runs WHERE soap_account_id=? AND cadence=? AND status IN ('success','skipped')"
+	args := []any{accountID, window.Cadence}
+	if window.Cadence == "day" {
+		query += " AND period_start=?"
+		args = append(args, window.Start)
+	}
+	err := a.db.QueryRow(query, args...).Scan(&latest)
 	if err != nil || !latest.Valid {
 		return true
 	}
@@ -422,6 +428,18 @@ func (a *app) runRegressionForAccount(ctx context.Context, account map[string]an
 		if err != nil {
 			log.Printf("regression_timezone_invalid account=%d error=%v", intMap(account, "id"), err)
 			return
+		}
+		if item.Days == 1 {
+			today, readErr := a.regressionFacts(ctx, account, window.Start, window.End)
+			if readErr != nil {
+				a.recordRegressionFailure(account, window, readErr)
+				continue
+			}
+			if len(today) == 0 {
+				date, _ := time.Parse("2006-01-02", window.Start)
+				window.Start = date.AddDate(0, 0, -1).Format("2006-01-02")
+				window.End = window.Start
+			}
 		}
 		if !a.regressionDue(intMap(account, "id"), window) {
 			continue

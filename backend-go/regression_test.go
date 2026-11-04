@@ -83,4 +83,8 @@ func TestRegressionSnapshotAndNotificationDedup(t *testing.T) {
 	if err != nil || len(alerts) != 0 || !a.exists("SELECT id FROM regression_events WHERE alert_status='duplicate'") {
 		t.Fatalf("duplicate alerts=%v error=%v", alerts, err)
 	}
+	otherDay := regressionWindow{Cadence: "day", Start: "2026-11-05", End: "2026-11-05", Interval: 15 * time.Minute}
+	if !a.regressionDue(1, otherDay) {
+		t.Fatal("a new date must get its own first snapshot")
+	}
 }
