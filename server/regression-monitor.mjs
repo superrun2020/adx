@@ -116,6 +116,12 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
       .all(account.rest_channel_id, upstream.account_key, start, end, 'gam-rest:' + account.network_code + ':%');
     return new Map(rows.map(({ domain, ...row }) => [domain, row]));
   };
+  const coveredDays = (account, start, end) => {
+    const upstream = db.prepare("SELECT account_key FROM upstream_accounts WHERE id=? AND soap_account_id=? AND status='active'").get(account.rest_upstream_account_id, account.id);
+    if (!upstream) throw new Error('rest_report_mapping_inactive');
+    return db.prepare("SELECT COUNT(DISTINCT report_date) days FROM revenue_facts WHERE channel_id=? AND account=? AND report_date BETWEEN ? AND ? AND domain<>'' AND source_file LIKE ?")
+      .get(account.rest_channel_id, upstream.account_key, start, end, 'gam-rest:' + account.network_code + ':%').days;
+  };
   const saveRun = (account, window, status, detail = '', old = null, newer = new Map()) => transaction(() => {
     const runId = Number(db.prepare('INSERT INTO regression_runs(soap_account_id,cadence,period_start,period_end,baseline_start,baseline_end,status,detail) VALUES(?,?,?,?,?,?,?,?)')
       .run(account.id, window.cadence, window.start, window.end, window.baselineStart, window.baselineEnd, status, detail).lastInsertRowid);
@@ -190,11 +196,11 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
           if (last) old = new Map(db.prepare('SELECT domain,revenue,requests,impressions,clicks FROM regression_snapshots WHERE run_id=?').all(last.id).map(({ domain, ...row }) => [domain, row]));
         } else {
           const baseline = await gamSync.execute(account, { start: window.baselineStart, end: window.baselineEnd, write: true });
-          if (!baseline.rows) { saveRun(account, window, 'skipped', '基准时间段没有可比较的域名数据'); continue; }
+          if (!baseline.rows || coveredDays(account, window.baselineStart, window.baselineEnd) !== cadence.days) { saveRun(account, window, 'skipped', '基准时间段没有完整的逐日域名数据'); continue; }
           old = facts(account, window.baselineStart, window.baselineEnd);
           if (!old.size) { saveRun(account, window, 'skipped', '基准时间段没有可比较的域名数据'); continue; }
           const current = await gamSync.execute(account, { start: window.start, end: window.end, write: true });
-          if (!current.rows) { saveRun(account, window, 'skipped', '当前时间段没有可比较的域名数据'); continue; }
+          if (!current.rows || coveredDays(account, window.start, window.end) !== cadence.days) { saveRun(account, window, 'skipped', '当前时间段没有完整的逐日域名数据'); continue; }
         }
         const newer = facts(account, window.start, window.end);
         if (!newer.size) { saveRun(account, window, 'skipped', '当前时间段没有可比较的域名数据'); continue; }

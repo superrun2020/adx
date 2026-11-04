@@ -97,7 +97,7 @@ export default function RegressionMonitor() {
       <Space><Button icon={<ReloadOutlined/>} loading={loading} onClick={() => { loadMeta(); loadEvents(); }}>刷新记录</Button><Button type="primary" icon={<SettingOutlined/>} onClick={openSettings}>通知条件设置</Button></Space></div>
     <Alert showIcon type="info" message={
       '飞书条件：原收入 > ' + money(settings?.minRevenue ?? 50) + ' 且收入下降 ≥ ' + Number(settings?.minDropPercent ?? 2).toFixed(2) + '%；' + (settings?.feishuEnabled ? '通知已启用' : '通知未启用')
-    } description="最近有数据的一天每 15 分钟与该日上次快照比较（优先今天，否则昨天）；近 3 天每 24 小时、近 7 天每 3 天、近 30 天每 7 天重新拉取，与前一等长时段比较。首次同步只建立基准；空报表不会被当作零收入回退。"/>
+    } description="最近有数据的一天每 15 分钟与该日上次快照比较（优先今天，否则昨天）；近 3 天每 24 小时、近 7 天每 3 天、近 30 天每 7 天重新拉取，与前一等长时段比较。首次同步只建立基准；任一时段缺少完整逐日数据时跳过，不按零收入报警。"/>
     {latest && <Text type="secondary">最近完成：{latest.accountName} · {cadenceNames[latest.cadence]} · {stamp(latest.finishedAt)}（{latest.timeZone}）</Text>}
     {runs[0]?.status === 'failed' && <Alert type="warning" showIcon message={'最近一次监测失败：' + runs[0].accountName + ' · ' + cadenceNames[runs[0].cadence]} description={runs[0].detail || '请检查 GAM 账号同步状态'} />}
     {runs[0]?.status === 'skipped' && <Alert type="info" showIcon message={'最近一次监测暂未比较：' + runs[0].accountName + ' · ' + cadenceNames[runs[0].cadence]} description={runs[0].detail || '等待 GAM 返回可比较的完整数据'} />}

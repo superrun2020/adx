@@ -303,6 +303,16 @@ func (a *app) regressionFacts(ctx context.Context, account map[string]any, start
 	return result, rows.Err()
 }
 
+func (a *app) regressionCoveredDays(ctx context.Context, account map[string]any, start, end string) (int, error) {
+	channelID, key, err := a.gamMapping(account)
+	if err != nil {
+		return 0, err
+	}
+	var days int
+	err = a.db.QueryRowContext(ctx, "SELECT COUNT(DISTINCT report_date) FROM revenue_facts WHERE channel_id=? AND account=? AND report_date BETWEEN ? AND ? AND domain<>'' AND source_file LIKE ?", channelID, key, start, end, "gam-rest:"+importString(account["network_code"])+":%").Scan(&days)
+	return days, err
+}
+
 func (a *app) previousDailySnapshot(accountID int64, window regressionWindow) (map[string]regressionMeasure, error) {
 	var runID int64
 	err := a.db.QueryRow("SELECT id FROM regression_runs WHERE soap_account_id=? AND cadence='day' AND period_start=? AND status='success' ORDER BY id DESC LIMIT 1", accountID, window.Start).Scan(&runID)
@@ -450,11 +460,15 @@ func (a *app) runRegressionForAccount(ctx context.Context, account map[string]an
 		} else {
 			var result map[string]any
 			result, err = a.executeGam(ctx, account, window.BaselineStart, window.BaselineEnd, true)
-			if err == nil && int(result["rows"].(int)) > 0 {
+			var covered int
+			if err == nil && result["rows"].(int) > 0 {
+				covered, err = a.regressionCoveredDays(ctx, account, window.BaselineStart, window.BaselineEnd)
+			}
+			if err == nil && covered == item.Days {
 				old, err = a.regressionFacts(ctx, account, window.BaselineStart, window.BaselineEnd)
 			}
 			if err == nil && len(old) == 0 {
-				_, err = a.saveRegressionRun(ctx, account, window, "skipped", "基准时间段没有可比较的域名数据", nil, nil)
+				_, err = a.saveRegressionRun(ctx, account, window, "skipped", "基准时间段没有完整的逐日域名数据", nil, nil)
 			}
 			if err == nil && len(old) == 0 {
 				continue
@@ -470,8 +484,13 @@ func (a *app) runRegressionForAccount(ctx context.Context, account map[string]an
 				a.recordRegressionFailure(account, window, fetchErr)
 				continue
 			}
-			if result["rows"].(int) == 0 {
-				_, _ = a.saveRegressionRun(ctx, account, window, "skipped", "当前时间段没有可比较的域名数据", nil, nil)
+			covered, coverageErr := a.regressionCoveredDays(ctx, account, window.Start, window.End)
+			if coverageErr != nil {
+				a.recordRegressionFailure(account, window, coverageErr)
+				continue
+			}
+			if result["rows"].(int) == 0 || covered != item.Days {
+				_, _ = a.saveRegressionRun(ctx, account, window, "skipped", "当前时间段没有完整的逐日域名数据", nil, nil)
 				continue
 			}
 		}
