@@ -301,14 +301,17 @@ func dateRangeMatches(value any, from, end string) bool {
 	return dateText(rangeValue["startDate"]) == from && dateText(rangeValue["endDate"]) == end
 }
 func localGamDate(timezone string, offset int) (string, error) {
+	return localGamDateAt(timezone, time.Now(), offset)
+}
+func localGamDateAt(timezone string, instant time.Time, offset int) (string, error) {
 	if timezone == "" {
-		timezone = "UTC"
+		return "", errors.New("invalid_network_timezone")
 	}
 	location, err := time.LoadLocation(timezone)
 	if err != nil {
 		return "", errors.New("invalid_network_timezone")
 	}
-	now := time.Now().In(location)
+	now := instant.In(location)
 	return time.Date(now.Year(), now.Month(), now.Day()+offset, 0, 0, 0, 0, location).Format("2006-01-02"), nil
 }
 func intMap(value map[string]any, key string) int64 { return int64(numberValue(value[key])) }

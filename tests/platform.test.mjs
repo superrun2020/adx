@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 const port = 4191;
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'adx-platform-'));
@@ -290,4 +291,61 @@ test('dashboard daily totals rebuild after domain and share changes', async () =
   const refreshed = await request(route);
   assert.equal(refreshed.body.summary.revenue, 20);
   assert.equal(refreshed.body.summary.channelRevenue, 10);
+});
+
+test('Ad Manager account edit preserves credentials and pauses disabled sync', async () => {
+  cookie = '';
+  const login = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: 'admin@example.test', password: 'AdminPass123!' }) });
+  cookie = login.response.headers.get('set-cookie').split(';')[0];
+  const credentials = { client_email: 'service@example.iam.gserviceaccount.com', private_key: 'test-private-key' };
+  const created = await request('/api/admin/gam-accounts', { method: 'POST', body: JSON.stringify({
+    name: 'Network A', networkCode: '2331234567', accountEmail: 'owner@example.com',
+    advertiser: 'Advertiser A', bd: 'BD A', advertiserSharePercent: 12.5,
+    operationStatus: 'normal', enabled: true, notes: 'first', credentials
+  }) });
+  assert.equal(created.response.status, 200);
+  const id = created.body.item.id;
+  assert.equal(created.body.item.credentialConfigured, 1);
+  assert.equal(created.body.item.accountEmail, 'owner@example.com');
+  assert.equal(created.body.item.credentials, undefined);
+  const db = new DatabaseSync(path.join(dir, 'test.sqlite'));
+  const original = db.prepare('SELECT credential_ciphertext FROM soap_accounts WHERE id=?').get(id).credential_ciphertext;
+  db.prepare("UPDATE soap_accounts SET status='active',rest_sync_enabled=1,rest_report_name='networks/2331234567/reports/1' WHERE id=?").run(id);
+  const updated = await request('/api/admin/gam-accounts/' + id, { method: 'PUT', body: JSON.stringify({
+    name: 'Network A edited', networkCode: '2331234567', accountEmail: 'owner@example.com',
+    advertiser: 'Advertiser B', bd: 'BD B', advertiserSharePercent: 15,
+    operationStatus: 'limited', enabled: false, notes: 'paused'
+  }) });
+  assert.equal(updated.response.status, 200);
+  assert.equal(updated.body.item.enabled, 0);
+  assert.equal(updated.body.item.operationStatus, 'limited');
+  assert.equal(updated.body.item.advertiser, 'Advertiser B');
+  const paused = db.prepare('SELECT credential_ciphertext,rest_sync_enabled,rest_report_name,status FROM soap_accounts WHERE id=?').get(id);
+  assert.equal(paused.credential_ciphertext, original);
+  assert.equal(paused.rest_sync_enabled, 0);
+  assert.equal(paused.rest_report_name, 'networks/2331234567/reports/1');
+  assert.equal(paused.status, 'active');
+  const invalid = await request('/api/admin/gam-accounts/' + id, { method: 'PUT', body: JSON.stringify({
+    name: 'Invalid', networkCode: '2331234567', advertiserSharePercent: 101, enabled: true
+  }) });
+  assert.equal(invalid.response.status, 400);
+  assert.equal(db.prepare('SELECT name FROM soap_accounts WHERE id=?').get(id).name, 'Network A edited');
+  const changedNetwork = await request('/api/admin/gam-accounts/' + id, { method: 'PUT', body: JSON.stringify({
+    name: 'Network A edited', networkCode: '2331234568', advertiserSharePercent: 15, enabled: true
+  }) });
+  assert.equal(changedNetwork.response.status, 400);
+  assert.equal(db.prepare('SELECT network_code FROM soap_accounts WHERE id=?').get(id).network_code, '2331234567');
+  const replaced = await request('/api/admin/gam-accounts/' + id, { method: 'PUT', body: JSON.stringify({
+    name: 'Network A edited', networkCode: '2331234567', accountEmail: 'owner@example.com',
+    advertiser: 'Advertiser B', bd: 'BD B', advertiserSharePercent: 15,
+    operationStatus: 'limited', enabled: true, notes: 'new key',
+    credentials: { ...credentials, private_key: 'replacement-private-key' }
+  }) });
+  assert.equal(replaced.response.status, 200);
+  const reset = db.prepare('SELECT credential_ciphertext,rest_sync_enabled,rest_report_name,status FROM soap_accounts WHERE id=?').get(id);
+  assert.notEqual(reset.credential_ciphertext, original);
+  assert.equal(reset.rest_sync_enabled, 0);
+  assert.equal(reset.rest_report_name, '');
+  assert.equal(reset.status, 'untested');
+  db.close();
 });

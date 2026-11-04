@@ -1,12 +1,13 @@
 import { gamApiRequest } from './gam-beta.mjs';
 import { createRestReport, fetchRestReport, normalizeRestReportRows, setReportRange, validateReportDefinition } from './gam-reports.mjs';
 
-function localDate(timeZone, offset = 0) {
+export function localDate(timeZone, offset = 0, instant = new Date()) {
+  if (!timeZone) throw new Error('invalid_network_timezone');
   let parts;
   try {
     parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: timeZone || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit'
-    }).formatToParts(new Date());
+      timeZone, year: 'numeric', month: '2-digit', day: '2-digit'
+    }).formatToParts(instant);
   } catch {
     throw new Error('invalid_network_timezone');
   }
@@ -76,8 +77,14 @@ export function createGamSync({ db, transaction, tokenFor, normalizedDomain, dom
       const timingsMs = {};
       const checkpoint = stage => { timingsMs[stage] = Math.round(performance.now() - started); };
       const { channelId, accountKey } = mapping(account);
-      const from = asDate(start || localDate(account.rest_network_timezone, -1));
-      const through = asDate(end || localDate(account.rest_network_timezone));
+      let timeZone = account.rest_network_timezone;
+      if (!timeZone) {
+        const network = await test(account);
+        timeZone = network.timeZone;
+        db.prepare('UPDATE soap_accounts SET rest_network_timezone=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(timeZone, account.id);
+      }
+      const from = asDate(start || localDate(timeZone, -1));
+      const through = asDate(end || localDate(timeZone));
       if (from > through || Date.parse(through) - Date.parse(from) > 31 * 86400000) throw new Error('invalid_report_range');
       let runId;
       if (write) {

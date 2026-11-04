@@ -7,7 +7,9 @@ const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 const boot = (await readFile(new URL('../src/boot.js', import.meta.url), 'utf8'))
   .replace("import { readCached, rememberRead } from './readCache.js';", '')
   .replace("import('./main.jsx')", 'globalThis.__loadApp()')
-  .replace("import('./RevenueChart.jsx')", 'globalThis.__loadChart()');
+  .replace("import('./RevenueChart.jsx')", 'globalThis.__loadChart()')
+  .replace("import('./ReportExplorer.jsx')", 'globalThis.__loadSecondary()')
+  .replace("import('./AdminPages.jsx')", 'globalThis.__loadSecondary()');
 
 function start({ loginResponse, loadApp, dashboardResponse }) {
   const listeners = {};
@@ -40,7 +42,8 @@ function start({ loginResponse, loadApp, dashboardResponse }) {
       return loginResponse;
     },
     __loadApp: loadApp,
-    __loadChart: async () => ({})
+    __loadChart: async () => ({}),
+    __loadSecondary: async () => ({})
   };
   vm.runInNewContext(boot, context);
   return { listeners, button, status, retry, calls, loginPage };

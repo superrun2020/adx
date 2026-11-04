@@ -101,6 +101,16 @@ func (a *app) executeGam(ctx context.Context, account map[string]any, start, end
 		return nil, err
 	}
 	timezone := importString(account["rest_network_timezone"])
+	if timezone == "" {
+		network, networkErr := a.gamNetwork(ctx, account)
+		if networkErr != nil {
+			return nil, networkErr
+		}
+		timezone = importString(network["timeZone"])
+		if _, err = a.db.ExecContext(ctx, "UPDATE soap_accounts SET rest_network_timezone=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", timezone, id); err != nil {
+			return nil, err
+		}
+	}
 	if start == "" {
 		start, err = localGamDate(timezone, -1)
 		if err != nil {
@@ -281,6 +291,9 @@ func (a *app) fetchAndNormalizeGam(ctx context.Context, account map[string]any, 
 }
 func (a *app) activateGam(account map[string]any, actor string) error {
 	id := intMap(account, "id")
+	if intMap(account, "enabled") != 1 {
+		return errors.New("invalid_gam_account_status")
+	}
 	if importString(account["rest_report_name"]) == "" || account["rest_last_preview_at"] == nil || intMap(account, "rest_last_preview_rows") < 1 {
 		return errors.New("rest_preview_required")
 	}
@@ -311,7 +324,7 @@ func (a *app) runScheduledGamSync() {
 	a.gamScheduled = true
 	a.gamMu.Unlock()
 	defer func() { a.gamMu.Lock(); a.gamScheduled = false; a.gamMu.Unlock() }()
-	accounts, err := queryMaps(a.db, "SELECT * FROM soap_accounts WHERE status='active' AND rest_sync_enabled=1")
+	accounts, err := queryMaps(a.db, "SELECT * FROM soap_accounts WHERE status='active' AND rest_sync_enabled=1 AND enabled=1")
 	if err != nil {
 		log.Printf("gam_rest_sync_accounts_failed: %v", err)
 		return

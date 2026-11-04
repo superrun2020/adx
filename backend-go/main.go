@@ -148,6 +148,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /api/public/channel/revenue", a.publicChannelRevenue)
 	mux.HandleFunc("GET /api/admin/gam-accounts", a.auth("admin", a.gamAccounts))
 	mux.HandleFunc("POST /api/admin/gam-accounts", a.auth("admin", gamRoute(a.createGamAccount)))
+	mux.HandleFunc("PUT /api/admin/gam-accounts/{id}", a.auth("admin", gamRoute(a.updateGamAccount)))
 	mux.HandleFunc("POST /api/admin/gam-accounts/{id}/test", a.auth("admin", gamRoute(a.testGamAccount)))
 	mux.HandleFunc("POST /api/admin/gam-accounts/{id}/report", a.auth("admin", gamRoute(a.reportGamAccount)))
 	mux.HandleFunc("POST /api/admin/gam-accounts/{id}/preview", a.auth("admin", gamRoute(a.previewGamAccount)))

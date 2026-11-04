@@ -145,6 +145,9 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 CREATE TABLE IF NOT EXISTS soap_accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, network_code TEXT NOT NULL UNIQUE,
   credential_ciphertext TEXT NOT NULL, api_version TEXT NOT NULL DEFAULT 'v1',
+  account_email TEXT NOT NULL DEFAULT '', advertiser TEXT NOT NULL DEFAULT '', bd TEXT NOT NULL DEFAULT '',
+  advertiser_share_percent REAL NOT NULL DEFAULT 0, operation_status TEXT NOT NULL DEFAULT 'unknown',
+  enabled INTEGER NOT NULL DEFAULT 1, notes TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'untested', last_test_at TEXT, last_test_status TEXT,
   last_test_summary TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -188,7 +191,10 @@ for (const [column, definition] of Object.entries({
   rest_report_name: "TEXT NOT NULL DEFAULT ''", rest_channel_id: 'INTEGER',
   rest_upstream_account_id: 'INTEGER', rest_money_divisor: 'INTEGER',
   rest_sync_enabled: 'INTEGER NOT NULL DEFAULT 0', rest_last_preview_at: 'TEXT',
-  rest_last_preview_rows: 'INTEGER NOT NULL DEFAULT 0', rest_network_timezone: "TEXT NOT NULL DEFAULT ''"
+  rest_last_preview_rows: 'INTEGER NOT NULL DEFAULT 0', rest_network_timezone: "TEXT NOT NULL DEFAULT ''",
+  account_email: "TEXT NOT NULL DEFAULT ''", advertiser: "TEXT NOT NULL DEFAULT ''",
+  bd: "TEXT NOT NULL DEFAULT ''", advertiser_share_percent: 'REAL NOT NULL DEFAULT 0',
+  operation_status: "TEXT NOT NULL DEFAULT 'unknown'", enabled: 'INTEGER NOT NULL DEFAULT 1', notes: "TEXT NOT NULL DEFAULT ''"
 })) {
   if (!db.prepare("SELECT 1 FROM pragma_table_info('soap_accounts') WHERE name=?").get(column)) {
     db.exec('ALTER TABLE soap_accounts ADD COLUMN ' + column + ' ' + definition);

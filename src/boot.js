@@ -37,6 +37,8 @@ function loadApp() {
 
 function prepareApp() {
   if (!readyPromise) readyPromise = loadApp().then(app => {
+    // Secondary pages can continue downloading without holding the login button.
+    void Promise.allSettled([import('./ReportExplorer.jsx'), import('./AdminPages.jsx')]);
     if (!opening && !mounted) {
       button.disabled = false;
       button.textContent = '登录';

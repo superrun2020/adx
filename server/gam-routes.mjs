@@ -25,7 +25,21 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     const number = Number(id);
     return Number.isSafeInteger(number) && number > 0 ? db.prepare('SELECT * FROM soap_accounts WHERE id=?').get(number) : null;
   };
-  const publicAccount = id => db.prepare('SELECT id,name,network_code networkCode,status,last_test_at lastTestAt,last_test_status lastTestStatus,last_test_summary lastTestSummary,rest_report_name reportName,rest_channel_id channelId,rest_upstream_account_id upstreamAccountId,rest_money_divisor moneyDivisor,rest_sync_enabled syncEnabled,rest_last_preview_at lastPreviewAt,rest_last_preview_rows lastPreviewRows,rest_network_timezone timeZone,created_at createdAt FROM soap_accounts WHERE id=?').get(id);
+  const accountColumns = 'id,name,network_code networkCode,account_email accountEmail,advertiser,bd,advertiser_share_percent advertiserSharePercent,operation_status operationStatus,enabled,notes,CASE WHEN length(credential_ciphertext)>0 THEN 1 ELSE 0 END credentialConfigured,status,last_test_at lastTestAt,last_test_status lastTestStatus,last_test_summary lastTestSummary,rest_report_name reportName,rest_channel_id channelId,rest_upstream_account_id upstreamAccountId,rest_money_divisor moneyDivisor,rest_sync_enabled syncEnabled,rest_last_preview_at lastPreviewAt,rest_last_preview_rows lastPreviewRows,rest_network_timezone timeZone,created_at createdAt';
+  const publicAccount = id => db.prepare('SELECT ' + accountColumns + ' FROM soap_accounts WHERE id=?').get(id);
+  const metadata = body => {
+    const email = String(body?.accountEmail || '').trim();
+    const advertiser = String(body?.advertiser || '').trim();
+    const bd = String(body?.bd || '').trim();
+    const share = body?.advertiserSharePercent == null ? 0 : Number(body.advertiserSharePercent);
+    const operation = String(body?.operationStatus || 'unknown').trim();
+    const enabled = body?.enabled === undefined ? 1 : typeof body.enabled === 'boolean' ? Number(body.enabled) : null;
+    const notes = String(body?.notes || '').trim();
+    if ((email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) || advertiser.length > 200 || bd.length > 200 ||
+        notes.length > 2000 || !Number.isFinite(share) || share < 0 || share > 100 ||
+        !['normal', 'limited', 'unknown'].includes(operation) || enabled === null) throw new Error('invalid_gam_account_metadata');
+    return { email, advertiser, bd, share, operation, enabled, notes };
+  };
   const route = fn => (req, res) => Promise.resolve().then(() => fn(req, res)).catch(error => {
     const detail = String(error.message || error).slice(0, 500);
     const status = /^(invalid_|unsupported_|duplicate_|rest_report_not_configured|rest_report_mapping_inactive|rest_preview_required)/.test(detail) ? 400
@@ -35,18 +49,19 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
   });
 
   app.get('/api/admin/gam-accounts', requireAuth, requireAdmin, (_req, res) => {
-    res.json({ ok: true, items: db.prepare('SELECT id,name,network_code networkCode,status,last_test_at lastTestAt,last_test_status lastTestStatus,last_test_summary lastTestSummary,rest_report_name reportName,rest_channel_id channelId,rest_upstream_account_id upstreamAccountId,rest_money_divisor moneyDivisor,rest_sync_enabled syncEnabled,rest_last_preview_at lastPreviewAt,rest_last_preview_rows lastPreviewRows,rest_network_timezone timeZone,created_at createdAt FROM soap_accounts ORDER BY id DESC').all() });
+    res.json({ ok: true, items: db.prepare('SELECT ' + accountColumns + ' FROM soap_accounts ORDER BY id DESC').all() });
   });
 
   app.post('/api/admin/gam-accounts', requireAuth, requireAdmin, route((req, res) => {
     const name = String(req.body?.name || '').trim();
     const networkCode = String(req.body?.networkCode || '').trim();
     const credentials = req.body?.credentials;
-    if (!name || !/^\d{6,}$/.test(networkCode) || !credentials || typeof credentials !== 'object' ||
+    if (!name || name.length > 200 || !/^\d{6,}$/.test(networkCode) || !credentials || typeof credentials !== 'object' ||
         !credentials.client_email || !credentials.private_key) throw new Error('invalid_gam_account');
+    const meta = metadata(req.body);
     const cipher = encryptCredential(credentials);
-    db.prepare("INSERT INTO soap_accounts(name,network_code,credential_ciphertext,created_by) VALUES(?,?,?,?) ON CONFLICT(network_code) DO UPDATE SET name=excluded.name,credential_ciphertext=excluded.credential_ciphertext,status='untested',last_test_at=NULL,last_test_status=NULL,last_test_summary='',rest_report_name='',rest_sync_enabled=0,rest_last_preview_at=NULL,rest_last_preview_rows=0,updated_at=CURRENT_TIMESTAMP")
-      .run(name, networkCode, cipher, req.user.email);
+    db.prepare("INSERT INTO soap_accounts(name,network_code,credential_ciphertext,account_email,advertiser,bd,advertiser_share_percent,operation_status,enabled,notes,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(network_code) DO UPDATE SET name=excluded.name,credential_ciphertext=excluded.credential_ciphertext,status='untested',last_test_at=NULL,last_test_status=NULL,last_test_summary='',rest_report_name='',rest_sync_enabled=0,rest_last_preview_at=NULL,rest_last_preview_rows=0,updated_at=CURRENT_TIMESTAMP")
+      .run(name, networkCode, cipher, meta.email, meta.advertiser, meta.bd, meta.share, meta.operation, meta.enabled, meta.notes, req.user.email);
     const id = accountByCode(networkCode).id;
     audit(req.user.email, 'gam_account.save', 'gam_account', id, JSON.stringify({ name, networkCode }), req.ip);
     res.json({ ok: true, item: publicAccount(id) });
@@ -54,6 +69,34 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
   function accountByCode(networkCode) {
     return db.prepare('SELECT id FROM soap_accounts WHERE network_code=?').get(networkCode);
   }
+
+  app.put('/api/admin/gam-accounts/:id', requireAuth, requireAdmin, route((req, res) => {
+    const before = account(req.params.id);
+    if (!before) return res.status(404).json({ ok: false, error: 'gam_account_not_found' });
+    const name = String(req.body?.name || '').trim();
+    const networkCode = String(req.body?.networkCode || '').trim();
+    if (!name || name.length > 200 || !/^\d{6,}$/.test(networkCode)) throw new Error('invalid_gam_account');
+    if (networkCode !== before.network_code) throw new Error('invalid_gam_network_change');
+    if (db.prepare('SELECT id FROM soap_accounts WHERE network_code=? AND id<>?').get(networkCode, before.id)) throw new Error('duplicate_gam_network_code');
+    const meta = metadata(req.body);
+    let cipher = before.credential_ciphertext;
+    let reset = false;
+    if (Object.hasOwn(req.body || {}, 'credentials')) {
+      const credentials = req.body.credentials;
+      if (!credentials || typeof credentials !== 'object' || !credentials.client_email || !credentials.private_key) throw new Error('invalid_gam_account_credentials');
+      cipher = encryptCredential(credentials);
+      reset = true;
+    }
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare('UPDATE soap_accounts SET name=?,network_code=?,account_email=?,advertiser=?,bd=?,advertiser_share_percent=?,operation_status=?,enabled=?,notes=?,credential_ciphertext=?,rest_sync_enabled=CASE WHEN ?=1 OR ?=0 THEN 0 ELSE rest_sync_enabled END,updated_at=CURRENT_TIMESTAMP WHERE id=?')
+        .run(name, networkCode, meta.email, meta.advertiser, meta.bd, meta.share, meta.operation, meta.enabled, meta.notes, cipher, Number(reset), meta.enabled, before.id);
+      if (reset) db.prepare("UPDATE soap_accounts SET status='untested',last_test_at=NULL,last_test_status=NULL,last_test_summary='',rest_report_name='',rest_last_preview_at=NULL,rest_last_preview_rows=0 WHERE id=?").run(before.id);
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
+    audit(req.user.email, 'gam_account.update', 'gam_account', before.id, JSON.stringify({ name, networkCode, enabled:meta.enabled, connectionReset:reset }), req.ip);
+    res.json({ ok: true, item: publicAccount(before.id) });
+  }));
 
   app.post('/api/admin/gam-accounts/:id/test', requireAuth, requireAdmin, route(async (req, res) => {
     const item = account(req.params.id);
@@ -96,7 +139,7 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
   app.post('/api/admin/gam-accounts/:id/activate', requireAuth, requireAdmin, route((req, res) => {
     const item = account(req.params.id);
     if (!item) return res.status(404).json({ ok: false, error: 'gam_account_not_found' });
-    if (item.status !== 'active') throw new Error('invalid_gam_account_status');
+    if (item.status !== 'active' || item.enabled !== 1) throw new Error('invalid_gam_account_status');
     gamSync.activate(item, req.user.email);
     res.json({ ok: true, item: publicAccount(item.id) });
   }));
@@ -111,7 +154,7 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
   app.post('/api/admin/gam-accounts/:id/sync-now', requireAuth, requireAdmin, route(async (req, res) => {
     const item = account(req.params.id);
     if (!item) return res.status(404).json({ ok: false, error: 'gam_account_not_found' });
-    if (item.status !== 'active' || item.rest_sync_enabled !== 1) throw new Error('invalid_gam_account_status');
+    if (item.status !== 'active' || item.rest_sync_enabled !== 1 || item.enabled !== 1) throw new Error('invalid_gam_account_status');
     const result = await gamSync.execute(item, { start: req.body?.start, end: req.body?.end, write: true });
     audit(req.user.email, 'gam.sync_manual', 'gam_account', item.id, JSON.stringify({ start: result.start, end: result.end, rows: result.rows }), req.ip);
     res.json({ ok: true, result });
@@ -311,7 +354,7 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     if (scheduledSyncRunning) return;
     scheduledSyncRunning = true;
     try {
-      const accounts = db.prepare("SELECT * FROM soap_accounts WHERE status='active' AND rest_sync_enabled=1").all();
+      const accounts = db.prepare("SELECT * FROM soap_accounts WHERE status='active' AND rest_sync_enabled=1 AND enabled=1").all();
       // Overlap remote GAM work, while keeping the account-level lock and
       // bounding concurrent report jobs to avoid API quota bursts.
       for (let offset = 0; offset < accounts.length; offset += 2) {

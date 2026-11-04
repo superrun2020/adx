@@ -2,9 +2,19 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildGamAdUnit, createGamAdUnit, findGamAdUnitByCode, gamApiRequest, getGamAdUnit, getGamSite, listGamSites } from '../server/gam-beta.mjs';
 import { buildReportDefinition, fetchRestReport, normalizeRestReportRows, setReportRange, validateReportDefinition } from '../server/gam-reports.mjs';
+import { localDate } from '../server/gam-sync.mjs';
 
 const network = '123456';
 const parent = 'networks/123456/adUnits/9';
+
+test('scheduled GAM dates follow each account timezone', () => {
+  const instant = new Date('2026-11-04T01:30:00Z');
+  assert.equal(localDate('America/Los_Angeles', 0, instant), '2026-11-03');
+  assert.equal(localDate('America/Los_Angeles', -1, instant), '2026-11-02');
+  assert.equal(localDate('Asia/Tokyo', 0, instant), '2026-11-04');
+  assert.equal(localDate('Asia/Tokyo', -1, instant), '2026-11-03');
+  assert.throws(() => localDate('', 0, instant), /invalid_network_timezone/);
+});
 
 test('GAM retries throttled reads but never duplicates writes', async () => {
   let reads = 0, writes = 0;

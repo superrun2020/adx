@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Alert, Button, Card, Col, Collapse, DatePicker, Descriptions, Drawer, Empty, Form,
-  Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Statistic, Table,
+  Alert, Button, Card, Col, Collapse, DatePicker, Descriptions, Drawer, Dropdown, Empty, Form,
+  Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Statistic, Switch, Table,
   Tag, Typography, message
 } from 'antd';
 import {
@@ -120,10 +120,11 @@ function DataImport() {
 
 function GamAccounts() {
   const [items,setItems] = useState([]), [channels,setChannels] = useState([]), [upstream,setUpstream] = useState([]), [runs,setRuns] = useState([]);
-  const [busy,setBusy] = useState(''), [open,setOpen] = useState(false), [reportAccount,setReportAccount] = useState(null);
+  const [filters,setFilters] = useState({});
+  const [busy,setBusy] = useState(''), [editing,setEditing] = useState(null), [reportAccount,setReportAccount] = useState(null);
   const [file,setFile] = useState(null), [credentials,setCredentials] = useState(null), [preview,setPreview] = useState(null);
-  const [dates,setDates] = useState([dayjs().subtract(1,'day'),dayjs()]);
-  const [form] = Form.useForm(), [reportForm] = Form.useForm();
+  const [dates,setDates] = useState(null);
+  const [form] = Form.useForm(), [filterForm] = Form.useForm(), [reportForm] = Form.useForm();
   const load = async () => {
     const [a,c,u,r] = await Promise.all([api('/api/admin/gam-accounts'),api('/api/admin/channels'),api('/api/admin/upstream-accounts'),api('/api/admin/gam-sync/runs')]);
     setItems(a.items); setChannels(c.items); setUpstream(u.items); setRuns(r.items);
@@ -134,10 +135,24 @@ function GamAccounts() {
     try { const json = JSON.parse(await picked.text()); if (!json.client_email || !json.private_key) throw new Error('invalid'); setCredentials(json); setFile(picked); }
     catch { setCredentials(null); setFile(null); message.error('服务账号 JSON 缺少 client_email 或 private_key'); }
   };
+  const openCreate = () => {
+    form.resetFields(); form.setFieldsValue({advertiserSharePercent:0,operationStatus:'normal',enabled:true});
+    setCredentials(null); setFile(null); setEditing({id:null});
+  };
+  const openEdit = item => {
+    form.setFieldsValue({name:item.name,accountEmail:item.accountEmail,networkCode:item.networkCode,advertiser:item.advertiser || upstreamField(item,'advertiser').replace('—',''),bd:item.bd || upstreamField(item,'bd').replace('—',''),advertiserSharePercent:item.advertiserSharePercent || 0,operationStatus:item.operationStatus || 'normal',enabled:item.enabled !== 0,notes:item.notes});
+    setCredentials(null); setFile(null); setEditing(item);
+  };
   const save = async values => {
-    if (!credentials) return message.warning('请上传服务账号 JSON');
+    if (!editing?.id && !credentials) return message.warning('新建账户需要上传服务账号 JSON');
+    if (!editing?.id && items.some(item=>item.networkCode===values.networkCode?.trim())) return message.error('Network Code 已存在，请用编辑操作');
     setBusy('save');
-    try { await api('/api/admin/gam-accounts', {method:'POST',body:JSON.stringify({...values,credentials})}); message.success('REST 账户已保存，请测试连接'); form.resetFields(); setCredentials(null); setFile(null); setOpen(false); await load(); }
+    try {
+      const payload = {...values,enabled:Boolean(values.enabled),...(credentials?{credentials}:{})};
+      await api(editing?.id?'/api/admin/gam-accounts/'+editing.id:'/api/admin/gam-accounts', {method:editing?.id?'PUT':'POST',body:JSON.stringify(payload)});
+      message.success(editing?.id?'账号已更新':'账户已保存，请测试连接');
+      form.resetFields(); setCredentials(null); setFile(null); setEditing(null); await load();
+    }
     catch(e) { message.error(e.message); } finally { setBusy(''); }
   };
   const invoke = async (id, action, body, label) => {
@@ -150,27 +165,57 @@ function GamAccounts() {
   };
   const openReport = item => { setReportAccount(item); reportForm.setFieldsValue({channelId:item.channelId || undefined,upstreamAccountId:item.upstreamAccountId || undefined,moneyDivisor:item.moneyDivisor || 1}); };
   const configure = async values => { if (await invoke(reportAccount.id,'report',values,'REST 报表已配置，请先预览并核对金额')) { setReportAccount(null); setPreview(null); } };
-  const previewReport = item => invoke(item.id,'preview',{start:dates?.[0]?.format('YYYY-MM-DD'),end:dates?.[1]?.format('YYYY-MM-DD')},'报表预览完成');
-  const syncNow = item => invoke(item.id,'sync-now',{start:dates?.[0]?.format('YYYY-MM-DD'),end:dates?.[1]?.format('YYYY-MM-DD')},'REST 数据已写入本地报表');
+  const selectedDates = () => dates ? {start:dates[0].format('YYYY-MM-DD'),end:dates[1].format('YYYY-MM-DD')} : {};
+  const previewReport = item => invoke(item.id,'preview',selectedDates(),'报表预览完成');
+  const syncNow = item => invoke(item.id,'sync-now',selectedDates(),'REST 数据已写入本地报表');
+  const upstreamField = (item, field) => [...new Set(upstream.filter(account => account.gamAccountId === item.id).map(account => account[field]).filter(Boolean))].join('、') || '—';
+  const filteredItems = items.filter(item => {
+    const search = String(filters.search || '').trim().toLowerCase();
+    return (!search || [item.name,item.accountEmail,item.networkCode].some(value=>String(value||'').toLowerCase().includes(search))) &&
+      (!filters.advertiser || (item.advertiser || upstreamField(item,'advertiser')) === filters.advertiser) &&
+      (!filters.bd || (item.bd || upstreamField(item,'bd')) === filters.bd) &&
+      (!filters.operationStatus || item.operationStatus === filters.operationStatus) &&
+      (filters.enabled === undefined || Boolean(item.enabled) === filters.enabled);
+  });
+  const advertiserOptions = [...new Set(items.map(item=>item.advertiser || upstreamField(item,'advertiser')).filter(value=>value && value!=='—'))].map(value=>({value,label:value}));
+  const bdOptions = [...new Set(items.map(item=>item.bd || upstreamField(item,'bd')).filter(value=>value && value!=='—'))].map(value=>({value,label:value}));
+  const accountActions = item => [
+    {key:'test',label:'测试 REST 连接'},
+    {key:'report',label:'配置报表',disabled:item.status!=='active'||!item.enabled},
+    {key:'preview',label:'预览报表',disabled:!item.reportName||!item.enabled},
+    {key:item.syncEnabled?'pause':'activate',label:item.syncEnabled?'暂停自动同步':'启用自动同步',disabled:!item.syncEnabled&&(!item.lastPreviewRows||!item.enabled)},
+    {key:'sync',label:'立即同步',disabled:!item.syncEnabled||!item.enabled}
+  ];
+  const accountAction = (item, key) => {
+    if (key==='test') return void invoke(item.id,'test',{},'连接成功');
+    if (key==='report') return openReport(item);
+    if (key==='preview') return void previewReport(item);
+    if (key==='pause') return void invoke(item.id,'pause',{},'自动入库已暂停');
+    if (key==='activate') return Modal.confirm({title:'已核对金额单位及新旧报表口径？',onOk:()=>invoke(item.id,'activate',{},'自动入库已启用')});
+    if (key==='sync') return Modal.confirm({title:'确认将所选日期范围写入本地报表？',content:dates?'使用上方手选日期。':'默认按此账号网络时区读取昨日到今日。',onOk:()=>syncNow(item)});
+  };
   return <Space direction="vertical" size={16} className="page-stack">
-    <div className="page-heading"><div><Title level={2}>Google Ad Manager REST 账户</Title><Text type="secondary">REST v1 连接、报表预览与同步；服务账号凭证加密保存</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={() => {form.resetFields();setCredentials(null);setFile(null);setOpen(true);}}>新增账户</Button></div>
-    <Alert type="warning" showIcon message="先核对新旧报表的财务口径" description="REST 的 AD_EXCHANGE_REVENUE 与旧报表的行项目级收入不可直接视为相同。请先选择渠道、上游账户和金额单位，预览核对后再启用自动入库。"/>
-    <Card title="日期范围（预览或手动同步）"><DatePicker.RangePicker value={dates} onChange={setDates}/></Card>
-    <Card title="REST 账户与报表"><Table rowKey="id" dataSource={items} scroll={{x:1150}} columns={[
-      {title:'账户',dataIndex:'name'}, {title:'Network Code',dataIndex:'networkCode'},
-      {title:'连接',dataIndex:'status',render:v=><Tag color={v==='active'?'green':v==='error'?'red':'orange'}>{v==='active'?'可用':v==='error'?'失败':'未测试'}</Tag>},
-      {title:'报表',dataIndex:'reportName',ellipsis:true,render:v=>v||'未配置'},
-      {title:'自动入库',dataIndex:'syncEnabled',render:v=><Tag color={v?'green':'default'}>{v?'已启用':'已暂停'}</Tag>},
-      {title:'最近预览',dataIndex:'lastPreviewAt',render:(v,r)=>v? v+' / '+r.lastPreviewRows+' 行':'未预览'},
-      {title:'操作',width:420,render:(_,r)=><Space wrap>
-        <Button size="small" loading={busy===r.id+':test'} onClick={()=>invoke(r.id,'test',{},'连接成功')}>测试</Button>
-        <Button size="small" disabled={r.status!=='active'} onClick={()=>openReport(r)}>配置报表</Button>
-        <Button size="small" disabled={!r.reportName} loading={busy===r.id+':preview'} onClick={()=>previewReport(r)}>预览</Button>
-        {r.syncEnabled?<Button size="small" onClick={()=>invoke(r.id,'pause',{},'自动入库已暂停')}>暂停</Button>:
-          <Popconfirm title="已核对金额单位及新旧报表口径？" onConfirm={()=>invoke(r.id,'activate',{},'自动入库已启用')}><Button size="small" type="primary" disabled={!r.lastPreviewRows}>启用</Button></Popconfirm>}
-        <Popconfirm title="确认将所选日期范围写入本地报表？" onConfirm={()=>syncNow(r)}><Button size="small" disabled={!r.syncEnabled} loading={busy===r.id+':sync-now'}>立即同步</Button></Popconfirm>
-      </Space>}
+    <div className="page-heading"><div><Title level={2}>账号管理</Title><Text type="secondary">管理 Ad Manager 账号、授权密钥与数据同步</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={openCreate}>新增账号</Button></div>
+    <Card className="account-filter-card"><Form form={filterForm} onFinish={setFilters} className="account-filter-form">
+      <Form.Item name="search"><Input allowClear placeholder="账号名称 / 邮箱"/></Form.Item>
+      <Form.Item name="advertiser"><Select allowClear placeholder="广告主" options={advertiserOptions}/></Form.Item>
+      <Form.Item name="bd"><Select allowClear placeholder="BD" options={bdOptions}/></Form.Item>
+      <Form.Item name="operationStatus"><Select allowClear placeholder="运营状态" options={[{value:'normal',label:'正常'},{value:'limited',label:'限流'},{value:'unknown',label:'未设置'}]}/></Form.Item>
+      <Form.Item name="enabled"><Select allowClear placeholder="启用状态" options={[{value:true,label:'已启用'},{value:false,label:'已停用'}]}/></Form.Item>
+      <Form.Item><Space><Button type="primary" htmlType="submit">搜索</Button><Button onClick={()=>{filterForm.resetFields();setFilters({});}}>重置</Button></Space></Form.Item>
+    </Form></Card>
+    <Card className="account-table-card"><Table rowKey="id" dataSource={filteredItems} locale={{emptyText:'暂无账号'}} pagination={{pageSize:10,showSizeChanger:false}} scroll={{x:1135}} columns={[
+      {title:'账号',width:210,render:(_,item)=><div className="account-identity"><strong>{item.name}</strong><small>{item.accountEmail || '未填写账号邮箱'}</small></div>},
+      {title:'Network Code',width:145,render:(_,item)=><div className="account-identity">{item.networkCode}<small>{item.timeZone||'时区待测试'}</small></div>},
+      {title:'广告主',width:125,ellipsis:true,render:(_,item)=>item.advertiser || upstreamField(item,'advertiser')},
+      {title:'BD',width:95,ellipsis:true,render:(_,item)=>item.bd || upstreamField(item,'bd')},
+      {title:'运营状态',dataIndex:'operationStatus',width:95,render:value=><Tag color={value==='limited'?'gold':value==='normal'?'green':'default'}>{value==='limited'?'限流':value==='normal'?'正常':'未设置'}</Tag>},
+      {title:'启用',dataIndex:'enabled',width:85,render:value=><Tag color={value?'green':'default'}>{value?'已启用':'已停用'}</Tag>},
+      {title:'配置',width:230,render:(_,item)=><Space size={[4,4]} wrap><Tag color={item.credentialConfigured?'blue':'red'}>{item.credentialConfigured?'密钥已配':'缺少密钥'}</Tag><Tag color={item.status==='active'?'green':item.status==='error'?'red':'orange'}>{item.status==='active'?'连接可用':item.status==='error'?'连接失败':'待测试'}</Tag><Tag color={item.syncEnabled?'green':'default'}>{item.syncEnabled?'同步启用':'同步暂停'}</Tag></Space>},
+      {title:'操作',width:150,render:(_,item)=><Space size={4}><Button type="link" onClick={()=>openEdit(item)}>编辑</Button><Dropdown menu={{items:accountActions(item),onClick:({key})=>accountAction(item,key)}} trigger={['click']}><Button size="small">更多</Button></Dropdown></Space>}
     ]}/></Card>
+    <Alert type="warning" showIcon message="先核对新旧报表的财务口径" description="REST 的 AD_EXCHANGE_REVENUE 与旧报表的行项目级收入不可直接视为相同。请先选择渠道、上游账户和金额单位，预览核对后再启用自动入库。"/>
+    <Card title="日期范围（预览或手动同步）"><Space wrap><DatePicker.RangePicker value={dates} onChange={setDates} placeholder={['账号时区：昨日','账号时区：今日']}/><Text type="secondary">留空时按每个 Ad Manager 账号自身时区读取昨日到今日；手选日期则按指定日期。</Text></Space></Card>
     {preview&&<Card title={'预览：'+preview.account?.name+' / '+preview.start+' 至 '+preview.end}><Descriptions items={[
       {key:'rows',label:'行数',children:preview.rows},{key:'revenue',label:'收入（USD）',children:Number(preview.revenue).toFixed(2)},
       {key:'divisor',label:'金额除数',children:preview.moneyDivisor}
@@ -182,12 +227,30 @@ function GamAccounts() {
       {title:'账户',dataIndex:'gamAccountName'},{title:'开始',dataIndex:'windowStart'},{title:'结束',dataIndex:'windowEnd'},
       {title:'状态',dataIndex:'status'},{title:'读取',dataIndex:'rowsRead'},{title:'写入',dataIndex:'rowsWritten'},{title:'错误',dataIndex:'error',ellipsis:true}
     ]}/></Card>
-    <Drawer title="新增 REST 账户" open={open} onClose={()=>setOpen(false)} width={560} destroyOnClose><Form form={form} layout="vertical" onFinish={save}>
-      <Form.Item name="name" label="账户名称" rules={[{required:true}]}><Input/></Form.Item>
-      <Form.Item name="networkCode" label="Network Code" rules={[{required:true}]}><Input/></Form.Item>
-      <Form.Item label="服务账号 JSON" required><label className="file-button"><UploadOutlined/> {file?.name||'上传服务账号 JSON'}<input type="file" accept="application/json,.json" onChange={choose}/></label></Form.Item>
-      <Button type="primary" htmlType="submit" loading={busy==='save'} disabled={!credentials}>保存账户</Button>
-    </Form></Drawer>
+    <Modal title={editing?.id?'编辑 Ad Manager 账号':'新增 Ad Manager 账号'} open={Boolean(editing)} onCancel={()=>setEditing(null)} footer={null} width={760} maskClosable={false} forceRender styles={{body:{maxHeight:'calc(100vh - 190px)',overflowY:'auto'}}}>
+      <Form form={form} layout="vertical" onFinish={save}>
+        <Row gutter={16}>
+          <Col xs={24} md={12}><Form.Item name="name" label="账号名称" rules={[{required:true,message:'请输入账号名称'}]}><Input maxLength={200}/></Form.Item></Col>
+          <Col xs={24} md={12}><Form.Item name="accountEmail" label="账号邮箱" rules={[{type:'email',message:'邮箱格式不正确'}]}><Input type="email"/></Form.Item></Col>
+          <Col xs={24} md={12}><Form.Item name="networkCode" label="Network Code" extra={editing?.id?'创建后不可更改；更换网络请新增账号':null} rules={[{required:true,pattern:/^\d{6,}$/,message:'请输入至少 6 位数字'}]}><Input readOnly={Boolean(editing?.id)}/></Form.Item></Col>
+          <Col xs={24} md={12}><Form.Item name="bd" label="BD"><Input maxLength={200}/></Form.Item></Col>
+          <Col xs={24} md={12}><Form.Item name="advertiser" label="广告主"><Input maxLength={200}/></Form.Item></Col>
+          <Col xs={24} md={12}><Form.Item name="advertiserSharePercent" label="广告主分成比例（%）"><InputNumber min={0} max={100} precision={2} style={{width:'100%'}}/></Form.Item></Col>
+        </Row>
+        <Form.Item label={editing?.id?'替换 Google JSON 密钥（可选）':'Google JSON 密钥'} required={!editing?.id}>
+          <label className="account-key-upload"><UploadOutlined/> <span>{file?.name|| (editing?.id?'留空保留当前密钥，上传则替换':'点击上传服务账号 JSON')}</span><input type="file" accept="application/json,.json" onChange={choose}/></label>
+          <Text type="secondary">密钥仅在服务器加密保存，页面不会回显明文。替换密钥或 Network Code 后，需重新测试和启用同步。</Text>
+        </Form.Item>
+        <Row gutter={16}>
+          <Col xs={24} md={12}><Form.Item name="operationStatus" label="运营状态"><Select options={[{value:'normal',label:'正常'},{value:'limited',label:'限流'},{value:'unknown',label:'未设置'}]}/></Form.Item></Col>
+          <Col xs={24} md={12}><Form.Item name="enabled" label="启用状态" valuePropName="checked"><Switch checkedChildren="启用" unCheckedChildren="停用"/></Form.Item></Col>
+        </Row>
+        <Form.Item name="notes" label="备注"><Input.TextArea rows={2} maxLength={2000} showCount/></Form.Item>
+        <div className="account-proxy-note"><strong>代理配置（可选）</strong><Text type="secondary">当前 REST 连接沿用服务器网络代理配置。</Text></div>
+        <Text type="secondary">账号资料中的广告主比例仅用于记录；实际结算以「结算配置」为准。停用账号会暂停自动同步。</Text>
+        <div className="account-modal-actions"><Button onClick={()=>setEditing(null)}>取消</Button><Button type="primary" htmlType="submit" loading={busy==='save'}>保存账号</Button></div>
+      </Form>
+    </Modal>
     <Drawer title="配置 REST 报表" open={Boolean(reportAccount)} onClose={()=>setReportAccount(null)} width={560} destroyOnClose>
       <Form form={reportForm} layout="vertical" onFinish={configure}>
         <Form.Item name="channelId" label="收入所属渠道" rules={[{required:true}]}><Select options={channels.filter(x=>x.status==='active').map(x=>({value:x.id,label:x.name}))}/></Form.Item>

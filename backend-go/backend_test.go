@@ -8,7 +8,28 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
+
+func TestGamDatesUseEachNetworkTimezone(t *testing.T) {
+	instant := time.Date(2026, 11, 4, 1, 30, 0, 0, time.UTC)
+	for _, item := range []struct{ zone, today, yesterday string }{
+		{"America/Los_Angeles", "2026-11-03", "2026-11-02"},
+		{"Asia/Tokyo", "2026-11-04", "2026-11-03"},
+	} {
+		got, err := localGamDateAt(item.zone, instant, 0)
+		if err != nil || got != item.today {
+			t.Fatalf("%s today=%s err=%v", item.zone, got, err)
+		}
+		got, err = localGamDateAt(item.zone, instant, -1)
+		if err != nil || got != item.yesterday {
+			t.Fatalf("%s yesterday=%s err=%v", item.zone, got, err)
+		}
+	}
+	if _, err := localGamDateAt("", instant, 0); err == nil {
+		t.Fatal("missing network timezone must not silently use UTC")
+	}
+}
 
 func TestFreshDatabaseAndRoutes(t *testing.T) {
 	t.Setenv("ADX_DB_PATH", filepath.Join(t.TempDir(), "adx.sqlite"))
