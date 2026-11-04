@@ -1,55 +1,64 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { prepareGamUnitItems } from '../src/gam-unit-plan.mjs';
+import { batchUnitTemplates, prepareGamUnitItems } from '../src/gam-unit-plan.mjs';
 
 const siteName = 'networks/23375144983/sites/1';
-const options = rows => ({ accountId: 1, siteNames: [siteName],
-  sites: [{ name: siteName, url: 'https://nextvisiona.com' }],
-  domainChoices: { [siteName]: ['news.nextvisiona.com'] }, rows });
-const row = (type, bannerNo, code, name = '') => ({ type, bannerNo, code, name, sizes: ['300x250'] });
-
-test('repeated batch prefixes become distinct GAM codes and names', () => {
-  const prefix = '23375144983-news.nextvisiona.com';
-  const rows = [row('banner', 1, prefix, prefix), row('banner', 2, prefix, prefix),
-    row('banner', 3, prefix, prefix), row('interstitial', 1, prefix, prefix), row('anchor', 1, prefix, prefix)];
-  const items = prepareGamUnitItems(options(rows));
-  assert.deepEqual(items.map(item => item.code), [prefix + '-banner1', prefix + '-banner2',
-    prefix + '-banner3', prefix + '-INT', prefix + '-ANC']);
-  assert.equal(new Set(items.map(item => item.name)).size, 5);
-  assert.ok(items.every(item => item.domain === 'news.nextvisiona.com'));
+const rows = () => batchUnitTemplates.map(({ type, bannerNo }) => ({
+  type, bannerNo, sizes: ['300x250'], name: 'ignored-batch-name', code: 'ignored-batch-code'
+}));
+const options = (overrides = {}) => ({
+  accountId: 1, siteNames: [siteName],
+  sites: [{ name: siteName, url: 'https://dealscoutnest.com' }],
+  domainChoices: { [siteName]: ['finance.dealscoutnest.com'] },
+  rows: rows(), creationDate: '2026-11-04', ...overrides
 });
 
-test('unique explicit codes stay exact; suffix collisions receive a sequence', () => {
-  const rows = [row('banner', 1, 'prefix'), row('banner', 1, 'prefix'),
-    row('anchor', 1, 'prefix-banner1'), row('interstitial', 1, 'distinct')];
-  const items = prepareGamUnitItems(options(rows));
-  assert.deepEqual(items.map(item => item.code), ['prefix-banner1-2', 'prefix-banner1-3',
-    'prefix-banner1', 'distinct']);
+test('batch creates the five screenshot names and matching codes', () => {
+  const items = prepareGamUnitItems(options());
+  const expected = ['banner1', 'banner2', 'banner3', 'INT', 'ANC']
+    .map(suffix => `261104-finance.dealscoutnest.com-${suffix}`);
+  assert.deepEqual(items.map(item => item.name), expected);
+  assert.deepEqual(items.map(item => item.code), expected);
+  assert.ok(items.every(item => item.domain === 'finance.dealscoutnest.com'));
 });
 
-test('long repeated prefixes fit the GAM code limit', () => {
-  const items = prepareGamUnitItems(options([row('banner', 1, 'x'.repeat(100)), row('banner', 2, 'x'.repeat(100))]));
-  assert.equal(items[0].code.length, 100);
-  assert.equal(items[1].code.length, 100);
-  assert.notEqual(items[0].code, items[1].code);
+test('changing only date and domain preserves all five suffixes', () => {
+  const input = options({ creationDate: '2026-12-31',
+    domainChoices: { [siteName]: ['news.dealscoutnest.com'] } });
+  assert.deepEqual(prepareGamUnitItems(input).map(item => item.code),
+    ['banner1', 'banner2', 'banner3', 'INT', 'ANC']
+      .map(suffix => `261231-news.dealscoutnest.com-${suffix}`));
 });
 
-test('repeated default banner numbers receive numeric suffixes', () => {
-  const inputs = options([row('banner', 1, ''), row('banner', 1, '')]);
-  const items = prepareGamUnitItems(inputs);
-  assert.deepEqual(items.map(item => item.code),
-    ['news.nextvisiona.com-banner1-2', 'news.nextvisiona.com-banner1-3']);
+test('multiple selected subdomains generate one fixed set per domain', () => {
+  const input = options({ domainChoices: { [siteName]:
+    ['finance.dealscoutnest.com', 'news.dealscoutnest.com'] } });
+  const items = prepareGamUnitItems(input);
+  assert.equal(items.length, 10);
+  assert.equal(new Set(items.map(item => item.code)).size, 10);
+  assert.deepEqual(items.slice(5).map(item => item.code),
+    ['banner1', 'banner2', 'banner3', 'INT', 'ANC']
+      .map(suffix => `261104-news.dealscoutnest.com-${suffix}`));
 });
 
-test('rejects a single code beyond the GAM limit', () => {
-  assert.throws(() => prepareGamUnitItems(options([row('banner', 1, 'x'.repeat(101))])), /最多 100 字符/);
+test('rejects duplicate domains and invalid dates before submission', () => {
+  assert.throws(() => prepareGamUnitItems(options({ domainChoices: { [siteName]:
+    ['finance.dealscoutnest.com', 'finance.dealscoutnest.com'] } })), /同一域名/);
+  assert.throws(() => prepareGamUnitItems(options({ creationDate: '2026-02-30' })), /命名日期无效/);
+  assert.throws(() => prepareGamUnitItems(options({ creationDate: '' })), /请选择命名日期/);
 });
 
-test('multiple sites still require a domain placeholder for a custom code', () => {
-  const inputs = options([row('banner', 1, 'prefix')]);
-  inputs.domainChoices[siteName] = ['news.nextvisiona.com', 'finance.nextvisiona.com'];
-  assert.throws(() => prepareGamUnitItems(inputs), /多网站自定义代码请包含/);
-  inputs.rows[0].code = '{domain}-banner1';
-  assert.deepEqual(prepareGamUnitItems(inputs).map(item => item.code),
-    ['news.nextvisiona.com-banner1', 'finance.nextvisiona.com-banner1']);
+test('batch cannot replace the fixed five templates', () => {
+  const changed = rows();
+  changed[3].type = 'banner';
+  changed[3].bannerNo = 4;
+  assert.throws(() => prepareGamUnitItems(options({ rows: changed })), /批量版位固定/);
+});
+
+test('single creation keeps an explicit name and code when provided', () => {
+  const input = options({ single: true, rows: [{ type: 'banner', bannerNo: 1,
+    sizes: ['300x250'], name: 'custom-name', code: 'custom-code' }] });
+  const [item] = prepareGamUnitItems(input);
+  assert.equal(item.name, 'custom-name');
+  assert.equal(item.code, 'custom-code');
 });

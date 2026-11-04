@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Button, Card, Checkbox, Col, Collapse, Empty, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Switch, Table, Tabs, Tag, Typography, message } from 'antd';
-import { DeleteOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
-import { belongsToSite, prepareGamUnitItems, siteDomain } from './gam-unit-plan.mjs';
+import { Alert, Button, Card, Checkbox, Col, Collapse, DatePicker, Empty, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Switch, Table, Tabs, Tag, Typography, message } from 'antd';
+import { PlusOutlined, SearchOutlined } from '@ant-design/icons';
+import dayjs from 'dayjs';
+import { batchUnitTemplates, belongsToSite, prepareGamUnitItems, siteDomain } from './gam-unit-plan.mjs';
 
 const { Text, Title } = Typography;
 const bannerSizes = ['320x50', '336x280', '250x250', '300x250'];
@@ -17,7 +18,7 @@ const sizeOptions = values => values.map(value => ({ value, label: sizeLabels[va
 const newRow = (type = 'banner', bannerNo = 1) => ({
   id: Math.random().toString(36).slice(2), type, bannerNo, sizes: [...typeFor(type).sizes], name: '', code: ''
 });
-const initialBatch = () => [newRow('banner', 1), newRow('banner', 2), newRow('banner', 3), newRow('interstitial'), newRow('anchor')];
+const initialBatch = () => batchUnitTemplates.map(template => newRow(template.type, template.bannerNo));
 
 async function api(path, options = {}) {
   const response = await fetch(path, { credentials: 'include', ...options,
@@ -62,15 +63,15 @@ function remoteSizes(values) {
   }).filter(Boolean).join('、');
 }
 
-function UnitFields({ row, index, onChange, onRemove, removable }) {
+function UnitFields({ row, index, onChange, fixedSuffix }) {
   const template = typeFor(row.type);
-  return <Card size="small" title={'广告单元 ' + (index + 1)} extra={removable && <Button type="text" danger icon={<DeleteOutlined/>} aria-label={'删除广告单元 ' + (index + 1)} onClick={onRemove}/>} style={{ marginBottom: 12 }}>
+  return <Card size="small" title={fixedSuffix || '广告单元 ' + (index + 1)} extra={fixedSuffix && <Tag>{template.label}</Tag>} style={{ marginBottom: 12 }}>
     <Row gutter={[16, 12]}>
-      <Col xs={24} sm={row.type === 'banner' ? 12 : 24}><Text>广告类型</Text><Select style={{ width: '100%', marginTop: 6 }} value={row.type} options={unitTypes.map(item => ({ value: item.value, label: item.label }))} onChange={type => onChange({ type, bannerNo: 1, sizes: [...typeFor(type).sizes], name: '', code: '' })}/></Col>
-      {row.type === 'banner' && <Col xs={24} sm={12}><Text>Banner 序号</Text><InputNumber min={1} max={999} precision={0} style={{ width: '100%', marginTop: 6 }} value={row.bannerNo} onChange={bannerNo => onChange({ bannerNo })}/></Col>}
+      {!fixedSuffix && <Col xs={24} sm={row.type === 'banner' ? 12 : 24}><Text>广告类型</Text><Select style={{ width: '100%', marginTop: 6 }} value={row.type} options={unitTypes.map(item => ({ value: item.value, label: item.label }))} onChange={type => onChange({ type, bannerNo: 1, sizes: [...typeFor(type).sizes], name: '', code: '' })}/></Col>}
+      {!fixedSuffix && row.type === 'banner' && <Col xs={24} sm={12}><Text>Banner 序号</Text><InputNumber min={1} max={999} precision={0} style={{ width: '100%', marginTop: 6 }} value={row.bannerNo} onChange={bannerNo => onChange({ bannerNo })}/></Col>}
       <Col span={24}><Text type="secondary">尺寸模板：{template.sizes.map(size => sizeLabels[size] || size).join('、')}</Text><Select mode="tags" tokenSeparators={[',', '，']} style={{ width: '100%', marginTop: 6 }} value={row.sizes} options={sizeOptions(template.sizes)} placeholder="选择尺寸，或输入宽x高" onChange={sizes => onChange({ sizes })}/></Col>
-      <Col xs={24} sm={12}><Text>广告单元名称（可选）</Text><Input style={{ marginTop: 6 }} value={row.name} maxLength={255} placeholder="默认：域名-类型序号" onChange={event => onChange({ name: event.target.value })}/></Col>
-      <Col xs={24} sm={12}><Text>广告单元代码（可选）</Text><Input style={{ marginTop: 6 }} value={row.code} maxLength={100} placeholder="默认：域名-类型序号" onChange={event => onChange({ code: event.target.value })}/></Col>
+      {!fixedSuffix && <Col xs={24} sm={12}><Text>广告单元名称（可选）</Text><Input style={{ marginTop: 6 }} value={row.name} maxLength={255} placeholder="默认：年月日-域名-广告类型" onChange={event => onChange({ name: event.target.value })}/></Col>}
+      {!fixedSuffix && <Col xs={24} sm={12}><Text>广告单元代码（可选）</Text><Input style={{ marginTop: 6 }} value={row.code} maxLength={100} placeholder="默认：年月日-域名-广告类型" onChange={event => onChange({ code: event.target.value })}/></Col>}
     </Row>
   </Card>;
 }
@@ -89,6 +90,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
   const [inventoryBusy, setInventoryBusy] = useState(false), [inventoryError, setInventoryError] = useState('');
   const [inventoryVersion, setInventoryVersion] = useState(0);
   const [single, setSingle] = useState(newRow()), [batchRows, setBatchRows] = useState(initialBatch);
+  const [creationDate, setCreationDate] = useState(() => dayjs());
   const [description, setDescription] = useState(''), [adsenseEnabled, setAdsenseEnabled] = useState(false);
   const [targetWindow, setTargetWindow] = useState('TOP');
   const [creations, setCreations] = useState([]), [results, setResults] = useState([]);
@@ -143,13 +145,15 @@ export default function GamAdUnitCreator({ accounts = [] }) {
   };
   const openCreator = () => {
     setMode('batch'); setSingle(newRow()); setBatchRows(initialBatch()); setResults([]);
+    setCreationDate(dayjs());
     setDescription(''); setAdsenseEnabled(false); setTargetWindow('TOP');
     chooseAccount(filterAccountId && activeAccounts.some(item => item.id === filterAccountId) ? filterAccountId : null);
     setOpen(true);
   };
   const updateBatchRow = (id, changes) => setBatchRows(previous => previous.map(row => row.id === id ? { ...row, ...changes } : row));
   const preparedItems = () => prepareGamUnitItems({ accountId, siteNames, sites, domainChoices,
-    rows: mode === 'single' ? [single] : batchRows, description, adsenseEnabled, targetWindow, single: mode === 'single' });
+    rows: mode === 'single' ? [single] : batchRows, creationDate: creationDate?.format('YYYY-MM-DD'),
+    description, adsenseEnabled, targetWindow, single: mode === 'single' });
   const publish = async () => {
     let items;
     try { items = preparedItems(); } catch (error) { message.warning(error.message); return; }
@@ -176,9 +180,8 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     catch (error) { message.error(error.message); await loadCreations(); }
     finally { setRetrying(null); }
   };
-  const currentRows = mode === 'single' ? 1 : batchRows.length;
-  let previewItems = [];
-  try { if (accountId && siteNames.length) previewItems = preparedItems(); } catch {}
+  let previewItems = [], previewError = '';
+  try { if (accountId && siteNames.length) previewItems = preparedItems(); } catch (error) { previewError = error.message; }
   const accountOptions = activeAccounts.map(item => ({ value: item.id, label: item.name + '（' + item.networkCode + '）' }));
   const historyColumns = [
     { title: '账号', dataIndex: 'networkCode', width: 135 }, { title: '网站', dataIndex: 'domain', width: 170 },
@@ -210,11 +213,12 @@ export default function GamAdUnitCreator({ accounts = [] }) {
         </div>)}
       </div>}/>}
     <Collapse items={[{ key: 'history', label: '同步记录与失败重试', children: <Table rowKey="id" size="small" dataSource={creations} columns={historyColumns} pagination={{ pageSize: 10 }} scroll={{ x: 1100 }}/> }]}/>
-    <Modal title="新建广告单元" open={open} width={760} onCancel={() => { if (!publishing) setOpen(false); }} maskClosable={!publishing} closable={!publishing} footer={<Space><Button disabled={publishing} onClick={() => setOpen(false)}>取消</Button><Button type="primary" loading={publishing} onClick={publish}>{mode === 'batch' ? '批量创建' : '创建并同步'}</Button></Space>}>
+    <Modal title="新建广告单元" open={open} width={760} onCancel={() => { if (!publishing) setOpen(false); }} maskClosable={!publishing} closable={!publishing} footer={<Space><Button disabled={publishing} onClick={() => setOpen(false)}>取消</Button><Button type="primary" loading={publishing} disabled={inventoryBusy || !previewItems.length} onClick={publish}>{mode === 'batch' ? '批量创建' : '创建并同步'}</Button></Space>}>
       <div style={{ maxHeight: '68vh', overflowY: 'auto', paddingRight: 8 }}>
         <Row gutter={[16, 12]}>
           <Col xs={24} sm={12}><Text><Text type="danger">* </Text>账号</Text><Select showSearch optionFilterProp="label" style={{ width: '100%', marginTop: 6 }} placeholder="请选择账号" value={accountId} onChange={chooseAccount} options={accountOptions}/></Col>
           <Col xs={24} sm={12}><Text><Text type="danger">* </Text>网站</Text><Select mode={mode === 'batch' ? 'multiple' : undefined} showSearch optionFilterProp="label" style={{ width: '100%', marginTop: 6 }} placeholder="从 GAM Sites 选择网站" value={mode === 'batch' ? siteNames : siteNames[0]} onChange={value => setSiteNames(Array.isArray(value) ? value : value ? [value] : [])} loading={inventoryBusy} disabled={!accountId} options={sites.map(item => ({ value: item.name, label: siteDomain(item.url) + (item.approvalStatus ? ' · ' + item.approvalStatus : '') }))}/>{nextSites && <Button size="small" onClick={loadMoreSites} loading={inventoryBusy}>加载更多网站</Button>}</Col>
+          <Col span={24}><Text><Text type="danger">* </Text>命名日期</Text><div style={{ marginTop: 6 }}><DatePicker value={creationDate} onChange={setCreationDate} format="YYMMDD" allowClear={false} aria-label="命名日期"/><Text type="secondary" style={{ marginLeft: 12 }}>名称和代码自动生成：年月日-域名-广告类型</Text></div></Col>
           <Col span={24}><Alert type="info" showIcon message="创建层级：顶级广告单元" description="系统自动使用当前 GAM 账号的网络根单元，无需选择现有广告单元。"/></Col>
         </Row>
         {inventoryError && <Alert type="error" style={{ marginTop: 12 }} showIcon message={'GAM 目录加载失败：' + inventoryError} action={<Button size="small" onClick={() => setInventoryVersion(value => value + 1)}>重试</Button>}/>}
@@ -225,12 +229,13 @@ export default function GamAdUnitCreator({ accounts = [] }) {
             onSearch={value => setDomainSearch(previous => ({ ...previous, [siteName]: value }))}
             onSelect={value => setDomainChoices(previous => ({ ...previous, [siteName]: value }))}/>;
         })}
-        {mode === 'batch' && previewItems.length > 0 && <Alert type="info" showIcon style={{ marginTop: 12 }}
-          message={'本次将创建 ' + previewItems.length + ' 个广告单元；重复名称和代码会自动补上类型/序号'}
-          description={<div style={{ maxHeight: 110, overflowY: 'auto' }}>{previewItems.map((item, index) => <div key={index} style={{ overflowWrap: 'anywhere' }}>{index + 1}. {item.name} · {item.code}</div>)}</div>}/>}
+        {previewError && <Alert type="warning" showIcon style={{ marginTop: 12 }} message={previewError}/>}
+        {previewItems.length > 0 && <Alert type="info" showIcon style={{ marginTop: 12 }}
+          message={'本次将创建 ' + previewItems.length + ' 个广告单元' + (mode === 'batch' ? '；名称与代码一致' : '')}
+          description={<div data-testid="gam-unit-preview" style={{ maxHeight: 160, overflowY: 'auto' }}>{previewItems.map((item, index) => <div key={index} style={{ overflowWrap: 'anywhere' }}>{index + 1}. {item.name}{item.name !== item.code ? ' · ' + item.code : ''}</div>)}</div>}/>}
         <Tabs style={{ marginTop: 16 }} activeKey={mode} onChange={value => { setMode(value); if (value === 'single') { setSiteNames(previous => previous.slice(0, 1)); setDomainChoices(previous => Object.fromEntries(Object.entries(previous).map(([key, domains]) => [key, domains.slice(0, 1)]))); } }} items={[
           { key: 'single', label: '创建单个', children: <UnitFields row={single} index={0} onChange={changes => setSingle(previous => ({ ...previous, ...changes }))}/> },
-          { key: 'batch', label: '批量创建', children: <><div style={{ maxHeight: '42vh', overflowY: 'auto', paddingRight: 6 }}>{batchRows.map((row, index) => <UnitFields key={row.id} row={row} index={index} onChange={changes => updateBatchRow(row.id, changes)} onRemove={() => setBatchRows(previous => previous.filter(item => item.id !== row.id))} removable={batchRows.length > 1}/>)}</div><Button block icon={<PlusOutlined/>} disabled={batchRows.length >= 100} onClick={() => setBatchRows(previous => [...previous, newRow()])}>添加广告单元（{batchRows.length}/100）</Button></> }
+          { key: 'batch', label: '批量创建', children: <><Text>每个域名固定创建：banner1、banner2、banner3、INT、ANC。修改日期或域名，上方预览会一起更新。</Text><Collapse style={{ marginTop: 12 }} items={[{ key: 'sizes', label: '广告尺寸设置（已预选模板）', children: batchRows.map((row, index) => <UnitFields key={row.id} row={row} index={index} fixedSuffix={batchUnitTemplates[index].suffix} onChange={changes => updateBatchRow(row.id, changes)}/>) }]}/></> }
         ]}/>
         <Collapse size="small" items={[{ key: 'advanced', label: '更多设置', children: <Row gutter={[16, 12]}>
           <Col span={24}><Text>说明</Text><Input maxLength={500} style={{ marginTop: 6 }} value={description} onChange={event => setDescription(event.target.value)}/></Col>
