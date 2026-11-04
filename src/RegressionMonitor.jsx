@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
-import { Alert, Button, Card, DatePicker, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
+import React, { useEffect, useRef, useState } from 'react';
+import { Alert, Button, Card, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
 import { ReloadOutlined, SettingOutlined } from '@ant-design/icons';
+import ReportDateFilter from './ReportDateFilter.jsx';
 
 const { Title, Text } = Typography;
 const cadenceNames = { day: '最近有数据日 · 前次快照', three_days: '近 3 天 · 前 3 天', week: '近 7 天 · 前 7 天', month: '近 30 天 · 前 30 天' };
@@ -32,8 +33,10 @@ export default function RegressionMonitor() {
   const [alertsOnly, setAlertsOnly] = useState(false);
   const [page, setPage] = useState(1);
   const [form] = Form.useForm();
+  const requestId = useRef(0);
 
   const loadEvents = async () => {
+    const id = ++requestId.current;
     setLoading(true);
     try {
       const q = new URLSearchParams({ page: String(page) });
@@ -43,10 +46,9 @@ export default function RegressionMonitor() {
       if (domain.trim()) q.set('domain', domain.trim());
       if (alertsOnly) q.set('alertsOnly', '1');
       const result = await api('/api/admin/regression/events?' + q);
-      setRows(result.items || []);
-      setTotal(result.total || 0);
-    } catch (error) { message.error('监测记录读取失败：' + error.message); }
-    finally { setLoading(false); }
+      if (id === requestId.current) { setRows(result.items || []); setTotal(result.total || 0); }
+    } catch (error) { if (id === requestId.current) message.error('监测记录读取失败：' + error.message); }
+    finally { if (id === requestId.current) setLoading(false); }
   };
   const loadMeta = async () => {
     const results = await Promise.allSettled([
@@ -58,7 +60,7 @@ export default function RegressionMonitor() {
     if (results.some(result => result.status === 'rejected')) message.error('部分监测信息读取失败，请刷新重试');
   };
   useEffect(() => { loadMeta(); }, []);
-  useEffect(() => { const timer = window.setTimeout(loadEvents, domain ? 250 : 0); return () => window.clearTimeout(timer); }, [page, range?.[0]?.valueOf(), range?.[1]?.valueOf(), accountId, cadence, domain, alertsOnly]);
+  useEffect(() => { const timer = window.setTimeout(loadEvents, domain ? 250 : 0); return () => { window.clearTimeout(timer); requestId.current += 1; }; }, [page, range?.[0]?.valueOf(), range?.[1]?.valueOf(), accountId, cadence, domain, alertsOnly]);
   const updateFilter = setter => value => { setPage(1); setter(value); };
   const openSettings = () => {
     form.setFieldsValue({ feishuEnabled: Boolean(settings?.feishuEnabled), minRevenue: settings?.minRevenue ?? 50,
@@ -102,7 +104,7 @@ export default function RegressionMonitor() {
     {runs[0]?.status === 'failed' && <Alert type="warning" showIcon message={'最近一次监测失败：' + runs[0].accountName + ' · ' + cadenceNames[runs[0].cadence]} description={runs[0].detail || '请检查 GAM 账号同步状态'} />}
     {runs[0]?.status === 'skipped' && <Alert type="info" showIcon message={'最近一次监测暂未比较：' + runs[0].accountName + ' · ' + cadenceNames[runs[0].cadence]} description={runs[0].detail || '等待 GAM 返回可比较的完整数据'} />}
     <Card className="regression-filters"><Space wrap size={12}>
-      <DatePicker.RangePicker value={range} onChange={updateFilter(setRange)} />
+      <ReportDateFilter value={range} onChange={updateFilter(setRange)} allowAll />
       <Select allowClear showSearch optionFilterProp="label" placeholder="全部账号" style={{width:210}} value={accountId} onChange={updateFilter(setAccountId)} options={accounts.map(account => ({value:account.id,label:account.name + ' (' + account.networkCode + ')'}))}/>
       <Select allowClear placeholder="全部时间段" style={{width:190}} value={cadence} onChange={updateFilter(setCadence)} options={Object.entries(cadenceNames).map(([value,label]) => ({value,label}))}/>
       <Input allowClear placeholder="域名筛选" style={{width:205}} value={domain} onChange={event => {setPage(1); setDomain(event.target.value);}} onPressEnter={loadEvents}/>

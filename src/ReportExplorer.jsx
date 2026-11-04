@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Button, Card, Col, DatePicker, Drawer, Input, InputNumber, Modal, Row, Select, Space, Statistic, Table, Typography, message } from 'antd';
+import { Alert, Button, Card, Col, Drawer, Input, InputNumber, Modal, Row, Select, Space, Statistic, Table, Typography, message } from 'antd';
 import { BarChartOutlined, DownloadOutlined, FilterOutlined, ReloadOutlined } from '@ant-design/icons';
 import { readCached, rememberRead } from './readCache.js';
+import ReportDateFilter from './ReportDateFilter.jsx';
 
 const { Title, Text } = Typography;
 const dimensions = [
@@ -150,8 +151,8 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
       <Button icon={<ReloadOutlined/>} loading={loading} onClick={() => setApplied({ ...applied })}>刷新</Button></div>
     {error && <Alert type="error" showIcon message="报表加载失败" description={error}/>}
     <Card><Space wrap>
-      <DatePicker.RangePicker value={range} onChange={value => {
-        if (value) { setPage(1); setDailyPage(1); setSelectedDate(null); setDrill(null); setRange(value); }
+      <ReportDateFilter value={range} onChange={value => {
+        setPage(1); setDailyPage(1); setSelectedDate(null); setDrill(null); setRange(value);
       }}/>
       {admin && <Select allowClear showSearch placeholder="上游账号" value={filters.upstreamAccount || undefined}
         onChange={value => setFilter('upstreamAccount',value)}

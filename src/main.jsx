@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  App as AntApp, Alert, Button, Card, Col, DatePicker, Empty,
+  App as AntApp, Alert, Button, Card, Col, Empty,
   Layout, Menu, Popconfirm, Row, Space, Statistic, Table,
   Tag, Typography, message
 } from 'antd';
@@ -13,6 +13,7 @@ import {
 import dayjs from 'dayjs';
 import { clearCachedUser, readCached, rememberRead } from './readCache.js';
 import { viewForPath, viewPaths } from './navigation.js';
+import ReportDateFilter from './ReportDateFilter.jsx';
 import './styles.css';
 
 
@@ -96,7 +97,9 @@ function Dashboard({ range, setRange, admin, user, initialDashboard }) {
   const [data, setData] = useState(initialDashboard?.key === rangeKey ? initialDashboard.data || saved?.data || null : saved?.data || null);
   const [showingCached, setShowingCached] = useState(Boolean(saved && !freshInitial));
   const [loading, setLoading] = useState(false);
+  const requestId = useRef(0);
   const load = async (force = false) => {
+    const id = ++requestId.current;
     setLoading(true);
     try {
       let result;
@@ -109,9 +112,9 @@ function Dashboard({ range, setRange, admin, user, initialDashboard }) {
         result = await api(path);
       }
       rememberRead(user, path, result);
-      setData(result);
-      setShowingCached(false);
-    } catch (e) { message.error(e.message); } finally { setLoading(false); }
+      if (id === requestId.current) { setData(result); setShowingCached(false); }
+    } catch (e) { if (id === requestId.current) message.error(e.message); }
+    finally { if (id === requestId.current) setLoading(false); }
   };
   useEffect(() => {
     const latest = readCached(user, path);
@@ -119,9 +122,10 @@ function Dashboard({ range, setRange, admin, user, initialDashboard }) {
     setData(initial || latest?.data || null);
     setShowingCached(Boolean(latest && !freshInitial));
     load();
+    return () => { requestId.current += 1; };
   }, [range[0].valueOf(), range[1].valueOf()]);
   return <Space direction="vertical" size={16} className="page-stack">
-    <div className="page-heading"><div><Title level={2}>经营总览</Title><Text type="secondary">收入、流量质量与渠道结算一屏掌握</Text>{showingCached && <Tag color="gold" style={{marginLeft:10}}>{loading ? '已显示缓存，正在更新' : '已显示缓存数据'}</Tag>}</div><Space><DatePicker.RangePicker value={range} onChange={v => v && setRange(v)} /><Button icon={<ReloadOutlined />} loading={loading} onClick={() => load(true)}>刷新</Button></Space></div>
+    <div className="page-heading"><div><Title level={2}>经营总览</Title><Text type="secondary">收入、流量质量与渠道结算一屏掌握</Text>{showingCached && <Tag color="gold" style={{marginLeft:10}}>{loading ? '已显示缓存，正在更新' : '已显示缓存数据'}</Tag>}</div><Space wrap><ReportDateFilter value={range} onChange={setRange}/><Button icon={<ReloadOutlined />} loading={loading} onClick={() => load(true)}>刷新</Button></Space></div>
     <MetricCards summary={data?.summary} admin={admin} />
     <Row gutter={[16, 16]}><Col xs={24} xl={16}><Card title="每日收益趋势" extra={data?.lastSync ? '最近同步 ' + data.lastSync : '尚未同步'}><div className="chart"><PageErrorBoundary><React.Suspense fallback={<div style={{padding:24,color:"#587184"}}>图表加载中…</div>}><RevenueChart data={data?.trend || []} formatMoney={money}/></React.Suspense></PageErrorBoundary></div></Card></Col><Col xs={24} xl={8}><Card title="收益最高的链接"><Table size="small" pagination={false} rowKey="url" dataSource={data?.topUrls || []} columns={[{ title: '链接', dataIndex: 'url', ellipsis: true }, { title: '收益', dataIndex: 'revenue', align: 'right', render: money }]} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}/></Card></Col></Row>
   </Space>;
