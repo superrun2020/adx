@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Col, Collapse, Empty, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Switch, Table, Tabs, Tag, Typography, message } from 'antd';
 import { DeleteOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
+import { belongsToSite, prepareGamUnitItems, siteDomain } from './gam-unit-plan.mjs';
 
 const { Text, Title } = Typography;
 const bannerSizes = ['320x50', '336x280', '250x250', '300x250'];
@@ -25,16 +26,6 @@ async function api(path, options = {}) {
   if (!response.ok || payload.ok === false) throw new Error(payload.error || 'http_' + response.status);
   return payload;
 }
-
-function siteDomain(url) {
-  try {
-    const value = String(url || '').trim();
-    const domain = new URL(/^https?:\/\//i.test(value) ? value : 'https://' + value).hostname.toLowerCase();
-    return /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(domain) ? domain : '';
-  }
-  catch { return ''; }
-}
-const belongsToSite = (domain, base) => Boolean(domain && base && (domain === base || domain.endsWith('.' + base)));
 
 function SiteDomainPicker({ site, knownDomains, selected, search, single, onSearch, onSelect }) {
   const base = siteDomain(site.url);
@@ -62,9 +53,6 @@ function SiteDomainPicker({ site, knownDomains, selected, search, single, onSear
     </div>}
     {selected.length > 0 && <div style={{ marginTop: 10 }}><Text type="secondary">本次使用：</Text>{selected.map(domain => <Tag closable key={domain} onClose={() => onSelect(selected.filter(value => value !== domain))}>{domain}{children.includes(domain) ? '' : ' · 手动输入'}</Tag>)}</div>}
   </Card>;
-}
-function suffix(row) {
-  return row.type === 'banner' ? 'banner' + row.bannerNo : row.type === 'anchor' ? 'ANC' : 'INT';
 }
 function remoteSizes(values) {
   return (values || []).map(item => {
@@ -160,35 +148,8 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     setOpen(true);
   };
   const updateBatchRow = (id, changes) => setBatchRows(previous => previous.map(row => row.id === id ? { ...row, ...changes } : row));
-  const preparedItems = () => {
-    if (!accountId || !siteNames.length) throw new Error('请选择账号和网站');
-    const rows = mode === 'single' ? [single] : batchRows;
-    const targets = siteNames.flatMap(siteName => {
-      const base = siteDomain(sites.find(item => item.name === siteName)?.url || '');
-      if (!base) throw new Error('所选网站域名无效，请重新加载 GAM Sites');
-      const selected = domainChoices[siteName]?.length ? domainChoices[siteName] : [base];
-      if (mode === 'single' && selected.length > 1) throw new Error('创建单个时只能选择一个子网站');
-      return selected.map(value => {
-        const domain = siteDomain(value);
-        if (!belongsToSite(domain, base)) throw new Error('子网站必须属于所选主网站：' + base);
-        return { siteName, domain };
-      });
-    });
-    if (!rows.length || rows.length > 100 || rows.length * targets.length > 100) throw new Error('每批最多创建 100 个广告单元');
-    const items = targets.flatMap(({ siteName, domain }) =>
-      rows.map(row => {
-        if (row.type === 'banner' && (!Number.isInteger(row.bannerNo) || row.bannerNo < 1)) throw new Error('Banner 序号必须是正整数');
-        if (!row.sizes?.length) throw new Error('每个广告单元至少选择一个尺寸');
-        const defaultCode = domain + '-' + suffix(row);
-        if (targets.length > 1 && row.code.trim() && !row.code.includes('{domain}')) throw new Error('多网站自定义代码请包含 {domain}');
-        const code = row.code.trim() ? row.code.trim().replaceAll('{domain}', domain) : defaultCode;
-        const name = row.name.trim() ? row.name.trim().replaceAll('{domain}', domain) : code;
-        return { gamAccountId: accountId, siteName, domain, code, name, sizes: row.sizes,
-          description, adsenseEnabled, targetWindow };
-      }));
-    if (new Set(items.map(item => item.code.toLowerCase())).size !== items.length) throw new Error('广告单元代码重复，请调整 Banner 序号或代码');
-    return items;
-  };
+  const preparedItems = () => prepareGamUnitItems({ accountId, siteNames, sites, domainChoices,
+    rows: mode === 'single' ? [single] : batchRows, description, adsenseEnabled, targetWindow, single: mode === 'single' });
   const publish = async () => {
     let items;
     try { items = preparedItems(); } catch (error) { message.warning(error.message); return; }
@@ -215,6 +176,8 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     finally { setRetrying(null); }
   };
   const currentRows = mode === 'single' ? 1 : batchRows.length;
+  let previewItems = [];
+  try { if (accountId && siteNames.length) previewItems = preparedItems(); } catch {}
   const accountOptions = activeAccounts.map(item => ({ value: item.id, label: item.name + '（' + item.networkCode + '）' }));
   const historyColumns = [
     { title: '账号', dataIndex: 'networkCode', width: 135 }, { title: '网站', dataIndex: 'domain', width: 170 },
@@ -255,6 +218,9 @@ export default function GamAdUnitCreator({ accounts = [] }) {
             onSearch={value => setDomainSearch(previous => ({ ...previous, [siteName]: value }))}
             onSelect={value => setDomainChoices(previous => ({ ...previous, [siteName]: value }))}/>;
         })}
+        {mode === 'batch' && previewItems.length > 0 && <Alert type="info" showIcon style={{ marginTop: 12 }}
+          message={'本次将创建 ' + previewItems.length + ' 个广告单元；重复名称和代码会自动补上类型/序号'}
+          description={<div style={{ maxHeight: 110, overflowY: 'auto' }}>{previewItems.map((item, index) => <div key={index} style={{ overflowWrap: 'anywhere' }}>{index + 1}. {item.name} · {item.code}</div>)}</div>}/>}
         <Tabs style={{ marginTop: 16 }} activeKey={mode} onChange={value => { setMode(value); if (value === 'single') { setSiteNames(previous => previous.slice(0, 1)); setDomainChoices(previous => Object.fromEntries(Object.entries(previous).map(([key, domains]) => [key, domains.slice(0, 1)]))); } }} items={[
           { key: 'single', label: '创建单个', children: <UnitFields row={single} index={0} onChange={changes => setSingle(previous => ({ ...previous, ...changes }))}/> },
           { key: 'batch', label: '批量创建', children: <><div style={{ maxHeight: '42vh', overflowY: 'auto', paddingRight: 6 }}>{batchRows.map((row, index) => <UnitFields key={row.id} row={row} index={index} onChange={changes => updateBatchRow(row.id, changes)} onRemove={() => setBatchRows(previous => previous.filter(item => item.id !== row.id))} removable={batchRows.length > 1}/>)}</div><Button block icon={<PlusOutlined/>} disabled={batchRows.length >= 100} onClick={() => setBatchRows(previous => [...previous, newRow()])}>添加广告单元（{batchRows.length}/100）</Button></> }
