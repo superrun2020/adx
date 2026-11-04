@@ -7,7 +7,7 @@ import {
 } from 'antd';
 import {
   ApiOutlined, BarChartOutlined, DashboardOutlined, DollarOutlined, KeyOutlined,
-  LogoutOutlined, PlusOutlined, ReloadOutlined, SafetyOutlined, TeamOutlined,
+  LinkOutlined, LogoutOutlined, PlusOutlined, ReloadOutlined, SafetyOutlined, TeamOutlined,
   UserSwitchOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -21,6 +21,7 @@ const { Title, Text } = Typography;
 const RevenueChart = React.lazy(() => import('./RevenueChart.jsx'));
 const Reports = React.lazy(() => import('./ReportExplorer.jsx'));
 const AdminPages = React.lazy(() => import('./AdminPages.jsx'));
+const LinkManager = React.lazy(() => import('./LinkManager.jsx'));
 async function api(path, options = {}) {
   const response = await fetch(path, {
     credentials: 'include',
@@ -146,12 +147,13 @@ function Shell({ user, onLogout, initialView = 'dashboard', initialDashboard, on
   };
   const menu=useMemo(()=>[
     ...(admin?[{key:'gam',icon:<SafetyOutlined/>,label:'账号管理'}]:[]),
+    ...(admin?[{key:'links',icon:<LinkOutlined/>,label:'链接管理'}]:[]),
     {key:'dashboard',icon:<DashboardOutlined/>,label:'经营总览'},
     {key:'reports',icon:<BarChartOutlined/>,label:'数据报告'},
     ...(admin?[{type:'group',label:'平台管理',children:[{key:'channels',icon:<TeamOutlined/>,label:'渠道管理'},{key:'settlement',icon:<DollarOutlined/>,label:'结算配置'},{key:'ad-units',icon:<PlusOutlined/>,label:'广告单元创建'},{key:'admins',icon:<UserSwitchOutlined/>,label:'管理员账户'},{key:'report-keys',icon:<KeyOutlined/>,label:'账户日报 API Key'}]}]:[]),
     {type:'group',label:'开发能力',children:[{key:'api',icon:<ApiOutlined/>,label:'渠道 API'}]}
   ],[admin]);
-  const body=view==='dashboard'?<Dashboard range={range} setRange={setRange} admin={admin} user={user} initialDashboard={initialDashboard}/>:view==='reports'?<Reports range={range} setRange={setRange} admin={admin} user={user}/>:<AdminPages view={view} user={user}/>;
+  const body=view==='dashboard'?<Dashboard range={range} setRange={setRange} admin={admin} user={user} initialDashboard={initialDashboard}/>:view==='reports'?<Reports range={range} setRange={setRange} admin={admin} user={user}/>:view==='links'?<LinkManager/>:<AdminPages view={view} user={user}/>;
   return <Layout className="app-shell"><Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={238}><div className="side-brand"><span>AX</span>{!collapsed&&<div><b>{admin?'AdX Control':'AdX Publisher'}</b><small>{admin?'平台管理端':'渠道工作台'}</small></div>}</div><Menu theme="dark" mode="inline" selectedKeys={[view]} items={menu} onClick={({key})=>navigate(key)}/></Sider><Layout><Header><div><Text strong>{user.name||user.email}</Text><Tag color={admin?'blue':'cyan'}>{admin?'平台管理员':'渠道账号'}</Tag></div><Popconfirm title="确认退出登录？" onConfirm={onLogout}><Button icon={<LogoutOutlined/>}>退出</Button></Popconfirm></Header><Content><PageErrorBoundary key={view}><React.Suspense fallback={<Card className="route-loading">正在加载页面…</Card>}>{body}</React.Suspense></PageErrorBoundary></Content></Layout></Layout>;
 }
 

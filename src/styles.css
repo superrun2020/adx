@@ -16,3 +16,8 @@
 .route-loading{min-height:220px;display:flex;align-items:center;justify-content:center;color:#587184}
 @media(max-width:1200px){.account-filter-form{grid-template-columns:repeat(3,minmax(180px,1fr))}}
 @media(max-width:700px){.account-filter-form{grid-template-columns:1fr}}
+.link-manager .ant-alert{border-radius:8px}
+.link-manager .link-filters .ant-card-body{padding:16px}
+.link-manager .link-results .ant-card-body{padding:0}
+.link-account strong,.link-account small{display:block}
+.link-account small{color:#8294ad;margin-top:3px}

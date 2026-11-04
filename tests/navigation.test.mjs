@@ -16,5 +16,6 @@ test('unknown paths resolve to the dashboard', () => {
 
 test('channel accounts cannot open administrator routes directly', () => {
   assert.equal(viewForPath('/gam-accounts', 'dashboard', 'channel'), 'dashboard');
+  assert.equal(viewForPath('/links', 'dashboard', 'channel'), 'dashboard');
   assert.equal(viewForPath('/reports', 'dashboard', 'channel'), 'reports');
 });

@@ -2,6 +2,7 @@ export const viewPaths = Object.freeze({
   dashboard: '/',
   reports: '/reports',
   gam: '/gam-accounts',
+  links: '/links',
   channels: '/channels',
   settlement: '/settlement',
   'ad-units': '/ad-units',
@@ -11,7 +12,7 @@ export const viewPaths = Object.freeze({
 });
 
 const pathViews = new Map(Object.entries(viewPaths).map(([view, path]) => [path, view]));
-const adminOnlyViews = new Set(['gam', 'channels', 'settlement', 'ad-units', 'admins', 'report-keys']);
+const adminOnlyViews = new Set(['gam', 'links', 'channels', 'settlement', 'ad-units', 'admins', 'report-keys']);
 
 export function viewForPath(pathname, fallback = 'dashboard', role = 'admin') {
   const path = String(pathname || '/').replace(/\/+$/, '') || '/';
