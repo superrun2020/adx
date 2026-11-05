@@ -3,11 +3,12 @@ import { after, before, test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import express from 'express';
 import { registerGamRoutes } from '../server/gam-routes.mjs';
+import { normalizeGamFactSite } from '../server/gam-sync.mjs';
 
 const db = new DatabaseSync(':memory:');
 db.exec(
   'CREATE TABLE soap_accounts(id INTEGER PRIMARY KEY,name TEXT,network_code TEXT,status TEXT);' +
-  'CREATE TABLE revenue_facts(domain TEXT,source_file TEXT);' +
+  'CREATE TABLE revenue_facts(url TEXT,domain TEXT,ad_unit TEXT,source_file TEXT,raw_json TEXT DEFAULT \'{}\');' +
   'CREATE TABLE gam_ad_unit_creations(' +
   'id INTEGER PRIMARY KEY,gam_account_id INTEGER,network_code TEXT,site_name TEXT,site_url TEXT,domain TEXT,' +
   'parent_ad_unit TEXT,display_name TEXT,ad_unit_code TEXT COLLATE NOCASE,sizes_json TEXT,description TEXT,' +
@@ -16,13 +17,23 @@ db.exec(
 );
 db.prepare("INSERT INTO soap_accounts(id,name,network_code,status) VALUES(1,'A','123456','active')").run();
 db.prepare("INSERT INTO soap_accounts(id,name,network_code,status) VALUES(2,'B','999999','active')").run();
-for (const [domain, source] of [
-  ['news.123456.example.com', 'gam-rest:123456:2026-11-01_2026-11-01'],
-  ['sports.123456.example.com', 'gam-rest:123456:2026-11-01_2026-11-01'],
-  ['shop.999999.example.com', 'gam-rest:999999:2026-11-01_2026-11-01'],
-  ['fake.123456.example.com', 'manual-import'],
-  ['leak.123456.example.com', 'gam-rest:1234567:2026-11-01_2026-11-01']
-]) db.prepare('INSERT INTO revenue_facts(domain,source_file) VALUES(?,?)').run(domain, source);
+for (const [url, adUnit, source, reportSite = ''] of [
+  ['news.123456.example.com', '261104-news.example.com-banner1', 'gam-rest:123456:2026-11-01_2026-11-01', 'https://news.123456.example.com'],
+  ['sports.123456.example.com', '261104-sports.example.com-INT', 'gam-rest:123456:2026-11-01_2026-11-01', 'https://sports.123456.example.com'],
+  ['shop.999999.example.com', '261104-shop.example.com-banner1', 'gam-rest:999999:2026-11-01_2026-11-01', 'https://shop.999999.example.com'],
+  ['fake.123456.example.com', 'Manual import', 'manual-import'],
+  ['leak.123456.example.com', 'Wrong network', 'gam-rest:1234567:2026-11-01_2026-11-01'],
+  // Historical rows might have copied the ad-unit name into url without SITE provenance.
+  ['261104-finance.example.com', '261104-finance.example.com-banner1', 'gam-rest:123456:2026-11-01_2026-11-01'],
+  // A fact whose url differs from its original SITE value is not a domain source.
+  ['261104-sports.example.com', '261104-sports.example.com-banner1', 'gam-rest:123456:2026-11-01_2026-11-01', 'https://sports.123456.example.com']
+]) {
+  const rawJson = reportSite ? JSON.stringify({ dimensionValues: [
+    { stringValue: '20261101' }, { intValue: '13' }, { stringValue: reportSite }
+  ] }) : '{}';
+  db.prepare('INSERT INTO revenue_facts(url,domain,ad_unit,source_file,raw_json) VALUES(?,?,?,?,?)').run(url, url, adUnit, source, rawJson);
+}
+db.prepare("INSERT INTO gam_ad_unit_creations(gam_account_id,network_code,site_name,site_url,domain,parent_ad_unit,display_name,ad_unit_code,sizes_json,created_by) VALUES(1,'123456','networks/123456/sites/1','https://example.com','creation-only.example.com','networks/123456/adUnits/9','Manual','manual','[]','test')").run();
 
 const app = express();
 app.use(express.json());
@@ -37,6 +48,18 @@ const listFilters = [];
 let server, base, failAfterCreate = false;
 const response = (payload, status = 200) => new Response(JSON.stringify(payload),
   { status, headers: { 'Content-Type': 'application/json' } });
+
+test('GAM facts never infer a site domain from an ad-unit name', () => {
+  const normalize = value => {
+    try { return new URL(/^https?:\/\//i.test(value) ? value : 'https://' + value).hostname.toLowerCase(); }
+    catch { return ''; }
+  };
+  const inferred = normalizeGamFactSite({ url: '', adUnit: '261104-news.example.com-banner1' }, normalize);
+  assert.equal(inferred.url, '');
+  assert.equal(inferred.domain, '');
+  const site = normalizeGamFactSite({ url: 'https://news.example.com/path', adUnit: 'banner1' }, normalize);
+  assert.equal(site.domain, 'news.example.com');
+});
 
 before(async () => {
   globalThis.fetch = async (target, options = {}) => {

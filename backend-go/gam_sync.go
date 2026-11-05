@@ -280,9 +280,6 @@ func (a *app) fetchAndNormalizeGam(ctx context.Context, account map[string]any, 
 			return gamNormalized{}, errors.New("rest_report_row_outside_range")
 		}
 		raw := importString(fact["url"])
-		if raw == "" {
-			raw = domainFromAdUnit(importString(fact["adUnit"]))
-		}
 		fact["url"] = raw
 		fact["domain"] = normalizedDomain(raw)
 	}

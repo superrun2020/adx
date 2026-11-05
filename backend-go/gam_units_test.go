@@ -32,7 +32,13 @@ func TestGamSiteDomainsAreAccountScoped(t *testing.T) {
 	statements := []string{
 		"INSERT INTO soap_accounts(id,name,network_code,credential_ciphertext,status,created_by) VALUES(1,'First','123456','cipher','active','test'),(2,'Second','999999','cipher','active','test')",
 		"INSERT INTO channels(id,name,email,share_percent) VALUES(1,'Test','channel@example.test',75)",
-		"INSERT INTO revenue_facts(channel_id,report_date,url,domain,source_file) VALUES(1,'2026-11-01','https://news.123456.example.com','news.123456.example.com','gam-rest:123456:2026-11-01_2026-11-01'),(1,'2026-11-01','https://shop.999999.example.com','shop.999999.example.com','gam-rest:999999:2026-11-01_2026-11-01'),(1,'2026-11-01','https://fake.123456.example.com','fake.123456.example.com','manual-import')",
+		`INSERT INTO revenue_facts(channel_id,report_date,url,domain,ad_unit,source_file,raw_json) VALUES
+		(1,'2026-11-01','https://news.123456.example.com','news.123456.example.com','261104-news.example.com-banner1','gam-rest:123456:2026-11-01_2026-11-01','{"dimensionValues":[{"stringValue":"20261101"},{"intValue":"13"},{"stringValue":"https://news.123456.example.com"}]}'),
+		(1,'2026-11-01','https://sports.123456.example.com','sports.123456.example.com','261104-sports.example.com-INT','gam-rest:123456:2026-11-01_2026-11-01','{"dimensionValues":[{"stringValue":"20261101"},{"intValue":"13"},{"stringValue":"https://sports.123456.example.com"}]}'),
+		(1,'2026-11-01','https://shop.999999.example.com','shop.999999.example.com','261104-shop.example.com-banner1','gam-rest:999999:2026-11-01_2026-11-01','{"dimensionValues":[{"stringValue":"20261101"},{"intValue":"13"},{"stringValue":"https://shop.999999.example.com"}]}'),
+		(1,'2026-11-01','https://fake.123456.example.com','fake.123456.example.com','Manual','manual-import','{}'),
+		(1,'2026-11-01','https://261104-finance.example.com','261104-finance.example.com','261104-finance.example.com-banner1','gam-rest:123456:2026-11-01_2026-11-01','{}'),
+		(1,'2026-11-01','https://legacy.example.com','legacy.example.com','261104-legacy.example.com-banner1','gam-rest:123456:2026-11-01_2026-11-01','{"dimensionValues":[{"stringValue":"20261101"},{"intValue":"13"},{"stringValue":"different.example.com"}]}')`,
 		"INSERT INTO gam_ad_unit_creations(gam_account_id,network_code,site_name,site_url,domain,parent_ad_unit,display_name,ad_unit_code,sizes_json,created_by) VALUES(1,'123456','networks/123456/sites/1','https://123456.example.com','manual.123456.example.com','networks/123456/adUnits/9','Manual','manual','[]','test')",
 		"INSERT INTO sessions(token_hash,user_id,expires_at) VALUES('" + sha256Hex("test-session") + "',1,datetime('now','+1 day'))",
 	}
@@ -45,7 +51,7 @@ func TestGamSiteDomainsAreAccountScoped(t *testing.T) {
 		id       string
 		expected []string
 	}{
-		{"1", []string{"manual.123456.example.com", "news.123456.example.com"}},
+		{"1", []string{"news.123456.example.com", "sports.123456.example.com"}},
 		{"2", []string{"shop.999999.example.com"}},
 	} {
 		request := httptest.NewRequest(http.MethodGet, "/api/admin/gam-accounts/"+item.id+"/site-domains", nil)

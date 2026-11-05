@@ -4,7 +4,7 @@ function siteDomain(value) {
   const raw = String(value || '').trim();
   try {
     const hostname = new URL(/^https?:\/\//i.test(raw) ? raw : 'https://' + raw).hostname.toLowerCase();
-    if (/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(hostname)) return hostname;
+    if (/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})$/.test(hostname)) return hostname;
   } catch {}
   throw new Error('invalid_gam_site_url');
 }
@@ -211,10 +211,23 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     if (!item) return res.status(404).json({ ok: false, error: 'gam_account_not_found' });
     if (item.status !== 'active') throw new Error('invalid_gam_account_status');
     const prefix = 'gam-rest:' + item.network_code;
-    const rows = db.prepare("SELECT domain FROM (SELECT domain FROM revenue_facts WHERE source_file>=? AND source_file<? AND domain<>'' " +
-      "UNION SELECT domain FROM gam_ad_unit_creations WHERE gam_account_id=? AND domain<>'') ORDER BY domain LIMIT 5000")
-      .all(prefix + ':', prefix + ';', item.id);
-    const items = rows.flatMap(row => { try { return [siteDomain(row.domain)]; } catch { return []; } });
+    // This catalog lists websites discovered through GAM's SITE dimension.
+    // Ad-unit creation metadata and guessed names are separate concepts.
+    const rows = db.prepare("SELECT url AS siteUrl,raw_json AS rawJson FROM revenue_facts " +
+      "WHERE source_file>=? AND source_file<? AND url<>'' ORDER BY siteUrl LIMIT 5000")
+      .all(prefix + ':', prefix + ';');
+    const items = [...new Set(rows.flatMap(row => {
+      try {
+        const rawJson = String(row.rawJson || '').trim();
+        if (!rawJson || rawJson === '{}') return [];
+        const dimensions = JSON.parse(rawJson)?.dimensionValues;
+        const site = dimensions?.[2]?.stringValue;
+        // Link management accepts only the host explicitly present in the REST
+        // report's SITE dimension. Never infer one from an ad-unit name.
+        if (typeof site !== 'string' || !site.trim() || siteDomain(site) !== siteDomain(row.siteUrl)) return [];
+        return [siteDomain(site)];
+      } catch { return []; }
+    }))];
     res.json({ ok: true, items });
   }));
 

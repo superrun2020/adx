@@ -145,7 +145,7 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
   }));
   const columns = [...dimensionColumns(selectedDimensions),...metricColumns(selectedMetrics,admin)];
   const detailColumns = [...dimensionColumns(detailDimensions),...metricColumns(selectedMetrics,admin)];
-  return <Space direction="vertical" size={16} className="page-stack">
+  return <Space direction="vertical" size={16} className="page-stack report-explorer">
     <div className="page-heading"><div><Title level={2}>数据报告</Title>
       <Text type="secondary">默认汇总所选日期范围内的域名与广告单元；勾选“日期”可按天拆分，点击行可下钻</Text>{cachedRows && <Text type="secondary" style={{marginLeft:10}}>已显示缓存数据{loading ? '，正在更新' : ''}</Text>}</div>
       <Button icon={<ReloadOutlined/>} loading={loading} onClick={() => setApplied({ ...applied })}>刷新</Button></div>
@@ -186,7 +186,7 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
           {title:'收入',dataIndex:'revenue',align:'right',render:money}]}
         scroll={{x:520,y:240}} onRow={row => ({
           onClick:() => { setPage(1); setSelectedDate(current => current === row.date ? null : row.date); },
-          style:{cursor:'pointer',background:selectedDate === row.date ? '#e6f4ff' : undefined}
+          style:{cursor:'pointer',background:selectedDate === row.date ? 'var(--report-accent-soft)' : undefined}
         })} pagination={dailyTotal > 200 ? {current:dailyPage,pageSize:200,total:dailyTotal,
           showSizeChanger:false,onChange:setDailyPage} : false}
         locale={{emptyText:'所选日期范围内没有已同步的数据'}}/>

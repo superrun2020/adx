@@ -89,7 +89,7 @@ function MetricCards({ summary, admin }) {
   return <Row gutter={[16, 16]}>{items.map(([title, value, icon]) => <Col xs={24} sm={12} xl={6} key={title}><Card className="metric"><Statistic title={title} value={value} prefix={icon} /></Card></Col>)}</Row>;
 }
 
-function DashboardHighlights({ user, currentPath, currentData, refreshKey }) {
+function DashboardTopLinks({ user, currentPath, currentData, refreshKey }) {
   const today = dayjs().format('YYYY-MM-DD');
   const monthStart = dayjs().startOf('month').format('YYYY-MM-DD');
   const todayPath = '/api/dashboard?start=' + today + '&end=' + today;
@@ -114,24 +114,15 @@ function DashboardHighlights({ user, currentPath, currentData, refreshKey }) {
   }, [user.id, currentPath, todayPath, monthPath, refreshKey]);
   const daily = currentPath === todayPath ? currentData : snapshots.today;
   const monthly = currentPath === monthPath ? currentData : snapshots.month;
-  const average = monthly?.summary ? Number(monthly.summary.revenue || 0) / dayjs().date() : null;
-  const cards = [
-    ['当日收益', daily?.summary?.revenue, today, 'blue'],
-    ['当月收益', monthly?.summary?.revenue, monthStart + ' 至 ' + today, 'purple'],
-    ['当月日均收益', average, '按 ' + dayjs().date() + ' 个自然日计算', 'green']
-  ];
   const columns = [
     { title:'排名', width:64, render:(_, row, index) => <span className={'rank-badge rank-' + (index + 1)}>{index + 1}</span> },
     { title:'链接', dataIndex:'url', ellipsis:true, render:value => <strong className="rank-url" title={value}>{value || '—'}</strong> },
     { title:'展示', dataIndex:'impressions', align:'right', width:110, render:number },
     { title:'收益', dataIndex:'revenue', align:'right', width:120, render:value => <strong>{money(value)}</strong> }
   ];
-  return <>
-    <Row gutter={[16,16]}>{cards.map(([title, revenue, caption, color]) => <Col xs={24} md={8} key={title}><Card className={'highlight-metric highlight-' + color}><Text type="secondary">{title}</Text><div className="highlight-value">{revenue === undefined || revenue === null ? '—' : money(revenue)}</div><Text type="secondary">{caption}</Text></Card></Col>)}</Row>
-    <Row gutter={[16,16]}>
-      {[['当日链接收益 Top 10', daily], ['当月链接收益 Top 10', monthly]].map(([title, result]) => <Col xs={24} xl={12} key={title}><Card className="highlight-ranking" title={title} extra="USD"><Table size="small" rowKey="url" pagination={false} columns={columns} dataSource={result?.topUrls || []} scroll={{x:520}} locale={{emptyText:<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无已同步数据"/>}}/></Card></Col>)}
-    </Row>
-  </>;
+  return <Row gutter={[16,16]}>
+    {[['当日链接收益 Top 10', daily], ['当月链接收益 Top 10', monthly]].map(([title, result]) => <Col xs={24} xl={12} key={title}><Card className="highlight-ranking" title={title} extra="USD"><Table size="small" rowKey="url" pagination={false} columns={columns} dataSource={result?.topUrls || []} scroll={{x:520}} locale={{emptyText:<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无已同步数据"/>}}/></Card></Col>)}
+  </Row>;
 }
 
 function Dashboard({ range, setRange, admin, user, initialDashboard }) {
@@ -173,11 +164,11 @@ function Dashboard({ range, setRange, admin, user, initialDashboard }) {
     load();
     return () => { requestId.current += 1; };
   }, [range[0].valueOf(), range[1].valueOf()]);
-  return <Space direction="vertical" size={16} className="page-stack">
+  return <Space direction="vertical" size={16} className="page-stack report-dashboard">
     <div className="page-heading"><div><Title level={2}>经营总览</Title><Text type="secondary">收入、流量质量与渠道结算一屏掌握</Text>{showingCached && <Tag color="gold" style={{marginLeft:10}}>{loading ? '已显示缓存，正在更新' : '已显示缓存数据'}</Tag>}</div><Space wrap><ReportDateFilter value={range} onChange={setRange}/><Button icon={<ReloadOutlined />} loading={loading} onClick={() => { load(true); setHighlightRefresh(value => value + 1); }}>刷新</Button></Space></div>
-    <DashboardHighlights user={user} currentPath={path} currentData={currentData} refreshKey={highlightRefresh}/>
     <Text type="secondary">所选区间：{range[0].format('YYYY-MM-DD')} 至 {range[1].format('YYYY-MM-DD')}</Text>
     <MetricCards summary={currentData?.summary} admin={admin} />
+    <DashboardTopLinks user={user} currentPath={path} currentData={currentData} refreshKey={highlightRefresh}/>
     <Card title="所选区间每日收益趋势" extra={currentData?.lastSync ? '最近同步 ' + currentData.lastSync : '尚未同步'}><div className="chart"><PageErrorBoundary><RevenueChart data={currentData?.trend || []} formatMoney={money}/></PageErrorBoundary></div></Card>
   </Space>;
 }

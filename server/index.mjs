@@ -296,7 +296,7 @@ async function gamTokenFor(account) {
   catch (error) { if (gamTokens.get(key)?.promise === promise) gamTokens.delete(key); throw error; }
 }
 function domainFromAdUnit(value) { const raw=String(value||''); const labelled=raw.match(/(?:^|[_-])lb-((?:[a-z0-9](?:[a-z0-9-]*\.)+)[a-z]{2,})(?=$|[-_])/i); if(labelled)return normalizedDomain(labelled[1]); const match=raw.match(/(?:^|[-_])((?:[a-z0-9](?:[a-z0-9-]*\.)+)[a-z]{2,})(?=$|[-_])/i); return match?normalizedDomain(match[1]):''; }
-const gamSync = createGamSync({ db, transaction, tokenFor: gamTokenFor, normalizedDomain, domainFromAdUnit, audit,
+const gamSync = createGamSync({ db, transaction, tokenFor: gamTokenFor, normalizedDomain, audit,
   onFactsChanged: (channelId, start, end) => {
     try { refreshDashboardDaily(channelId, start, end); }
     catch (error) { dashboardDailyReady = false; console.error('dashboard_daily_refresh_failed', error.message); }

@@ -22,4 +22,23 @@
 .link-account strong,.link-account small{display:block}
 .link-account small{color:#8294ad;margin-top:3px}
 .revenue-chart{position:relative;width:100%;height:100%;min-width:0}.revenue-chart svg{display:block}.revenue-tooltip{position:absolute;display:flex;flex-direction:column;gap:2px;min-width:130px;padding:7px 10px;border:1px solid #dfe8ed;border-radius:6px;background:#fff;box-shadow:0 4px 16px #12293a1a;pointer-events:none;color:#647d8b;font-size:11px}.revenue-tooltip strong{color:#172b3a;font-size:14px}.revenue-empty{height:100%;display:grid;place-items:center;color:#8294a0}
-.highlight-metric{min-height:142px;border:1px solid #e1eaf3}.highlight-metric .ant-card-body{display:flex;flex-direction:column;gap:7px;padding:20px 24px}.highlight-value{font-size:26px;font-weight:700;line-height:1.25}.highlight-blue .highlight-value{color:#245fea}.highlight-purple .highlight-value{color:#722ed1}.highlight-green .highlight-value{color:#00866a}.highlight-ranking .ant-card-body{padding:16px 20px}.highlight-ranking .ant-table-thead>tr>th{background:#f7f9fb}.rank-badge{display:inline-grid;place-items:center;min-width:24px;height:24px;border-radius:5px;background:#edf1f6;color:#526a7a;font-weight:700}.rank-1{background:#fff2c6;color:#ad6800}.rank-2{background:#e4ebf2;color:#275075}.rank-3{background:#ffead5;color:#ad4e00}.rank-url{font-weight:600;color:#20394c}
+.highlight-ranking .ant-card-body{padding:16px 20px}.highlight-ranking .ant-table-thead>tr>th{background:#f7f9fb}.rank-badge{display:inline-grid;place-items:center;min-width:24px;height:24px;border-radius:5px;background:#edf1f6;color:#526a7a;font-weight:700}.rank-1{background:#fff2c6;color:#ad6800}.rank-2{background:#e4ebf2;color:#275075}.rank-3{background:#ffead5;color:#ad4e00}.rank-url{font-weight:600;color:#20394c}
+:root{--report-accent:#1f2937;--report-accent-soft:#f3f4f6;--report-focus:#9ca3af;--report-grid:#e5e7eb;--report-muted:#6b7280;--report-border:#e5e7eb}
+.report-dashboard .metric{border:1px solid var(--report-border)}
+.report-dashboard .metric .ant-statistic-content{color:#111827}
+.report-dashboard .metric .ant-statistic-title{color:var(--report-muted)}
+.report-dashboard .highlight-ranking .ant-card-head{border-bottom-color:var(--report-border)}
+.report-dashboard .highlight-ranking .ant-table-thead>tr>th{color:#374151}
+.report-dashboard .rank-badge{background:#f3f4f6;color:#374151}
+.report-dashboard .rank-url{color:#111827}
+.report-explorer .ant-card{border-color:var(--report-border)}
+.report-explorer .ant-card-head{border-bottom-color:var(--report-border)}
+.report-explorer .ant-table-thead>tr>th{background:#f3f4f6;color:#374151}
+.report-explorer .ant-table-tbody>tr:hover>td{background:#f9fafb}
+.report-explorer .ant-table-tbody>tr.ant-table-row:hover>td{background:#f9fafb}
+.report-explorer .ant-btn-primary{background:var(--report-accent)}
+.report-explorer .ant-btn-primary:hover{background:#374151}
+.report-explorer .ant-select-focused .ant-select-selector,.report-explorer .ant-input:focus{border-color:var(--report-accent)}
+.report-explorer .revenue-tooltip{border-color:var(--report-border);color:var(--report-muted)}
+.report-explorer .revenue-tooltip strong{color:var(--report-accent)}
+.highlight-ranking .ant-table-thead>tr>th{background:#f3f4f6}

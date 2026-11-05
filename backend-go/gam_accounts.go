@@ -387,15 +387,32 @@ func (a *app) gamAccountSiteDomains(w http.ResponseWriter, r *http.Request) erro
 		return errors.New("invalid_gam_account_status")
 	}
 	prefix := "gam-rest:" + importString(account["network_code"])
-	query := "SELECT domain FROM (SELECT domain FROM revenue_facts WHERE source_file>=? AND source_file<? AND domain<>'' " +
-		"UNION SELECT domain FROM gam_ad_unit_creations WHERE gam_account_id=? AND domain<>'') ORDER BY domain LIMIT 5000"
-	rows, err := queryMaps(a.db, query, prefix+":", prefix+";", intMap(account, "id"))
+	query := "SELECT DISTINCT url AS siteUrl,raw_json AS rawJson FROM revenue_facts WHERE source_file>=? AND source_file<? AND url<>'' ORDER BY siteUrl LIMIT 5000"
+	rows, err := queryMaps(a.db, query, prefix+":", prefix+";")
 	if err != nil {
 		return err
 	}
 	items := make([]string, 0, len(rows))
+	seen := make(map[string]bool, len(rows))
 	for _, row := range rows {
-		if domain := normalizedDomain(importString(row["domain"])); hostnamePattern.MatchString(domain) {
+		rawJSON := strings.TrimSpace(importString(row["rawJson"]))
+		if rawJSON == "" || rawJSON == "{}" {
+			continue
+		}
+		var raw map[string]any
+		if json.Unmarshal([]byte(rawJSON), &raw) != nil {
+			continue
+		}
+		dimensions, ok := raw["dimensionValues"].([]any)
+		if !ok || len(dimensions) < 3 {
+			continue
+		}
+		site := importString(object(dimensions[2])["stringValue"])
+		if site == "" || normalizedDomain(site) != normalizedDomain(importString(row["siteUrl"])) {
+			continue
+		}
+		if domain := normalizedDomain(site); hostnamePattern.MatchString(domain) && !seen[domain] {
+			seen[domain] = true
 			items = append(items, domain)
 		}
 	}

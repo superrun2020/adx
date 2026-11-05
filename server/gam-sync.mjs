@@ -22,7 +22,14 @@ function asDate(value) {
   return date;
 }
 
-export function createGamSync({ db, transaction, tokenFor, normalizedDomain, domainFromAdUnit, audit, onFactsChanged = () => {} }) {
+export function normalizeGamFactSite(fact, normalizedDomain) {
+  // Only the REST report's SITE dimension is authoritative. Ad-unit names often
+  // include a human-readable domain fragment, but that fragment is not a site.
+  const url = String(fact.url || '').trim();
+  return { ...fact, url, domain: url ? normalizedDomain(url) : '' };
+}
+
+export function createGamSync({ db, transaction, tokenFor, normalizedDomain, audit, onFactsChanged = () => {} }) {
   const busy = new Set();
   const upsert = db.prepare('INSERT INTO revenue_facts(channel_id,report_date,hour,url,domain,account,ad_unit,ad_unit_id,country,requests,matched_requests,impressions,clicks,revenue,source_file,raw_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(channel_id,report_date,hour,url,account,ad_unit,ad_unit_id,country) DO UPDATE SET requests=excluded.requests,matched_requests=excluded.matched_requests,impressions=excluded.impressions,clicks=excluded.clicks,revenue=excluded.revenue,domain=excluded.domain,source_file=excluded.source_file,raw_json=excluded.raw_json,imported_at=CURRENT_TIMESTAMP');
 
@@ -113,8 +120,7 @@ export function createGamSync({ db, transaction, tokenFor, normalizedDomain, dom
           channelId, accountKey, sourceFile, moneyDivisor: account.rest_money_divisor
         }).map(fact => {
           if (fact.reportDate < from || fact.reportDate > through) throw new Error('rest_report_row_outside_range');
-          const url = fact.url || domainFromAdUnit(fact.adUnit);
-          return { ...fact, url, domain: normalizedDomain(url) };
+          return normalizeGamFactSite(fact, normalizedDomain);
         });
         checkpoint('normalize');
         const revenue = facts.reduce((sum, fact) => sum + fact.revenue, 0);

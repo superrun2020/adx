@@ -41,15 +41,15 @@ export default function RevenueChart({ data, formatMoney }) {
           const index = rows.length === 1 ? 0 : Math.round((localX - left) * (rows.length - 1) / plotWidth);
           setActive(Math.max(0, Math.min(rows.length - 1, index)));
         }} onMouseLeave={() => setActive(null)}>
-        <defs><linearGradient id="revenue-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#1677ff" stopOpacity=".23"/><stop offset="100%" stopColor="#1677ff" stopOpacity="0"/></linearGradient></defs>
+        <defs><linearGradient id="revenue-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--report-accent)" stopOpacity=".23"/><stop offset="100%" stopColor="var(--report-accent)" stopOpacity="0"/></linearGradient></defs>
         {[0, 1, 2, 3, 4].map(step => {
           const value = maximum * step / 4;
           const position = y(value);
-          return <g key={step}><line x1={left} x2={width - right} y1={position} y2={position} stroke="#e9eef2" strokeDasharray="3 3"/><text x={left - 10} y={position + 4} textAnchor="end" fill="#8294a0" fontSize="11">{shortNumber(value)}</text></g>;
+          return <g key={step}><line x1={left} x2={width - right} y1={position} y2={position} stroke="var(--report-grid)" strokeDasharray="3 3"/><text x={left - 10} y={position + 4} textAnchor="end" fill="var(--report-muted)" fontSize="11">{shortNumber(value)}</text></g>;
         })}
-        {labels.map(index => <text key={index} x={x(index)} y={height - 10} textAnchor={index === 0 ? 'start' : index === rows.length - 1 ? 'end' : 'middle'} fill="#8294a0" fontSize="11">{rows[index].date.slice(5)}</text>)}
-        <path d={area} fill="url(#revenue-fill)"/><path d={line} fill="none" stroke="#1677ff" strokeWidth="2.5" strokeLinejoin="round"/>
-        {selected && <><line x1={x(active)} x2={x(active)} y1={top} y2={baseline} stroke="#a9c9f7" strokeDasharray="4 4"/><circle cx={x(active)} cy={y(selected.revenue)} r="5" fill="#1677ff" stroke="#fff" strokeWidth="2"/></>}
+        {labels.map(index => <text key={index} x={x(index)} y={height - 10} textAnchor={index === 0 ? 'start' : index === rows.length - 1 ? 'end' : 'middle'} fill="var(--report-muted)" fontSize="11">{rows[index].date.slice(5)}</text>)}
+        <path d={area} fill="url(#revenue-fill)"/><path d={line} fill="none" stroke="var(--report-accent)" strokeWidth="2.5" strokeLinejoin="round"/>
+        {selected && <><line x1={x(active)} x2={x(active)} y1={top} y2={baseline} stroke="var(--report-focus)" strokeDasharray="4 4"/><circle cx={x(active)} cy={y(selected.revenue)} r="5" fill="var(--report-accent)" stroke="#fff" strokeWidth="2"/></>}
       </svg>
       {selected && <div className="revenue-tooltip" style={{ left: Math.min(width - 142, Math.max(8, x(active) - 66)), top: Math.max(0, y(selected.revenue) - 56) }}><span>{selected.date}</span><strong>{formatMoney(selected.revenue)}</strong></div>}
     </> : <div className="revenue-empty">所选日期暂无收益数据</div>}
