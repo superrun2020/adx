@@ -25,10 +25,11 @@ export function catalogLinksForAccount(account, sites = []) {
   const rows = new Map();
   for (const domain of siteDomains) {
     const site = byDomain.get(domain);
-    const parent = siteDomains.find(other => other !== domain && isWithin(domain, other)) || mainDomain(domain);
+    const parent = siteDomains.find(other => other !== domain && isWithin(domain, other)) || '';
+    const inferredType = domain === mainDomain(domain) ? 'main' : 'sub';
     rows.set(domain, {
-      key: account.id + ':' + domain, domain, type: domain === parent ? 'main' : 'sub',
-      parentDomain: domain === parent ? '' : parent, accountId: account.id,
+      key: account.id + ':' + domain, domain, type: parent ? 'sub' : inferredType,
+      parentDomain: parent, accountId: account.id,
       accountName: account.name, networkCode: account.networkCode,
       approval: String(site.approvalStatus || 'UNKNOWN').toUpperCase(), source: 'GAM Sites', siteName: site.name
     });

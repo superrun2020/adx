@@ -52,3 +52,10 @@ test('report and creation domains are ignored when GAM Sites are absent', () => 
   assert.deepEqual(catalogLinksForAccount(account, [], ['finance.nextvisiona.com']), []);
   assert.deepEqual(approvedLinksForAccount(account, [], ['finance.nextvisiona.com']), []);
 });
+
+test('a standalone GAM child site has no invented parent row', () => {
+  const rows = catalogLinksForAccount(account, [site('news.example.com', 'APPROVED')]);
+  assert.deepEqual(rows.map(row => [row.domain, row.type, row.parentDomain]), [
+    ['news.example.com', 'sub', '']
+  ]);
+});
