@@ -15,7 +15,7 @@ function mainDomain(domain) {
   return parts.length > count ? parts.slice(-count).join('.') : domain;
 }
 
-export function catalogLinksForAccount(account, sites = [], knownDomains = []) {
+export function catalogLinksForAccount(account, sites = []) {
   const byDomain = new Map();
   for (const site of sites) {
     const domain = hostname(site.url);
@@ -33,33 +33,10 @@ export function catalogLinksForAccount(account, sites = [], knownDomains = []) {
       approval: String(site.approvalStatus || 'UNKNOWN').toUpperCase(), source: 'GAM Sites', siteName: site.name
     });
   }
-  for (const raw of knownDomains) {
-    const domain = hostname(raw);
-    if (!domain || rows.has(domain)) continue;
-    const nearestSite = siteDomains.find(siteDomain => isWithin(domain, siteDomain));
-    if (!nearestSite) {
-      const parent = mainDomain(domain);
-      rows.set(domain, {
-        key: account.id + ':' + domain, domain, type: domain === parent ? 'main' : 'sub',
-        parentDomain: domain === parent ? '' : parent, accountId: account.id,
-        accountName: account.name, networkCode: account.networkCode,
-        approval: 'NO_SITE', source: '账户报表/创建记录', siteName: ''
-      });
-      continue;
-    }
-    if (domain === nearestSite) continue;
-    rows.set(domain, {
-      key: account.id + ':' + domain, domain, type: 'sub',
-      parentDomain: nearestSite, accountId: account.id,
-      accountName: account.name, networkCode: account.networkCode,
-      approval: 'PARENT_' + String(byDomain.get(nearestSite).approvalStatus || 'UNKNOWN').toUpperCase(),
-      source: '账户报表/创建记录', siteName: byDomain.get(nearestSite).name
-    });
-  }
   return [...rows.values()].sort((a, b) => a.domain.localeCompare(b.domain));
 }
 
-export function approvedLinksForAccount(account, sites = [], knownDomains = []) {
-  return catalogLinksForAccount(account, sites, knownDomains)
+export function approvedLinksForAccount(account, sites = []) {
+  return catalogLinksForAccount(account, sites)
     .filter(row => row.approval === 'APPROVED');
 }

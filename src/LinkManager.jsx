@@ -58,16 +58,9 @@ export default function LinkManager() {
           if (account.status !== 'active') {
             failures.push(account.name + '：账号未连接，无法读取 GAM Sites');
           } else {
-            const [siteResult, domainResult] = await Promise.allSettled([
-              allSites(account.id, current.signal),
-              api('/api/admin/gam-accounts/' + account.id + '/site-domains', current.signal)
-            ]);
+            const [siteResult] = await Promise.allSettled([allSites(account.id, current.signal)]);
             if (siteResult.status === 'fulfilled') {
-              const known = domainResult.status === 'fulfilled' ? domainResult.value.items || [] : [];
-              found.push(...catalogLinksForAccount(account, siteResult.value, known));
-              if (known.length >= 5000) failures.push(account.name + '：子域名结果达到接口上限，请核对是否遗漏');
-              if (domainResult.status === 'rejected' && !current.signal.aborted)
-                failures.push(account.name + '：子域名读取失败，已展示已过审 GAM Sites');
+              found.push(...catalogLinksForAccount(account, siteResult.value));
             } else if (!current.signal.aborted) {
               failures.push(account.name + '：GAM Sites 读取失败（' + String(siteResult.reason?.message || siteResult.reason) + '）');
             }
@@ -123,8 +116,8 @@ export default function LinkManager() {
   return <Space direction="vertical" size={16} className="page-stack link-manager">
     <div className="page-heading"><div><Title level={2}>链接管理</Title><Text type="secondary">统一查看所有 Ad Manager 账号的主域名、子域名与审核状态</Text></div>
       <Button icon={<ReloadOutlined/>} loading={busy} onClick={load}>刷新 GAM 链接</Button></div>
-    <Alert type="info" showIcon message="已过审仅以 GAM Sites 的 APPROVED 为准"
-      description="默认展示所有已发现链接，筛选条件会立即更新列表。选择“已过审”时，只显示直接获批的主域名或子域名；未获批的候选链接保留原始状态。"/>
+    <Alert type="info" showIcon message="链接仅来自 Ad Manager 已添加的网站"
+      description="主域名和子域名均直接读取对应 GAM 账号的 Sites 列表；报表域名、广告单元名称和本地创建记录不会加入链接目录。"/>
     {issues.length > 0 && <Alert type="warning" showIcon message="部分账号或子域名读取不完整" description={issues.join('；')} />}
     {!busy && lastLoaded && approvedCount === 0 && <Alert type="warning" showIcon message="当前 GAM Sites 未返回已过审站点" description="候选链接列在下方；选择“已过审”会显示空列表，直到 GAM 返回 APPROVED。"/>}
     <Row gutter={[12, 12]}>
