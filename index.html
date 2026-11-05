@@ -3,30 +3,27 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#edf4f6" />
+    <meta name="theme-color" content="#12293a" />
     <title>AdX 渠道管理平台</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <style>
-      :root{font-family:Inter,"PingFang SC","Microsoft YaHei",sans-serif;color:#183142;background:#edf4f6;font-synthesis:none}
+      :root{font-family:Inter,"PingFang SC","Microsoft YaHei",sans-serif;color:#172b3a;background:#eef4ff;font-synthesis:none}
       *{box-sizing:border-box}body{margin:0}button,input{font:inherit}[hidden]{display:none!important}
-      .boot-page{min-height:100vh;display:grid;grid-template-columns:minmax(0,1fr) 440px;align-items:center;gap:clamp(40px,8vw,130px);max-width:1280px;margin:auto;padding:clamp(28px,6vw,88px)}
-      .boot-brand{max-width:530px}.boot-identity{display:flex;align-items:center;gap:18px}.boot-mark{width:66px;height:66px;flex:none;display:grid;place-items:center;border-radius:16px;background:#087c91;color:#fff;font-size:25px;font-weight:800;box-shadow:0 12px 28px #087c9130}
-      .boot-identity b{display:block;font-size:27px;letter-spacing:-.03em}.boot-identity span{display:block;margin-top:4px;color:#60798a;font-size:14px}
-      .boot-kicker{margin:72px 0 16px;color:#087c91;font-size:13px;font-weight:700;letter-spacing:.12em}.boot-brand h2{margin:0;font-size:clamp(32px,3vw,46px);line-height:1.28;letter-spacing:-.04em}.boot-copy{max-width:440px;margin:20px 0 0;color:#60798a;font-size:16px;line-height:1.85}
-      .boot-card{padding:42px;background:#fff;border:1px solid #e2ebee;box-shadow:0 24px 72px #16384718;border-radius:18px}.boot-card h1{margin:0 0 8px;font-size:26px;letter-spacing:-.03em}.boot-hint{color:#647d8b;font-size:14px;line-height:1.7}
-      .boot-card form{margin-top:30px}.boot-card label{display:block;margin:18px 0 8px;color:#30485a;font-size:14px;font-weight:600}.boot-card input{width:100%;height:46px;padding:10px 13px;border:1px solid #c8d7de;border-radius:8px;outline:none;background:#fff;color:#183142;transition:border-color .15s,box-shadow .15s}
-      .boot-card input:focus{border-color:#07849b;box-shadow:0 0 0 3px #07849b20}.boot-card button{width:100%;height:46px;margin-top:28px;border:0;border-radius:8px;background:#087c91;color:#fff;font-weight:700;cursor:pointer;transition:background .15s,transform .15s}.boot-card button:hover{background:#076a7d}.boot-card button:active{transform:translateY(1px)}.boot-card button:disabled{opacity:.7;cursor:wait}
-      #boot-status{min-height:22px;margin:14px 0 0;color:#b42318;font-size:13px;line-height:1.6}#boot-status.loading{color:#60798a}#boot-retry{margin:0;background:#edf4f6;color:#087c91}.boot-note{margin:20px 0 0;padding-top:18px;border-top:1px solid #edf1f3;color:#8296a1;font-size:12px}
-      @media(max-width:850px){.boot-page{grid-template-columns:1fr;gap:32px;max-width:520px;padding:36px 20px}.boot-kicker,.boot-brand h2,.boot-copy{display:none}.boot-card{padding:30px 24px}.boot-identity b{font-size:24px}}
+      .boot-shell{min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 15% 20%,#dceaff 0,transparent 42%),linear-gradient(135deg,#f5f8ff,#e9f2ff)}
+      .boot-card{width:min(100%,460px);padding:34px;background:#fff;border:1px solid #dce8f8;border-radius:12px;box-shadow:0 18px 54px #174fa91c}.boot-identity{display:flex;align-items:center;gap:12px;padding-bottom:26px;margin-bottom:26px;border-bottom:1px solid #edf1f7}.boot-mark{width:42px;height:42px;flex:none;display:grid;place-items:center;background:#1677ff;color:#fff;border-radius:8px;font-size:14px;font-weight:800}.boot-identity b{display:block;font-size:16px}.boot-identity small{display:block;margin-top:2px;color:#8294a0;font-size:12px}.boot-portal-label{margin-left:auto;padding:4px 8px;border-radius:4px;background:#e6f4ff;color:#1677ff;font-size:12px;white-space:nowrap}
+      .boot-card h1{margin:0 0 6px;font-size:23px}.boot-hint{color:#6d8391;font-size:13px;line-height:1.7}
+      .boot-card form{margin-top:24px}.boot-card label{display:block;margin:16px 0 8px;color:#30485a;font-size:13px;font-weight:600}.boot-card input{width:100%;height:42px;padding:9px 12px;border:1px solid #c8d7de;border-radius:6px;outline:none;background:#fff;color:#183142;transition:border-color .15s,box-shadow .15s}
+      .boot-card input:focus{border-color:#1677ff;box-shadow:0 0 0 3px #1677ff20}.boot-card button{width:100%;height:42px;margin-top:24px;border:0;border-radius:6px;background:#1677ff;color:#fff;font-weight:650;cursor:pointer;transition:background .15s}.boot-card button:hover{background:#4096ff}.boot-card button:disabled{opacity:.7;cursor:wait}
+      #boot-status{min-height:20px;margin:12px 0 0;color:#b42318;font-size:13px;line-height:1.5}#boot-status.loading{color:#60798a}#boot-retry{margin:0;background:#e6f4ff;color:#1677ff}.boot-note{margin:12px 0 0;padding-top:16px;border-top:1px solid #edf1f3;color:#8296a1;font-size:12px}
+      @media(max-width:600px){.boot-shell{padding:18px}.boot-card{padding:26px 22px}.boot-identity{padding-bottom:22px;margin-bottom:22px}.boot-portal-label{display:none}}
     </style>
   </head>
   <body>
-    <div id="root"><main class="boot-page">
-      <section class="boot-brand" aria-label="平台介绍"><div class="boot-identity"><div class="boot-mark">AX</div><div><b id="boot-brand-name">AdX Control</b><span id="boot-brand-hint">平台数据与渠道管理后台</span></div></div><p class="boot-kicker">AD MANAGER · DATA CONSOLE</p><h2>广告业务数据，<br />一处清晰掌握。</h2><p class="boot-copy">管理广告单元、查看多维度报表与渠道收益，快速进入日常工作。</p></section>
-      <section class="boot-card" aria-label="登录"><h1 id="boot-title">管理员登录</h1><div class="boot-hint" id="boot-hint">使用平台管理员账号登录。</div>
+    <div id="root"><main class="boot-shell">
+      <section class="boot-card" aria-label="登录"><div class="boot-identity"><div class="boot-mark">AX</div><div><b id="boot-brand-name">AdX Control</b><small id="boot-brand-hint">广告数据工作台</small></div><span class="boot-portal-label" id="boot-portal-label">平台管理端</span></div><h1 id="boot-title">管理员登录</h1><div class="boot-hint" id="boot-hint">使用平台管理员账号登录。</div>
         <form id="boot-login"><label for="boot-email">登录邮箱</label><input id="boot-email" name="email" type="email" autocomplete="username" required />
           <label for="boot-password">密码</label><input id="boot-password" name="password" type="password" autocomplete="current-password" required />
-          <button type="submit" disabled>登录</button></form><p id="boot-status" role="status" aria-live="polite"></p><button id="boot-retry" type="button" hidden>刷新页面</button><p class="boot-note">仅限授权账号访问</p></section>
+          <button type="submit">登录</button></form><p id="boot-status" role="status" aria-live="polite"></p><button id="boot-retry" type="button" hidden>刷新页面</button><p class="boot-note">登录后直接进入完整工作台</p></section>
     </main></div><div id="app-root" hidden></div>
     <script type="module" src="/src/boot.js"></script>
   </body>

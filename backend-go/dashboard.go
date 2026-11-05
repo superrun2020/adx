@@ -118,7 +118,7 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 	if ready {
 		domain = "domain"
 	}
-	top, err := queryMaps(a.db, "SELECT "+domain+" url,ROUND(SUM("+factor+"),6) revenue FROM "+source+" WHERE "+where+" GROUP BY "+domain+" ORDER BY revenue DESC LIMIT 10", args...)
+	top, err := queryMaps(a.db, "SELECT "+domain+" url,SUM(impressions) impressions,ROUND(SUM("+factor+"),6) revenue FROM "+source+" WHERE "+where+" GROUP BY "+domain+" ORDER BY revenue DESC LIMIT 10", args...)
 	if err != nil {
 		a.dashboardFailure(w, err)
 		return

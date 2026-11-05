@@ -120,6 +120,7 @@ test('channel dashboard and reports expose only settled revenue', async () => {
   assert.equal(dashboard.body.summary.revenue, 15);
   assert.equal(dashboard.body.trend[0].revenue, 15);
   assert.equal(dashboard.body.topUrls[0].revenue, 15);
+  assert.equal(dashboard.body.topUrls[0].impressions, 800);
   const report = await request('/api/reports?start=2026-10-08&end=2026-10-08&dimensions=date,url', { headers: { 'X-Forwarded-Host': 'adxpub.geekforest.ai' } });
   assert.equal(report.body.items[0].revenue, 15);
   assert.equal(report.body.items[0].channelRevenue, 15);

@@ -13,7 +13,7 @@ const boot = (await readFile(new URL('../src/boot.js', import.meta.url), 'utf8')
 
 function start({ loginResponse, loadApp, dashboardResponse }) {
   const listeners = {};
-  const button = { disabled: true, textContent: '登录' };
+  const button = { disabled: false, textContent: '登录' };
   const form = {
     querySelector: () => button,
     addEventListener: (name, handler) => { listeners[name] = handler; },
@@ -49,23 +49,21 @@ function start({ loginResponse, loadApp, dashboardResponse }) {
   return { listeners, button, status, retry, calls, loginPage };
 }
 
-test('login waits for the full application bundle before it can submit', async () => {
-  assert.match(html, /<button type="submit" disabled>登录<\/button>/);
+test('login submits immediately and keeps the page visible until the workspace is ready', async () => {
+  assert.match(html, /<button type="submit">登录<\/button>/);
   assert.doesNotMatch(html, /boot-workspace|quick-page-preview|页面正在打开/);
   let resolveApp;
-  const page = start({ loginResponse: { ok: false, json: async () => ({ error: 'invalid_credentials' }) },
+  const page = start({ loginResponse: { ok: true, json: async () => ({ user: { role: 'admin' } }) },
     loadApp: () => new Promise(resolve => { resolveApp = resolve; }) });
-  assert.equal(page.button.disabled, true);
-  await page.listeners.submit({ preventDefault() {} });
-  assert.equal(page.calls.some(call => call.path === '/api/auth/login'), false);
-  resolveApp({ mountApp: async () => {} });
+  assert.equal(page.button.disabled, false);
+  const submit = page.listeners.submit({ preventDefault() {} });
   await new Promise(setImmediate);
-  assert.equal(page.button.disabled, false);
-  await page.listeners.submit({ preventDefault() {} });
   assert.equal(page.calls.some(call => call.path === '/api/auth/login'), true);
-  assert.equal(page.status.textContent, '账号或密码错误');
   assert.equal(page.loginPage.hidden, false);
-  assert.equal(page.button.disabled, false);
+  assert.equal(page.button.disabled, true);
+  resolveApp({ mountApp: async () => { page.loginPage.hidden = true; } });
+  await submit;
+  assert.equal(page.loginPage.hidden, true);
 });
 
 test('successful login switches directly to the real application', async () => {
@@ -96,9 +94,9 @@ test('successful login switches directly to the real application', async () => {
 test('application load failure leaves a retryable login page', async () => {
   const page = start({ loginResponse: { ok: true, json: async () => ({ user: { role: 'admin' } }) },
     loadApp: async () => { throw new Error('asset_failed'); } });
-  await new Promise(setImmediate);
+  await page.listeners.submit({ preventDefault() {} });
   assert.equal(page.loginPage.hidden, false);
-  assert.equal(page.button.disabled, true);
+  assert.equal(page.button.disabled, false);
   assert.equal(page.retry.hidden, false);
   assert.match(page.status.textContent, /后台资源加载失败/);
 });

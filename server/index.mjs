@@ -475,7 +475,7 @@ app.get('/api/dashboard', requireAuth, cachedReport, (req, res) => {
   const factor = req.user.role === 'channel' ? (dashboardDailyReady ? 'settled_revenue' : settledRevenueSql('revenue_facts')) : 'revenue';
   const domain = dashboardDailyReady ? 'domain' : mappedDomainSql('revenue_facts');
   const trend = db.prepare('SELECT report_date date,ROUND(SUM(' + factor + '),6) revenue FROM ' + source + ' WHERE ' + where.sql + ' GROUP BY report_date ORDER BY report_date').all(...where.params);
-  const topUrls = db.prepare('SELECT ' + domain + ' url,ROUND(SUM(' + factor + '),6) revenue FROM ' + source + ' WHERE ' + where.sql + ' GROUP BY ' + domain + ' ORDER BY revenue DESC LIMIT 10').all(...where.params);
+  const topUrls = db.prepare('SELECT ' + domain + ' url,SUM(impressions) impressions,ROUND(SUM(' + factor + '),6) revenue FROM ' + source + ' WHERE ' + where.sql + ' GROUP BY ' + domain + ' ORDER BY revenue DESC LIMIT 10').all(...where.params);
   const lastSync = db.prepare("SELECT MAX(value) value FROM (SELECT MAX(created_at) value FROM import_runs UNION ALL SELECT MAX(finished_at) value FROM soap_sync_runs WHERE status='success')").get()?.value || null;
   const settledWhere = where.sql.replaceAll('report_date', 'rf.report_date').replaceAll('channel_id', 'rf.channel_id');
   const settledRevenue = dashboardDailyReady

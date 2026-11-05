@@ -14,12 +14,12 @@ import dayjs from 'dayjs';
 import { clearCachedUser, readCached, rememberRead } from './readCache.js';
 import { viewForPath, viewPaths } from './navigation.js';
 import ReportDateFilter from './ReportDateFilter.jsx';
+import RevenueChart from './RevenueChart.jsx';
 import './styles.css';
 
 
 const { Header, Sider, Content } = Layout;
 const { Title, Text } = Typography;
-const RevenueChart = React.lazy(() => import('./RevenueChart.jsx'));
 const Reports = React.lazy(() => import('./ReportExplorer.jsx'));
 const AdminPages = React.lazy(() => import('./AdminPages.jsx'));
 const LinkManager = React.lazy(() => import('./LinkManager.jsx'));
@@ -89,14 +89,62 @@ function MetricCards({ summary, admin }) {
   return <Row gutter={[16, 16]}>{items.map(([title, value, icon]) => <Col xs={24} sm={12} xl={6} key={title}><Card className="metric"><Statistic title={title} value={value} prefix={icon} /></Card></Col>)}</Row>;
 }
 
+function DashboardHighlights({ user, currentPath, currentData, refreshKey }) {
+  const today = dayjs().format('YYYY-MM-DD');
+  const monthStart = dayjs().startOf('month').format('YYYY-MM-DD');
+  const todayPath = '/api/dashboard?start=' + today + '&end=' + today;
+  const monthPath = '/api/dashboard?start=' + monthStart + '&end=' + today;
+  const [snapshots, setSnapshots] = useState(() => ({
+    today: readCached(user, todayPath)?.data || null,
+    month: readCached(user, monthPath)?.data || null
+  }));
+  useEffect(() => {
+    let active = true;
+    for (const [key, path] of [['today', todayPath], ['month', monthPath]]) {
+      if (path === currentPath) continue;
+      const cached = readCached(user, path);
+      if (cached) setSnapshots(previous => ({ ...previous, [key]: cached.data }));
+      if (cached && Date.now() - cached.savedAt < 10000 && refreshKey === 0) continue;
+      api(path).then(result => {
+        rememberRead(user, path, result);
+        if (active) setSnapshots(previous => ({ ...previous, [key]: result }));
+      }).catch(error => { if (active) message.error('收益榜加载失败：' + error.message); });
+    }
+    return () => { active = false; };
+  }, [user.id, currentPath, todayPath, monthPath, refreshKey]);
+  const daily = currentPath === todayPath ? currentData : snapshots.today;
+  const monthly = currentPath === monthPath ? currentData : snapshots.month;
+  const average = monthly?.summary ? Number(monthly.summary.revenue || 0) / dayjs().date() : null;
+  const cards = [
+    ['当日收益', daily?.summary?.revenue, today, 'blue'],
+    ['当月收益', monthly?.summary?.revenue, monthStart + ' 至 ' + today, 'purple'],
+    ['当月日均收益', average, '按 ' + dayjs().date() + ' 个自然日计算', 'green']
+  ];
+  const columns = [
+    { title:'排名', width:64, render:(_, row, index) => <span className={'rank-badge rank-' + (index + 1)}>{index + 1}</span> },
+    { title:'链接', dataIndex:'url', ellipsis:true, render:value => <strong className="rank-url" title={value}>{value || '—'}</strong> },
+    { title:'展示', dataIndex:'impressions', align:'right', width:110, render:number },
+    { title:'收益', dataIndex:'revenue', align:'right', width:120, render:value => <strong>{money(value)}</strong> }
+  ];
+  return <>
+    <Row gutter={[16,16]}>{cards.map(([title, revenue, caption, color]) => <Col xs={24} md={8} key={title}><Card className={'highlight-metric highlight-' + color}><Text type="secondary">{title}</Text><div className="highlight-value">{revenue === undefined || revenue === null ? '—' : money(revenue)}</div><Text type="secondary">{caption}</Text></Card></Col>)}</Row>
+    <Row gutter={[16,16]}>
+      {[['当日链接收益 Top 10', daily], ['当月链接收益 Top 10', monthly]].map(([title, result]) => <Col xs={24} xl={12} key={title}><Card className="highlight-ranking" title={title} extra="USD"><Table size="small" rowKey="url" pagination={false} columns={columns} dataSource={result?.topUrls || []} scroll={{x:520}} locale={{emptyText:<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无已同步数据"/>}}/></Card></Col>)}
+    </Row>
+  </>;
+}
+
 function Dashboard({ range, setRange, admin, user, initialDashboard }) {
   const rangeKey = range[0].format('YYYY-MM-DD') + ':' + range[1].format('YYYY-MM-DD');
   const path = '/api/dashboard?start=' + range[0].format('YYYY-MM-DD') + '&end=' + range[1].format('YYYY-MM-DD');
   const saved = readCached(user, path);
   const freshInitial = initialDashboard?.key === rangeKey && initialDashboard.fresh;
   const [data, setData] = useState(initialDashboard?.key === rangeKey ? initialDashboard.data || saved?.data || null : saved?.data || null);
+  const [dataKey, setDataKey] = useState(rangeKey);
+  const currentData = dataKey === rangeKey ? data : saved?.data || null;
   const [showingCached, setShowingCached] = useState(Boolean(saved && !freshInitial));
   const [loading, setLoading] = useState(false);
+  const [highlightRefresh, setHighlightRefresh] = useState(0);
   const requestId = useRef(0);
   const load = async (force = false) => {
     const id = ++requestId.current;
@@ -112,7 +160,7 @@ function Dashboard({ range, setRange, admin, user, initialDashboard }) {
         result = await api(path);
       }
       rememberRead(user, path, result);
-      if (id === requestId.current) { setData(result); setShowingCached(false); }
+      if (id === requestId.current) { setData(result); setDataKey(rangeKey); setShowingCached(false); }
     } catch (e) { if (id === requestId.current) message.error(e.message); }
     finally { if (id === requestId.current) setLoading(false); }
   };
@@ -120,14 +168,17 @@ function Dashboard({ range, setRange, admin, user, initialDashboard }) {
     const latest = readCached(user, path);
     const initial = initialDashboard?.key === rangeKey ? initialDashboard.data : null;
     setData(initial || latest?.data || null);
+    setDataKey(rangeKey);
     setShowingCached(Boolean(latest && !freshInitial));
     load();
     return () => { requestId.current += 1; };
   }, [range[0].valueOf(), range[1].valueOf()]);
   return <Space direction="vertical" size={16} className="page-stack">
-    <div className="page-heading"><div><Title level={2}>经营总览</Title><Text type="secondary">收入、流量质量与渠道结算一屏掌握</Text>{showingCached && <Tag color="gold" style={{marginLeft:10}}>{loading ? '已显示缓存，正在更新' : '已显示缓存数据'}</Tag>}</div><Space wrap><ReportDateFilter value={range} onChange={setRange}/><Button icon={<ReloadOutlined />} loading={loading} onClick={() => load(true)}>刷新</Button></Space></div>
-    <MetricCards summary={data?.summary} admin={admin} />
-    <Row gutter={[16, 16]}><Col xs={24} xl={16}><Card title="每日收益趋势" extra={data?.lastSync ? '最近同步 ' + data.lastSync : '尚未同步'}><div className="chart"><PageErrorBoundary><React.Suspense fallback={<div style={{padding:24,color:"#587184"}}>图表加载中…</div>}><RevenueChart data={data?.trend || []} formatMoney={money}/></React.Suspense></PageErrorBoundary></div></Card></Col><Col xs={24} xl={8}><Card title="收益最高的链接"><Table size="small" pagination={false} rowKey="url" dataSource={data?.topUrls || []} columns={[{ title: '链接', dataIndex: 'url', ellipsis: true }, { title: '收益', dataIndex: 'revenue', align: 'right', render: money }]} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}/></Card></Col></Row>
+    <div className="page-heading"><div><Title level={2}>经营总览</Title><Text type="secondary">收入、流量质量与渠道结算一屏掌握</Text>{showingCached && <Tag color="gold" style={{marginLeft:10}}>{loading ? '已显示缓存，正在更新' : '已显示缓存数据'}</Tag>}</div><Space wrap><ReportDateFilter value={range} onChange={setRange}/><Button icon={<ReloadOutlined />} loading={loading} onClick={() => { load(true); setHighlightRefresh(value => value + 1); }}>刷新</Button></Space></div>
+    <DashboardHighlights user={user} currentPath={path} currentData={currentData} refreshKey={highlightRefresh}/>
+    <Text type="secondary">所选区间：{range[0].format('YYYY-MM-DD')} 至 {range[1].format('YYYY-MM-DD')}</Text>
+    <MetricCards summary={currentData?.summary} admin={admin} />
+    <Card title="所选区间每日收益趋势" extra={currentData?.lastSync ? '最近同步 ' + currentData.lastSync : '尚未同步'}><div className="chart"><PageErrorBoundary><RevenueChart data={currentData?.trend || []} formatMoney={money}/></PageErrorBoundary></div></Card>
   </Space>;
 }
 
@@ -151,12 +202,13 @@ function Shell({ user, onLogout, initialView = 'dashboard', initialDashboard, on
     setView(key);
   };
   const menu=useMemo(()=>[
-    ...(admin?[{key:'gam',icon:<SafetyOutlined/>,label:'账号管理'}]:[]),
-    ...(admin?[{key:'links',icon:<LinkOutlined/>,label:'链接管理'}]:[]),
-    {key:'dashboard',icon:<DashboardOutlined/>,label:'经营总览'},
-    {key:'reports',icon:<BarChartOutlined/>,label:'数据报告'},
-    ...(admin?[{key:'regression',icon:<ReloadOutlined/>,label:'数据回退监测'}]:[]),
-    ...(admin?[{type:'group',label:'平台管理',children:[{key:'channels',icon:<TeamOutlined/>,label:'渠道管理'},{key:'settlement',icon:<DollarOutlined/>,label:'结算配置'},{key:'ad-units',icon:<PlusOutlined/>,label:'广告单元创建'},{key:'admins',icon:<UserSwitchOutlined/>,label:'管理员账户'},{key:'report-keys',icon:<KeyOutlined/>,label:'账户日报 API Key'}]}]:[]),
+    {type:'group',label:'业务管理',children:[
+      {key:'dashboard',icon:<DashboardOutlined/>,label:'经营总览'},
+      ...(admin?[{key:'gam',icon:<SafetyOutlined/>,label:'账号管理'},{key:'links',icon:<LinkOutlined/>,label:'链接管理'},{key:'ad-units',icon:<PlusOutlined/>,label:'广告单元创建'}]:[]),
+      {key:'reports',icon:<BarChartOutlined/>,label:'数据报告'},
+      ...(admin?[{key:'regression',icon:<ReloadOutlined/>,label:'数据回退监测'}]:[])
+    ]},
+    ...(admin?[{type:'group',label:'平台管理',children:[{key:'channels',icon:<TeamOutlined/>,label:'渠道管理'},{key:'settlement',icon:<DollarOutlined/>,label:'结算配置'},{key:'admins',icon:<UserSwitchOutlined/>,label:'管理员账户'},{key:'report-keys',icon:<KeyOutlined/>,label:'账户日报 API Key'}]}]:[]),
     {type:'group',label:'开发能力',children:[{key:'api',icon:<ApiOutlined/>,label:'渠道 API'}]}
   ],[admin]);
   const body=view==='dashboard'?<Dashboard range={range} setRange={setRange} admin={admin} user={user} initialDashboard={initialDashboard}/>:view==='reports'?<Reports range={range} setRange={setRange} admin={admin} user={user}/>:view==='links'?<LinkManager/>:view==='regression'?<RegressionMonitor/>:<AdminPages view={view} user={user}/>;

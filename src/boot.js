@@ -9,7 +9,8 @@ const portal = window.location.hostname.toLowerCase() === 'adxpub.geekforest.ai'
 
 if (portal) {
   document.getElementById('boot-brand-name').textContent = 'AdX Publisher';
-  document.getElementById('boot-brand-hint').textContent = '渠道收益与流量数据工作台';
+  document.getElementById('boot-brand-hint').textContent = '渠道工作台';
+  document.getElementById('boot-portal-label').textContent = '渠道工作台';
   document.getElementById('boot-title').textContent = '渠道登录';
   document.getElementById('boot-hint').textContent = '使用平台分配的渠道账号登录，查看本渠道数据。';
 }
@@ -36,16 +37,7 @@ function loadApp() {
 }
 
 function prepareApp() {
-  if (!readyPromise) readyPromise = loadApp().then(app => {
-    // Secondary pages can continue downloading without holding the login button.
-    void Promise.allSettled([import('./ReportExplorer.jsx'), import('./AdminPages.jsx')]);
-    if (!opening && !mounted) {
-      button.disabled = false;
-      button.textContent = '登录';
-      status.textContent = '';
-    }
-    return app;
-  }).catch(error => {
+  if (!readyPromise) readyPromise = loadApp().catch(error => {
     readyPromise = null;
     throw error;
   });
@@ -61,8 +53,9 @@ function retryAutomatically() {
 }
 
 const dashboardPath = '/api/dashboard?start=' + start + '&end=' + end;
-async function requestDashboard() {
-  const response = await fetch(dashboardPath, { credentials: 'include' });
+const todayPath = '/api/dashboard?start=' + end + '&end=' + end;
+async function requestDashboard(path = dashboardPath) {
+  const response = await fetch(path, { credentials: 'include' });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.ok === false) throw new Error(data.error || 'http_' + response.status);
   return data;
@@ -73,6 +66,7 @@ async function openApp(user) {
   opening = true;
   button.disabled = true;
   const saved = readCached(user, dashboardPath);
+  const todaySaved = readCached(user, todayPath);
   const initialDashboard = { key: dashboardKey, data: saved?.data };
   initialDashboard.promise = requestDashboard().then(data => {
     initialDashboard.data = data;
@@ -80,10 +74,19 @@ async function openApp(user) {
     rememberRead(user, dashboardPath, data);
     return { data };
   }, error => ({ error }));
+  const todayPromise = todayPath === dashboardPath ? initialDashboard.promise : requestDashboard(todayPath).then(data => {
+    rememberRead(user, todayPath, data);
+    return { data };
+  }, error => ({ error }));
   try {
     const app = await prepareApp();
+    if (!saved?.data || !todaySaved?.data) await Promise.all([initialDashboard.promise, todayPromise]);
     await app.mountApp(user, 'dashboard', initialDashboard);
     mounted = true;
+    // Warm secondary views only after the visible workspace is ready.
+    const warmViews = () => { void Promise.allSettled([import('./ReportExplorer.jsx'), import('./AdminPages.jsx')]); };
+    if ('requestIdleCallback' in window) window.requestIdleCallback(warmViews, { timeout: 2000 });
+    else window.setTimeout(warmViews, 500);
     try { sessionStorage.removeItem(retryKey); } catch { /* Storage may be disabled. */ }
   } catch (error) {
     console.error('app_load_failed', error);
@@ -128,15 +131,12 @@ form.addEventListener('submit', async event => {
   }
 });
 
-// Finish loading the real interface before a new login can be submitted.
-void prepareApp().catch(error => {
+// Begin loading when the browser is idle; credentials can be submitted immediately.
+const warmApp = () => { void prepareApp().catch(error => {
   console.error('app_preload_failed', error);
-  status.textContent = '后台资源加载失败，请刷新重试。';
-  retryButton.hidden = false;
-  retryAutomatically();
-});
-// The dashboard chart is optional, but fetching it early avoids a second visual load.
-void import('./RevenueChart.jsx').catch(() => {});
+}); };
+if ('requestIdleCallback' in window) window.requestIdleCallback(warmApp, { timeout: 500 });
+else window.setTimeout(warmApp, 0);
 fetch('/api/auth/me', { credentials: 'include', cache: 'no-store' })
   .then(async response => {
     if (!response.ok || submitted) return;
