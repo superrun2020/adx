@@ -213,15 +213,14 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     const prefix = 'gam-rest:' + item.network_code;
     // This catalog lists websites discovered through GAM's SITE dimension.
     // Ad-unit creation metadata and guessed names are separate concepts.
-    const rows = db.prepare("SELECT url AS siteUrl,raw_json AS rawJson FROM revenue_facts " +
-      "WHERE source_file>=? AND source_file<? AND url<>'' ORDER BY siteUrl LIMIT 5000")
+    const rows = db.prepare("WITH reported AS (SELECT url AS siteUrl, " +
+      "CASE WHEN json_valid(raw_json) THEN json_extract(raw_json, '$.dimensionValues[2].stringValue') END AS reportSite " +
+      "FROM revenue_facts WHERE source_file>=? AND source_file<? AND url<>'') " +
+      "SELECT DISTINCT siteUrl, reportSite FROM reported WHERE reportSite IS NOT NULL ORDER BY siteUrl LIMIT 5000")
       .all(prefix + ':', prefix + ';');
     const items = [...new Set(rows.flatMap(row => {
       try {
-        const rawJson = String(row.rawJson || '').trim();
-        if (!rawJson || rawJson === '{}') return [];
-        const dimensions = JSON.parse(rawJson)?.dimensionValues;
-        const site = dimensions?.[2]?.stringValue;
+        const site = row.reportSite;
         // Link management accepts only the host explicitly present in the REST
         // report's SITE dimension. Never infer one from an ad-unit name.
         if (typeof site !== 'string' || !site.trim() || siteDomain(site) !== siteDomain(row.siteUrl)) return [];

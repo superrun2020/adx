@@ -11,18 +11,17 @@ test('normalizes domains from GAM URLs and rejects invalid hosts', () => {
   assert.equal(hostname('localhost'), '');
 });
 
-test('shows only GAM Sites and classifies an explicitly added child site', () => {
+test('shows GAM Sites and matching child sites under an existing main site', () => {
   const rows = catalogLinksForAccount(account, [
-    site('https://example.com', 'APPROVED'),
-    site('https://news.example.com', 'DRAFT', 2)
-  ], ['report-only.example.com']);
+    site('https://example.com', 'APPROVED')
+  ], ['news.example.com', 'unrelated.net']);
   assert.deepEqual(rows.map(row => [row.domain, row.type, row.approval]), [
     ['example.com', 'main', 'APPROVED'],
-    ['news.example.com', 'sub', 'DRAFT']
+    ['news.example.com', 'sub', 'PARENT_APPROVED']
   ]);
   assert.equal(rows[1].parentDomain, 'example.com');
   assert.equal(rows[1].networkCode, '123456');
-  assert.deepEqual(approvedLinksForAccount(account, [site('example.com', 'APPROVED')])
+  assert.deepEqual(approvedLinksForAccount(account, [site('example.com', 'APPROVED')], ['news.example.com'])
     .map(row => row.domain), ['example.com']);
 });
 
@@ -48,14 +47,15 @@ test('catalog still shows draft Sites without labeling them approved', () => {
   assert.deepEqual(approvedLinksForAccount(account, [site('example.com', 'DRAFT')]), []);
 });
 
-test('report and creation domains are ignored when GAM Sites are absent', () => {
+test('unrelated report and creation domains are ignored without a GAM parent site', () => {
   assert.deepEqual(catalogLinksForAccount(account, [], ['finance.nextvisiona.com']), []);
   assert.deepEqual(approvedLinksForAccount(account, [], ['finance.nextvisiona.com']), []);
 });
 
 test('a standalone GAM child site has no invented parent row', () => {
-  const rows = catalogLinksForAccount(account, [site('news.example.com', 'APPROVED')]);
+  const rows = catalogLinksForAccount(account, [site('news.example.com', 'APPROVED')], ['m.news.example.com']);
   assert.deepEqual(rows.map(row => [row.domain, row.type, row.parentDomain]), [
+    ['m.news.example.com', 'sub', 'news.example.com'],
     ['news.example.com', 'sub', '']
   ]);
 });

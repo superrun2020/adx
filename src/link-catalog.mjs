@@ -15,7 +15,7 @@ function mainDomain(domain) {
   return parts.length > count ? parts.slice(-count).join('.') : domain;
 }
 
-export function catalogLinksForAccount(account, sites = []) {
+export function catalogLinksForAccount(account, sites = [], knownDomains = []) {
   const byDomain = new Map();
   for (const site of sites) {
     const domain = hostname(site.url);
@@ -34,10 +34,25 @@ export function catalogLinksForAccount(account, sites = []) {
       approval: String(site.approvalStatus || 'UNKNOWN').toUpperCase(), source: 'GAM Sites', siteName: site.name
     });
   }
+  // SITE is a report dimension, not proof of a separately registered GAM site.
+  // Only show observed subdomains beneath a Site returned for this account.
+  for (const raw of knownDomains) {
+    const domain = hostname(raw);
+    if (!domain || rows.has(domain)) continue;
+    const parent = siteDomains.find(siteDomain => isWithin(domain, siteDomain));
+    if (!parent) continue;
+    const parentSite = byDomain.get(parent);
+    rows.set(domain, {
+      key: account.id + ':' + domain, domain, type: 'sub', parentDomain: parent,
+      accountId: account.id, accountName: account.name, networkCode: account.networkCode,
+      approval: 'PARENT_' + String(parentSite.approvalStatus || 'UNKNOWN').toUpperCase(),
+      source: 'GAM REST 报表 SITE', siteName: parentSite.name
+    });
+  }
   return [...rows.values()].sort((a, b) => a.domain.localeCompare(b.domain));
 }
 
-export function approvedLinksForAccount(account, sites = []) {
-  return catalogLinksForAccount(account, sites)
+export function approvedLinksForAccount(account, sites = [], knownDomains = []) {
+  return catalogLinksForAccount(account, sites, knownDomains)
     .filter(row => row.approval === 'APPROVED');
 }

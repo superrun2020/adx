@@ -387,7 +387,12 @@ func (a *app) gamAccountSiteDomains(w http.ResponseWriter, r *http.Request) erro
 		return errors.New("invalid_gam_account_status")
 	}
 	prefix := "gam-rest:" + importString(account["network_code"])
-	query := "SELECT DISTINCT url AS siteUrl,raw_json AS rawJson FROM revenue_facts WHERE source_file>=? AND source_file<? AND url<>'' ORDER BY siteUrl LIMIT 5000"
+	query := `WITH reported AS (
+		SELECT url AS siteUrl, CASE WHEN json_valid(raw_json)
+			THEN json_extract(raw_json, '$.dimensionValues[2].stringValue') END AS reportSite
+		FROM revenue_facts WHERE source_file>=? AND source_file<? AND url<>''
+	) SELECT DISTINCT siteUrl, reportSite FROM reported
+	  WHERE reportSite IS NOT NULL ORDER BY siteUrl LIMIT 5000`
 	rows, err := queryMaps(a.db, query, prefix+":", prefix+";")
 	if err != nil {
 		return err
@@ -395,19 +400,7 @@ func (a *app) gamAccountSiteDomains(w http.ResponseWriter, r *http.Request) erro
 	items := make([]string, 0, len(rows))
 	seen := make(map[string]bool, len(rows))
 	for _, row := range rows {
-		rawJSON := strings.TrimSpace(importString(row["rawJson"]))
-		if rawJSON == "" || rawJSON == "{}" {
-			continue
-		}
-		var raw map[string]any
-		if json.Unmarshal([]byte(rawJSON), &raw) != nil {
-			continue
-		}
-		dimensions, ok := raw["dimensionValues"].([]any)
-		if !ok || len(dimensions) < 3 {
-			continue
-		}
-		site := importString(object(dimensions[2])["stringValue"])
+		site := importString(row["reportSite"])
 		if site == "" || normalizedDomain(site) != normalizedDomain(importString(row["siteUrl"])) {
 			continue
 		}
