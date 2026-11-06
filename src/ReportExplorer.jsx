@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, AutoComplete, Button, Card, Checkbox, ConfigProvider, Drawer, Input, InputNumber, Select, Space, Table, Typography, message } from 'antd';
+import { Alert, AutoComplete, Button, Card, Checkbox, Drawer, Input, InputNumber, Select, Space, Table, Typography, message } from 'antd';
 import { BarChartOutlined, DownloadOutlined, FilterOutlined, ReloadOutlined } from '@ant-design/icons';
 import { readCached, rememberRead } from './readCache.js';
 import ReportDateFilter from './ReportDateFilter.jsx';
@@ -27,7 +27,6 @@ const defaultFilters = { source:'rest', upstreamAccount:'', channelId:'', advert
   adUnit:'', adUnitId:'', domain:'', domainMatch:'contains', country:'', hour:'', minRequests:'',
   minRevenue:'', minMatchRate:'', minEcpm:'' };
 const defaultDimensions = ['url','adUnit','adUnitId'];
-const reportTheme = { token:{ colorPrimary:'#171b22', colorInfo:'#171b22', colorLink:'#171b22' } };
 const width = { date:115, hour:75, account:170, channel:140, advertiser:150, bd:130,
   url:240, country:90, adUnit:240, adUnitId:150 };
 const defaultReportPath = range => '/api/reports?' + new URLSearchParams({
@@ -140,8 +139,8 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
   const dailyColumns = [{title:'日期',dataIndex:'date',width:130,fixed:'left'},
     ...dimensionColumns(dailyBreakdown ? [dailyBreakdown] : []),
     ...metricColumns(selectedMetrics,admin)];
-  return <ConfigProvider theme={reportTheme}><Space direction="vertical" size={16} className="page-stack report-explorer">
-    <div className="page-heading"><div><Title level={2}>广告收益</Title>
+  return <Space direction="vertical" size={16} className="page-stack report-explorer">
+    <div className="page-heading"><div><Title level={2}>数据报告</Title>
       <Text type="secondary">按多维度查询、分析 Ad Manager 原始收益数据</Text>{cachedRows && <Text type="secondary" style={{marginLeft:10}}>已显示缓存数据{loading ? '，正在更新' : ''}</Text>}</div>
       <Button icon={<ReloadOutlined/>} loading={loading} onClick={() => setApplied({ ...applied })}>刷新</Button></div>
     {error && <Alert type="error" showIcon message="报表加载失败" description={error}/>}
@@ -224,5 +223,5 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
         <label>最低 eCPM（美元）<InputNumber min={0} value={filters.minEcpm === '' ? null : Number(filters.minEcpm)}
           onChange={value => setFilter('minEcpm',value)} style={{width:'100%'}}/></label>
       </Space></Drawer>
-  </Space></ConfigProvider>;
+  </Space>;
 }
