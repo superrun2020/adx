@@ -37,12 +37,17 @@ export function catalogLinksForAccount(account, sites = []) {
   return [...rows.values()].sort((a, b) => a.domain.localeCompare(b.domain));
 }
 
-export function catalogLinksWithManual(account, sites = [], manualDomains = []) {
+export function catalogLinksWithManual(account, sites = [], manualDomains = [], reportedDomains = []) {
   const gamDomains = new Set(sites.map(site => hostname(site.url)).filter(Boolean));
-  const combined = [...manualDomains.map(domain => ({ url: domain, name: '' })), ...sites];
+  const manual = new Set(manualDomains.map(hostname).filter(Boolean));
+  const reported = new Set(reportedDomains.map(hostname).filter(domain =>
+    domain && [...gamDomains].some(parent => domain !== parent && domain.endsWith('.' + parent))));
+  const combined = [...manual].map(domain => ({ url: domain, name: '' }))
+    .concat([...reported].map(domain => ({ url: domain, name: '' })), sites);
   return catalogLinksForAccount(account, combined).map(row => ({
-    ...row, source: gamDomains.has(row.domain) ? 'GAM Sites' : '本地新增',
-    isManual: !gamDomains.has(row.domain)
+    ...row, source: gamDomains.has(row.domain) ? 'GAM Sites'
+      : reported.has(row.domain) ? 'GAM 报表' : '本地新增',
+    isManual: manual.has(row.domain) && !gamDomains.has(row.domain)
   }));
 }
 

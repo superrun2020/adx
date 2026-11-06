@@ -603,7 +603,17 @@ function serveReports(req, res, exportCsv = false) {
   addExact('rf.country', req.query.country);
   addExact(reportDimensionMap.advertiser, req.query.advertiser);
   addExact(reportDimensionMap.bd, req.query.bd);
-  if (req.query.domain) addExact(mappedDomainSql('rf'), normalizedDomain(req.query.domain));
+  if (req.query.domainMatch && !['exact', 'contains'].includes(req.query.domainMatch))
+    return res.status(400).json({ ok:false, error:'invalid_report_domain_match' });
+  if (req.query.domain) {
+    const raw = String(req.query.domain).trim();
+    if (raw.length > 253) return res.status(400).json({ ok:false, error:'invalid_report_domain' });
+    const domain = normalizedDomain(raw);
+    if (req.query.domainMatch === 'contains') {
+      where.push("INSTR(LOWER(" + mappedDomainSql('rf') + "),LOWER(?))>0");
+      params.push(domain);
+    } else addExact(mappedDomainSql('rf'), domain);
+  }
   if (req.query.hour !== undefined && req.query.hour !== '') {
     const hour = Number(req.query.hour);
     if (!Number.isSafeInteger(hour) || hour < 0 || hour > 23) return res.status(400).json({ ok:false, error:'invalid_report_hour' });
@@ -697,6 +707,10 @@ function serveReports(req, res, exportCsv = false) {
 }
 app.get('/api/reports', requireAuth, cachedReport, (req, res) => serveReports(req, res));
 app.get('/api/reports/export', requireAuth, (req, res) => serveReports(req, res, true));
+app.get('/api/admin/reports/filter-options', requireAuth, requireAdmin, (_req, res) => res.json({ ok:true,
+  accounts:db.prepare('SELECT account_key accountKey,name,advertiser FROM upstream_accounts ORDER BY name').all(),
+  channels:db.prepare('SELECT id,name FROM channels ORDER BY name').all()
+}));
 
 // Account-level report for the admin console. Keep settlement calculations on
 // the server so callers never need to infer the upstream deduction.

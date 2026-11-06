@@ -118,6 +118,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /api/dashboard/highlights", a.auth("", a.cachedReport(a.dashboardHighlights)))
 	mux.HandleFunc("GET /api/reports", a.auth("", a.cachedReport(a.reports)))
 	mux.HandleFunc("GET /api/reports/export", a.auth("", a.reportsExport))
+	mux.HandleFunc("GET /api/admin/reports/filter-options", a.auth("admin", a.reportFilterOptions))
 	mux.HandleFunc("GET /api/admin/reports/accounts", a.auth("admin", a.cachedReport(a.accountReport)))
 	mux.HandleFunc("GET /api/admin/report-api-keys", a.auth("admin", a.reportAPIKeys))
 	mux.HandleFunc("POST /api/admin/report-api-keys", a.auth("admin", a.createReportAPIKey))

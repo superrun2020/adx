@@ -72,7 +72,7 @@ func (u user) allowedRequest(r *http.Request) bool {
 		return true
 	case path == "/api/dashboard" || path == "/api/dashboard/highlights":
 		views = []string{"dashboard"}
-	case path == "/api/reports" || path == "/api/reports/export" || path == "/api/admin/reports/accounts":
+	case path == "/api/reports" || path == "/api/reports/export" || path == "/api/admin/reports/accounts" || path == "/api/admin/reports/filter-options":
 		views = []string{"reports"}
 	case strings.HasPrefix(path, "/api/admin/users") || path == "/api/admin/audit":
 		return false

@@ -1,18 +1,18 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Button, Card, Col, Drawer, Input, InputNumber, Row, Select, Space, Table, Typography, message } from 'antd';
+import { Alert, AutoComplete, Button, Card, Checkbox, ConfigProvider, Drawer, Input, InputNumber, Select, Space, Table, Typography, message } from 'antd';
 import { BarChartOutlined, DownloadOutlined, FilterOutlined, ReloadOutlined } from '@ant-design/icons';
 import { readCached, rememberRead } from './readCache.js';
 import ReportDateFilter from './ReportDateFilter.jsx';
 
 const { Title, Text } = Typography;
 const dimensions = [
-  ['date','日期'], ['hour','小时'], ['account','上游账号'], ['channel','渠道'],
-  ['advertiser','广告主'], ['bd','BD'], ['url','域名'], ['country','国家'],
+  ['date','日期'], ['hour','小时'], ['url','网站'], ['account','账号'],
+  ['advertiser','广告主'], ['channel','渠道'], ['bd','BD'], ['country','国家/地区'],
   ['adUnit','广告单元'], ['adUnitId','广告单元 ID']
 ];
 const coreMetrics = [
-  ['requests','请求'], ['matchedRequests','响应'], ['impressions','展示'],
-  ['clicks','点击'], ['revenue','收入'], ['matchRate','匹配率'],
+  ['requests','请求次数'], ['matchedRequests','匹配次数'], ['impressions','展示次数'],
+  ['clicks','点击次数'], ['revenue','收入'], ['matchRate','匹配率'],
   ['impressionRate','展示率'], ['clickRate','点击率'], ['ecpm','eCPM']
 ];
 const adminMetrics = [
@@ -24,9 +24,10 @@ const money = value => '$' + Number(value || 0).toLocaleString('en-US', { minimu
 const number = value => Number(value || 0).toLocaleString('zh-CN');
 const pct = value => Number(value || 0).toFixed(2) + '%';
 const defaultFilters = { source:'rest', upstreamAccount:'', channelId:'', advertiser:'', bd:'',
-  adUnit:'', adUnitId:'', domain:'', country:'', hour:'', minRequests:'',
+  adUnit:'', adUnitId:'', domain:'', domainMatch:'contains', country:'', hour:'', minRequests:'',
   minRevenue:'', minMatchRate:'', minEcpm:'' };
 const defaultDimensions = ['url','adUnit','adUnitId'];
+const reportTheme = { token:{ colorPrimary:'#171b22', colorInfo:'#171b22', colorLink:'#171b22' } };
 const width = { date:115, hour:75, account:170, channel:140, advertiser:150, bd:130,
   url:240, country:90, adUnit:240, adUnitId:150 };
 const defaultReportPath = range => '/api/reports?' + new URLSearchParams({
@@ -75,13 +76,14 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
   const params = (dims, pageNumber, size, extra = {}) => new URLSearchParams({
     start:range[0].format('YYYY-MM-DD'), end:range[1].format('YYYY-MM-DD'),
     dimensions:dims.join(','), page:String(pageNumber), pageSize:String(size),
-    ...Object.fromEntries(Object.entries(applied).filter(([,value]) => String(value).trim() !== '')),
+    ...Object.fromEntries(Object.entries(applied).filter(([key,value]) =>
+      String(value).trim() !== '' && (key !== 'domainMatch' || applied.domain.trim()))),
     ...extra
   });
   useEffect(() => {
     if (!admin) return;
-    Promise.all([getJson('/api/admin/upstream-accounts'),getJson('/api/admin/channels')])
-      .then(([accounts,channels]) => setOptions({ accounts:accounts.items || [], channels:channels.items || [] }))
+    getJson('/api/admin/reports/filter-options')
+      .then(data => setOptions({ accounts:data.accounts || [], channels:data.channels || [] }))
       .catch(cause => message.error('筛选项加载失败：' + cause.message));
   }, [admin]);
   useEffect(() => {
@@ -138,38 +140,52 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
   const dailyColumns = [{title:'日期',dataIndex:'date',width:130,fixed:'left'},
     ...dimensionColumns(dailyBreakdown ? [dailyBreakdown] : []),
     ...metricColumns(selectedMetrics,admin)];
-  return <Space direction="vertical" size={16} className="page-stack report-explorer">
-    <div className="page-heading"><div><Title level={2}>数据报告</Title>
-      <Text type="secondary">默认汇总所选日期范围内的域名与广告单元；勾选“日期”可按天拆分</Text>{cachedRows && <Text type="secondary" style={{marginLeft:10}}>已显示缓存数据{loading ? '，正在更新' : ''}</Text>}</div>
+  return <ConfigProvider theme={reportTheme}><Space direction="vertical" size={16} className="page-stack report-explorer">
+    <div className="page-heading"><div><Title level={2}>广告收益</Title>
+      <Text type="secondary">按多维度查询、分析 Ad Manager 原始收益数据</Text>{cachedRows && <Text type="secondary" style={{marginLeft:10}}>已显示缓存数据{loading ? '，正在更新' : ''}</Text>}</div>
       <Button icon={<ReloadOutlined/>} loading={loading} onClick={() => setApplied({ ...applied })}>刷新</Button></div>
     {error && <Alert type="error" showIcon message="报表加载失败" description={error}/>}
-    <Card><Space wrap>
-      <ReportDateFilter value={range} onChange={value => {
-        setPage(1); setDailyPage(1); setSelectedDate(null); setRange(value);
-      }}/>
-      {admin && <Select allowClear showSearch placeholder="上游账号" value={filters.upstreamAccount || undefined}
-        onChange={value => setFilter('upstreamAccount',value)}
-        options={options.accounts.map(item => ({ value:item.accountKey, label:item.name + '（' + item.accountKey + '）' }))} style={{width:220}}/>}
-      {admin && <Select allowClear showSearch placeholder="渠道" value={filters.channelId || undefined}
-        onChange={value => setFilter('channelId',value)}
-        options={options.channels.map(item => ({ value:String(item.id), label:item.name }))} style={{width:150}}/>}
-      <Input placeholder="广告单元名称" value={filters.adUnit} onChange={event => setFilter('adUnit',event.target.value)} style={{width:190}}/>
-      <Input placeholder="网站 / 域名" value={filters.domain} onChange={event => setFilter('domain',event.target.value)} style={{width:180}}/>
-      <Button icon={<FilterOutlined/>} onClick={() => setFilterOpen(true)}>更多筛选</Button>
-      <Button type="primary" icon={<BarChartOutlined/>} onClick={search}>查询</Button>
-      <Button onClick={reset}>重置</Button>
-    </Space><Row gutter={[16,12]} style={{marginTop:16}}>
-      <Col xs={24} xl={12}><Text>分组维度</Text><Select mode="multiple" value={selectedDimensions}
-        onChange={value => { if (value.length) {
-          setPage(1); setDailyPage(1);
-          if (!value.includes('date')) setSelectedDate(null);
-          setSelectedDimensions(value.includes('date') ? ['date', ...value.filter(key => key !== 'date')] : value);
-        } }}
-        options={shownDimensions.map(([value,label]) => ({value,label}))} style={{width:'100%'}}/></Col>
-      <Col xs={24} xl={12}><Text>显示指标</Text><Select mode="multiple" value={selectedMetrics}
-        onChange={value => value.length && setSelectedMetrics(value)}
-        options={shownMetrics.map(([value,label]) => ({value,label}))} style={{width:'100%'}}/></Col>
-    </Row></Card>
+    <Card className="report-query-card">
+      <div className="report-query-grid">
+        <label className="report-filter-field report-filter-date"><span>日期范围</span><ReportDateFilter value={range} onChange={value => {
+          setPage(1); setDailyPage(1); setSelectedDate(null); setRange(value);
+        }}/></label>
+        <label className="report-filter-field"><span>域名</span><Space.Compact block>
+          <Select aria-label="域名匹配方式" value={filters.domainMatch} onChange={value => setFilter('domainMatch',value)}
+            options={[{value:'contains',label:'模糊匹配'},{value:'exact',label:'精确匹配'}]} style={{width:112,flex:'none'}}/>
+          <Input allowClear placeholder="输入域名关键字" value={filters.domain} onChange={event => setFilter('domain',event.target.value)}/>
+        </Space.Compact></label>
+        {admin && <label className="report-filter-field"><span>账号</span><AutoComplete allowClear
+          placeholder="全部账号" value={filters.upstreamAccount || undefined} onChange={value => setFilter('upstreamAccount',value)}
+          options={options.accounts.map(item => ({ value:item.accountKey, label:item.name + '（' + item.accountKey + '）' }))}/></label>}
+        {admin && <label className="report-filter-field"><span>广告主</span><AutoComplete allowClear
+          placeholder="全部广告主" value={filters.advertiser} onChange={value => setFilter('advertiser',value)}
+          options={[...new Set(options.accounts.map(item => item.advertiser).filter(Boolean))].map(value => ({ value }))}/></label>}
+        {admin && <label className="report-filter-field"><span>渠道</span><Select allowClear showSearch optionFilterProp="label"
+          placeholder="全部渠道" value={filters.channelId || undefined} onChange={value => setFilter('channelId',value)}
+          options={options.channels.map(item => ({ value:String(item.id), label:item.name }))}/></label>}
+      </div>
+      <div className="report-choice-row"><span className="report-choice-label">维度</span>
+        <Checkbox.Group value={selectedDimensions} options={shownDimensions.map(([value,label]) => ({value,label}))}
+          onChange={value => { if (value.length) {
+            setPage(1); setDailyPage(1);
+            if (!value.includes('date')) setSelectedDate(null);
+            setSelectedDimensions(value.includes('date') ? ['date', ...value.filter(key => key !== 'date')] : value);
+          } }}/></div>
+      <div className="report-choice-row"><span className="report-choice-label">指标</span>
+        <Checkbox.Group value={selectedMetrics} options={shownMetrics.map(([value,label]) => ({value,label}))}
+          onChange={value => value.length && setSelectedMetrics(value)}/></div>
+      <div className="report-query-actions"><Button icon={<FilterOutlined/>} onClick={() => setFilterOpen(true)}>更多筛选</Button>
+        <span className="report-actions-spacer"/><Button onClick={reset}>重置</Button>
+        <Button icon={<DownloadOutlined/>} loading={exporting} onClick={exportCsv}>导出 CSV</Button>
+        <Button type="primary" icon={<BarChartOutlined/>} onClick={search}>查询收益</Button></div>
+    </Card>
+    <Card className="report-results-card" title="收益明细" extra={<Space><Text type="secondary">{range[0].format('YYYY-MM-DD')} 至 {range[1].format('YYYY-MM-DD')} · 共 {number(total)} 组</Text>
+      {selectedDate && <Button size="small" onClick={() => { setPage(1); setSelectedDate(null); }}>全部日期</Button>}</Space>}>
+      <Table size="small" rowKey={(row,index) => String(page) + '-' + index} loading={loading && !cachedRows} dataSource={rows}
+        columns={columns} scroll={{x:'max-content'}} pagination={{ current:page, pageSize, total, showSizeChanger:true, pageSizeOptions:[20,50,100,200],
+          onChange:(next,size) => { setPage(next); setPageSize(size); } }}
+        locale={{emptyText:'该条件下没有已同步的 REST 数据'}}/></Card>
     {selectedDimensions.includes('date') && <Card title="所选区间每日汇总"
       extra={<Space wrap><Text type="secondary">{range[0].format('YYYY-MM-DD')} 至 {range[1].format('YYYY-MM-DD')} · 共 {number(dailyTotal)} {dailyBreakdown ? '组' : '个有数据日期'}</Text>
         <Select aria-label="每日汇总分组维度" value={dailyBreakdown} options={dailyBreakdownOptions} style={{width:190}}
@@ -188,19 +204,12 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
           onChange:(next,size) => { setDailyPage(size === dailyPageSize ? next : 1); setDailyPageSize(size); }}}
         locale={{emptyText:'所选日期范围内没有已同步的数据'}}/>
     </Card>}
-    <Card title={selectedDimensions.includes('date') ? '按日期拆分的数据明细' : '所选区间汇总'} extra={<Space><Text type="secondary">{range[0].format('YYYY-MM-DD')} 至 {range[1].format('YYYY-MM-DD')} · 共 {number(total)} 组</Text>
-      {selectedDate && <Button size="small" onClick={() => { setPage(1); setSelectedDate(null); }}>全部日期</Button>}
-      <Button icon={<DownloadOutlined/>} loading={exporting} onClick={exportCsv}>导出 CSV</Button></Space>}>
-      <Table size="small" rowKey={(row,index) => String(page) + '-' + index} loading={loading && !cachedRows} dataSource={rows}
-        columns={columns} scroll={{x:'max-content'}} pagination={{ current:page, pageSize, total, showSizeChanger:true, pageSizeOptions:[20,50,100,200],
-          onChange:(next,size) => { setPage(next); setPageSize(size); } }}
-        locale={{emptyText:'该条件下没有已同步的 REST 数据'}}/></Card>
     <Drawer title="更多筛选" open={filterOpen} onClose={() => setFilterOpen(false)} width={420}
       extra={<Button type="primary" onClick={search}>应用筛选</Button>}>
       <Space direction="vertical" style={{width:'100%'}} size={14}>
         <label>数据来源<Select value={filters.source} onChange={value => setFilter('source',value)}
           options={[{value:'rest',label:'Google REST 实际同步'},{value:'all',label:'全部来源'}]} style={{width:'100%'}}/></label>
-        {admin && <label>广告主<Input value={filters.advertiser} onChange={event => setFilter('advertiser',event.target.value)}/></label>}
+        <label>广告单元名称<Input value={filters.adUnit} onChange={event => setFilter('adUnit',event.target.value)}/></label>
         {admin && <label>BD<Input value={filters.bd} onChange={event => setFilter('bd',event.target.value)}/></label>}
         <label>广告单元 ID<Input value={filters.adUnitId} onChange={event => setFilter('adUnitId',event.target.value)}/></label>
         <label>国家代码<Input value={filters.country} onChange={event => setFilter('country',event.target.value)}/></label>
@@ -215,5 +224,5 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
         <label>最低 eCPM（美元）<InputNumber min={0} value={filters.minEcpm === '' ? null : Number(filters.minEcpm)}
           onChange={value => setFilter('minEcpm',value)} style={{width:'100%'}}/></label>
       </Space></Drawer>
-  </Space>;
+  </Space></ConfigProvider>;
 }

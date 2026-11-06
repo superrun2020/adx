@@ -183,8 +183,22 @@ func (a *app) serveReports(w http.ResponseWriter, r *http.Request, export bool) 
 	addExact("rf.country", q.Get("country"))
 	addExact(reportDimensions["advertiser"], q.Get("advertiser"))
 	addExact(reportDimensions["bd"], q.Get("bd"))
-	if q.Get("domain") != "" {
-		addExact(mappedDomainSQL("rf"), normalizedDomain(q.Get("domain")))
+	if mode := q.Get("domainMatch"); mode != "" && mode != "exact" && mode != "contains" {
+		writeError(w, 400, "invalid_report_domain_match")
+		return
+	}
+	if raw := strings.TrimSpace(q.Get("domain")); raw != "" {
+		if len(raw) > 253 {
+			writeError(w, 400, "invalid_report_domain")
+			return
+		}
+		domain := normalizedDomain(raw)
+		if q.Get("domainMatch") == "contains" {
+			where = append(where, "INSTR(LOWER("+mappedDomainSQL("rf")+"),LOWER(?))>0")
+			args = append(args, domain)
+		} else {
+			addExact(mappedDomainSQL("rf"), domain)
+		}
 	}
 	if raw := q.Get("hour"); raw != "" {
 		hour, err := strconv.Atoi(raw)

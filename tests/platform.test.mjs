@@ -226,6 +226,11 @@ test('reports keep distinct ad unit IDs, page safely, and drill into exact rows'
   assert.equal(imported.body.accepted, 3);
   const period = await request('/api/reports?start=2026-10-12&end=2026-10-13&dimensions=url,adUnit,adUnitId');
   assert.equal(period.body.total, 2);
+  const fuzzy = await request('/api/reports?start=2026-10-12&end=2026-10-13&dimensions=url&domain=report.example&domainMatch=contains');
+  assert.equal(fuzzy.body.total, 1);
+  assert.equal(fuzzy.body.items[0].url, 'report.example.test');
+  assert.equal((await request('/api/reports?start=2026-10-12&end=2026-10-13&dimensions=url&domain=report.example&domainMatch=exact')).body.total, 0);
+  assert.equal((await request('/api/reports?start=2026-10-12&end=2026-10-13&dimensions=url&domainMatch=wildcard')).response.status, 400);
   const unitOne = period.body.items.find(item => item.adUnitId === 'unit-1');
   assert.equal(unitOne.revenue, 15);
   assert.equal(unitOne.requests, 150);

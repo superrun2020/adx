@@ -69,6 +69,9 @@ test('super administrator grants menus, revokes sessions and deletes another acc
   const restricted = await login('restricted@example.test', 'RestrictedPass123!');
   assert.deepEqual(restricted.data.user.sidebarPermissions, ['reports']);
   assert.equal((await request('/api/reports?start=2026-11-01&end=2026-11-01', { cookie: restricted.cookie })).status, 200);
+  const filters = await request('/api/admin/reports/filter-options', { cookie: restricted.cookie });
+  assert.equal(filters.status, 200);
+  assert.ok(Array.isArray(filters.data.accounts) && Array.isArray(filters.data.channels));
   assert.equal((await request('/api/dashboard', { cookie: restricted.cookie })).status, 403);
   assert.equal((await request('/api/admin/gam-accounts', { cookie: restricted.cookie })).status, 403);
   assert.equal((await request('/api/admin/users', { cookie: restricted.cookie })).status, 403);

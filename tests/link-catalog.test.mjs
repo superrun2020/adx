@@ -68,3 +68,14 @@ test('manual links join GAM Sites without hiding registered domains', () => {
     ['news.example.com', 'sub', '本地新增']
   ]);
 });
+
+test('report SITE subdomains join the matching GAM parent without inventing approval', () => {
+  const rows = catalogLinksWithManual(account, [site('example.com', 'DRAFT')], [],
+    ['news.example.com', 'news.example.com', 'unrelated.net', 'example.com.other.net']);
+  assert.deepEqual(rows.map(row => [row.domain, row.parentDomain, row.source]), [
+    ['example.com', '', 'GAM Sites'],
+    ['news.example.com', 'example.com', 'GAM 报表']
+  ]);
+  assert.equal(rows[1].siteName, '');
+  assert.notEqual(rows[1].approval, 'APPROVED');
+});

@@ -8,6 +8,20 @@ import (
 	"strings"
 )
 
+func (a *app) reportFilterOptions(w http.ResponseWriter, r *http.Request) {
+	accounts, err := queryMaps(a.db, "SELECT account_key accountKey,name,advertiser FROM upstream_accounts ORDER BY name")
+	if err != nil {
+		writeError(w, 500, "report_options_unavailable")
+		return
+	}
+	channels, err := queryMaps(a.db, "SELECT id,name FROM channels ORDER BY name")
+	if err != nil {
+		writeError(w, 500, "report_options_unavailable")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "accounts": accounts, "channels": channels})
+}
+
 func (a *app) accountReport(w http.ResponseWriter, r *http.Request) {
 	start, end := reportRange(r)
 	filters := []string{"rf.report_date BETWEEN ? AND ?"}

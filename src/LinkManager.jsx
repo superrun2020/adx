@@ -35,14 +35,15 @@ function monitors(value) {
   catch { return []; }
 }
 
-function buildRows(accounts, sitesByAccount, metadata, assignments) {
+function buildRows(accounts, sitesByAccount, reportedByAccount, metadata, assignments) {
   const byKey = new Map(metadata.map(item => [item.networkCode + ':' + item.domain, item]));
   const assigned = new Map(assignments.map(item => [item.domain, item]));
   return accounts.flatMap(account => {
     const local = metadata.filter(item => item.networkCode === account.networkCode && Number(item.isManual) === 1);
-    return catalogLinksWithManual(account, sitesByAccount[account.id] || [], local.map(item => item.domain)).map(row => {
+    return catalogLinksWithManual(account, sitesByAccount[account.id] || [], local.map(item => item.domain),
+      reportedByAccount[account.id] || []).map(row => {
       const meta = byKey.get(row.networkCode + ':' + row.domain), fallback = assigned.get(row.domain);
-      return { ...row, monitorDomains: monitors(meta?.monitorDomainsJson),
+      return { ...row, isSaved: Boolean(meta), monitorDomains: monitors(meta?.monitorDomainsJson),
         channelId: meta ? meta.channelId : fallback?.channelId ?? null,
         channelName: meta ? meta.channelName : fallback?.channelName || '', notes: meta?.notes || '' };
     });
@@ -88,12 +89,12 @@ export default function LinkManager() {
       setAccounts(allAccounts);
       setChannels(channelOptions);
       setProgress([0, allAccounts.length]);
-      const sitesByAccount = {}, failures = [];
+      const sitesByAccount = {}, reportedByAccount = {}, failures = [];
       let next = 0, done = 0;
       const publish = () => {
         if (current.signal.aborted) return;
         setProgress([done, allAccounts.length]);
-        setRows(buildRows(allAccounts, sitesByAccount, metadata, assignments));
+        setRows(buildRows(allAccounts, sitesByAccount, reportedByAccount, metadata, assignments));
         setIssues([...failures]);
       };
       publish();
@@ -102,11 +103,14 @@ export default function LinkManager() {
           const account = allAccounts[next++];
           if (account.status !== 'active') failures.push(account.name + '：账号未连接，无法读取 GAM Sites');
           else {
-            try { sitesByAccount[account.id] = await allSites(account.id, current.signal); }
-            catch (error) {
-              if (!current.signal.aborted)
-                failures.push(account.name + '：GAM Sites 读取失败（' + String(error?.message || error) + '）');
-            }
+            const [sites, reported] = await Promise.allSettled([
+              allSites(account.id, current.signal),
+              api('/api/admin/gam-accounts/' + account.id + '/site-domains', current.signal)
+            ]);
+            if (sites.status === 'fulfilled') sitesByAccount[account.id] = sites.value;
+            else if (!current.signal.aborted) failures.push(account.name + '：GAM Sites 读取失败（' + String(sites.reason?.message || sites.reason) + '）');
+            if (reported.status === 'fulfilled') reportedByAccount[account.id] = reported.value.items || [];
+            else if (!current.signal.aborted) failures.push(account.name + '：报表子域名读取失败（' + String(reported.reason?.message || reported.reason) + '）');
           }
           done += 1;
           publish();
@@ -115,7 +119,7 @@ export default function LinkManager() {
       await Promise.all(Array.from({ length: Math.min(3, allAccounts.length) }, worker));
       if (!current.signal.aborted) {
         const stamp = new Date().toLocaleString('zh-CN');
-        lastSnapshot = { accounts: allAccounts, rows: buildRows(allAccounts, sitesByAccount, metadata, assignments),
+        lastSnapshot = { accounts: allAccounts, rows: buildRows(allAccounts, sitesByAccount, reportedByAccount, metadata, assignments),
           channels: channelOptions, issues: [...failures], lastLoaded: stamp };
         setLastLoaded(stamp);
       }
@@ -143,7 +147,7 @@ export default function LinkManager() {
     form.setFieldsValue({ gamAccountId: accountId || undefined, monitorDomains: [] });
   };
   const openEdit = row => {
-    setEditing({ mode: 'edit', row });
+    setEditing({ mode: row.source === 'GAM 报表' && !row.isSaved ? 'create' : 'edit', row });
     form.setFieldsValue({ domain: row.domain, gamAccountId: row.accountId,
       monitorDomains: row.monitorDomains, channelId: row.channelId ?? undefined, notes: row.notes });
   };
@@ -180,15 +184,15 @@ export default function LinkManager() {
     { title: '渠道', dataIndex: 'channelName', width: 120, render: value => value || '—' },
     { title: '备注', dataIndex: 'notes', width: 210, ellipsis: true, render: value => value || '—' },
     { title: '来源', dataIndex: 'source', width: 100 },
-    { title: '操作', key: 'actions', width: 90, fixed: 'right', render: (_, row) => <Button type="link" icon={<EditOutlined/>} onClick={() => openEdit(row)}>编辑</Button> }
+    { title: '操作', key: 'actions', width: 90, fixed: 'right', render: (_, row) => <Button type="link" icon={<EditOutlined/>} onClick={() => openEdit(row)}>{row.source === 'GAM 报表' && !row.isSaved ? '登记' : '编辑'}</Button> }
   ];
 
   return <Space direction="vertical" size={16} className="page-stack link-manager">
     <div className="page-heading"><div><Title level={2}>链接管理</Title><Text type="secondary">统一管理 Ad Manager 账号的主域名、子域名及链接信息</Text></div>
       <Space><Button icon={<ReloadOutlined/>} loading={busy} onClick={load}>刷新 GAM 链接</Button>
         <Button type="primary" icon={<PlusOutlined/>} onClick={openCreate}>新增链接</Button></Space></div>
-    <Alert type="info" showIcon message="GAM Sites 与本站链接目录"
-      description="真实 GAM 网站直接读取；新增链接只记录到本站目录，不会自动提交到 Google Ad Manager。"/>
+    <Alert type="info" showIcon message="GAM 网站与报表子域名"
+      description="GAM Sites 中登记的网站直接显示；对应账号 REST 报表 SITE 维度出现的子域名也会列出，并标为“GAM 报表”。报表子域名不代表已在 GAM Sites 单独过审；新增链接只记录到本站目录。"/>
     {issues.length > 0 && <Alert type="warning" showIcon message="部分账号网站读取不完整" description={issues.join('；')} />}
     <Row gutter={[12, 12]}>
       <Col xs={12} md={6}><Card><Statistic title="已发现链接" value={rows.length}/></Card></Col>
@@ -206,16 +210,16 @@ export default function LinkManager() {
     <Card className="link-results" title={'链接列表（' + filtered.length + '）'} extra={<Text type="secondary">{busy ? '读取中 ' + progress[0] + '/' + progress[1] : lastLoaded ? '上次刷新 ' + lastLoaded : '尚未刷新'}</Text>}>
       <Table rowKey="key" size="middle" loading={busy && !rows.length} dataSource={filtered} columns={columns} pagination={{ current: page, pageSize, onChange: (next, size) => { setPage(next); setPageSize(size); }, showSizeChanger: true, pageSizeOptions: [20, 50, 100] }} scroll={{ x: 1350 }} locale={{ emptyText: <Empty description={busy ? '正在读取 GAM Sites' : '没有符合条件的链接'} /> }}/>
     </Card>
-    <Modal title={editing?.mode === 'create' ? '新增链接' : '编辑链接'} open={!!editing} onCancel={() => setEditing(null)} onOk={save}
+    <Modal title={editing?.mode === 'create' ? editing?.row ? '登记报表子域名' : '新增链接' : '编辑链接'} open={!!editing} onCancel={() => setEditing(null)} onOk={save}
       okText={editing?.mode === 'create' ? '创建链接' : '保存修改'} confirmLoading={saving} forceRender width={560}>
       {editing?.mode === 'edit' && editing.row.source === 'GAM Sites' && <Alert type="info" showIcon style={{ marginBottom: 16 }}
         message="GAM 站点的账号和域名由 Google 管理；这里只能修改本站的监测域名、渠道和备注。"/>}
       <Form form={form} layout="vertical">
         <Form.Item name="domain" label="域名" rules={[{ required: true, message: '请输入域名' }]} extra="可粘贴完整网址，系统会识别域名。">
-          <Input placeholder="例如 example.com 或 news.example.com" disabled={editing?.row?.source === 'GAM Sites'}/>
+          <Input placeholder="例如 example.com 或 news.example.com" disabled={editing?.row?.source === 'GAM Sites' || editing?.mode === 'create' && Boolean(editing?.row)}/>
         </Form.Item>
         <Form.Item name="gamAccountId" label="所属账号" rules={[{ required: true, message: '请选择账号' }]}>
-          <Select showSearch optionFilterProp="label" placeholder="选择 Ad Manager 账号" disabled={editing?.row?.source === 'GAM Sites'}
+          <Select showSearch optionFilterProp="label" placeholder="选择 Ad Manager 账号" disabled={editing?.row?.source === 'GAM Sites' || editing?.mode === 'create' && Boolean(editing?.row)}
             options={accounts.filter(account => account.status === 'active').map(account => ({ value: account.id, label: account.name + '（' + account.networkCode + '）' }))}/>
         </Form.Item>
         <Form.Item name="monitorDomains" label="广告监测域名" extra="可输入域名后回车；最多 20 个。">
