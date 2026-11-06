@@ -37,6 +37,15 @@ export function catalogLinksForAccount(account, sites = []) {
   return [...rows.values()].sort((a, b) => a.domain.localeCompare(b.domain));
 }
 
+export function catalogLinksWithManual(account, sites = [], manualDomains = []) {
+  const gamDomains = new Set(sites.map(site => hostname(site.url)).filter(Boolean));
+  const combined = [...manualDomains.map(domain => ({ url: domain, name: '' })), ...sites];
+  return catalogLinksForAccount(account, combined).map(row => ({
+    ...row, source: gamDomains.has(row.domain) ? 'GAM Sites' : '本地新增',
+    isManual: !gamDomains.has(row.domain)
+  }));
+}
+
 export function approvedLinksForAccount(account, sites = []) {
   return catalogLinksForAccount(account, sites)
     .filter(row => row.approval === 'APPROVED');

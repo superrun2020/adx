@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Button, Card, Col, Drawer, Input, InputNumber, Modal, Row, Select, Space, Statistic, Table, Typography, message } from 'antd';
+import { Alert, Button, Card, Col, Drawer, Input, InputNumber, Row, Select, Space, Table, Typography, message } from 'antd';
 import { BarChartOutlined, DownloadOutlined, FilterOutlined, ReloadOutlined } from '@ant-design/icons';
 import { readCached, rememberRead } from './readCache.js';
 import ReportDateFilter from './ReportDateFilter.jsx';
@@ -66,9 +66,6 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
   const [selectedDate, setSelectedDate] = useState(null);
   const [loading, setLoading] = useState(false), [error, setError] = useState('');
   const [filterOpen, setFilterOpen] = useState(false), [exporting, setExporting] = useState(false);
-  const [drill, setDrill] = useState(null), [detailRows, setDetailRows] = useState([]);
-  const [detailTotal, setDetailTotal] = useState(0), [detailPage, setDetailPage] = useState(1);
-  const [detailLoading, setDetailLoading] = useState(false);
   const shownDimensions = dimensions.filter(([key]) => admin || !['channel','advertiser','bd'].includes(key));
   const dailyBreakdownOptions = [{value:'',label:'仅按日期'},
     ...shownDimensions.filter(([key]) => !['date','hour'].includes(key))
@@ -116,24 +113,9 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
       .finally(() => { if (active) setDailyLoading(false); });
     return () => { active = false; };
   }, [range[0].valueOf(),range[1].valueOf(),applied,dailyBreakdown,dailyPage,dailyPageSize,selectedDimensions.includes('date')]);
-  const detailDimensions = shownDimensions.map(([key]) => key);
-  useEffect(() => {
-    if (!drill) return;
-    let active = true; setDetailLoading(true);
-    getJson('/api/reports?' + params(detailDimensions,detailPage,50,{ drill:JSON.stringify(drill.values) }))
-      .then(data => { if (active) { setDetailRows(data.items || []); setDetailTotal(data.total || 0); } })
-      .catch(cause => { if (active) message.error(cause.message); })
-      .finally(() => { if (active) setDetailLoading(false); });
-    return () => { active = false; };
-  }, [drill,detailPage]);
   const search = () => { setPage(1); setDailyPage(1); setSelectedDate(null); setApplied({ ...filters }); setFilterOpen(false); };
   const reset = () => { setFilters(defaultFilters); setApplied(defaultFilters); setPage(1); setDailyPage(1); setSelectedDate(null);
     setSelectedDimensions(defaultDimensions); setSelectedMetrics(coreMetrics.map(([key]) => key)); };
-  const openDetail = (row, keys = selectedDimensions) => {
-    const values = Object.fromEntries(keys.map(key =>
-      [key, key === 'channel' ? row.channelId : key === 'url' ? row.rawUrl : row[key]]));
-    setDetailRows([]); setDetailTotal(0); setDetailPage(1); setDrill({ row, values });
-  };
   const exportCsv = async () => {
     setExporting(true);
     try {
@@ -156,15 +138,14 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
   const dailyColumns = [{title:'日期',dataIndex:'date',width:130,fixed:'left'},
     ...dimensionColumns(dailyBreakdown ? [dailyBreakdown] : []),
     ...metricColumns(selectedMetrics,admin)];
-  const detailColumns = [...dimensionColumns(detailDimensions),...metricColumns(selectedMetrics,admin)];
   return <Space direction="vertical" size={16} className="page-stack report-explorer">
     <div className="page-heading"><div><Title level={2}>数据报告</Title>
-      <Text type="secondary">默认汇总所选日期范围内的域名与广告单元；勾选“日期”可按天拆分，点击行可下钻</Text>{cachedRows && <Text type="secondary" style={{marginLeft:10}}>已显示缓存数据{loading ? '，正在更新' : ''}</Text>}</div>
+      <Text type="secondary">默认汇总所选日期范围内的域名与广告单元；勾选“日期”可按天拆分</Text>{cachedRows && <Text type="secondary" style={{marginLeft:10}}>已显示缓存数据{loading ? '，正在更新' : ''}</Text>}</div>
       <Button icon={<ReloadOutlined/>} loading={loading} onClick={() => setApplied({ ...applied })}>刷新</Button></div>
     {error && <Alert type="error" showIcon message="报表加载失败" description={error}/>}
     <Card><Space wrap>
       <ReportDateFilter value={range} onChange={value => {
-        setPage(1); setDailyPage(1); setSelectedDate(null); setDrill(null); setRange(value);
+        setPage(1); setDailyPage(1); setSelectedDate(null); setRange(value);
       }}/>
       {admin && <Select allowClear showSearch placeholder="上游账号" value={filters.upstreamAccount || undefined}
         onChange={value => setFilter('upstreamAccount',value)}
@@ -193,15 +174,14 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
       extra={<Space wrap><Text type="secondary">{range[0].format('YYYY-MM-DD')} 至 {range[1].format('YYYY-MM-DD')} · 共 {number(dailyTotal)} {dailyBreakdown ? '组' : '个有数据日期'}</Text>
         <Select aria-label="每日汇总分组维度" value={dailyBreakdown} options={dailyBreakdownOptions} style={{width:190}}
           onChange={value => { setDailyPage(1); setPage(1); setSelectedDate(null); setDailyBreakdown(value); }}/></Space>}>
-      <Text type="secondary">按最新日期排序；汇总列随上方“显示指标”变化。{dailyBreakdown ? '点击行查看该组明细。' : '点击日期可查看该日明细，再点一次或选择“全部日期”恢复整个区间。'}</Text>
+      <Text type="secondary">按最新日期排序；汇总列随上方“显示指标”变化。{dailyBreakdown ? '可在上方调整分组维度查看不同汇总。' : '点击日期可筛选下方表格，再点一次或选择“全部日期”恢复整个区间。'}</Text>
       <Table style={{marginTop:12}} size="small" rowKey={row => dailyBreakdown
         ? row.date + ':' + String(dailyBreakdown === 'channel' ? row.channelId : row[dailyBreakdown]) : row.date}
         loading={dailyLoading && !dailyCached} dataSource={dailyRows}
         columns={dailyColumns}
-        scroll={{x:'max-content'}} onRow={row => ({
-          onClick:() => { if (dailyBreakdown) openDetail(row,['date',dailyBreakdown]);
-            else { setPage(1); setSelectedDate(current => current === row.date ? null : row.date); } },
-          style:{cursor:'pointer',background:!dailyBreakdown && selectedDate === row.date ? 'var(--report-accent-soft)' : undefined}
+        scroll={{x:'max-content'}} onRow={dailyBreakdown ? undefined : row => ({
+          onClick:() => { setPage(1); setSelectedDate(current => current === row.date ? null : row.date); },
+          style:{cursor:'pointer',background:selectedDate === row.date ? 'var(--report-accent-soft)' : undefined}
         })} pagination={{current:dailyPage,pageSize:dailyPageSize,total:dailyTotal,
           showSizeChanger:true,pageSizeOptions:['5','10','20','50'],
           showTotal:(count, span) => count ? span[0] + '-' + span[1] + ' / 共 ' + count + (dailyBreakdown ? ' 组' : ' 天') : '共 0 ' + (dailyBreakdown ? '组' : '天'),
@@ -212,9 +192,7 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
       {selectedDate && <Button size="small" onClick={() => { setPage(1); setSelectedDate(null); }}>全部日期</Button>}
       <Button icon={<DownloadOutlined/>} loading={exporting} onClick={exportCsv}>导出 CSV</Button></Space>}>
       <Table size="small" rowKey={(row,index) => String(page) + '-' + index} loading={loading && !cachedRows} dataSource={rows}
-        columns={columns} scroll={{x:'max-content'}} onRow={row => ({
-          onClick:() => openDetail(row), style:{cursor:'pointer'}
-        })} pagination={{ current:page, pageSize, total, showSizeChanger:true, pageSizeOptions:[20,50,100,200],
+        columns={columns} scroll={{x:'max-content'}} pagination={{ current:page, pageSize, total, showSizeChanger:true, pageSizeOptions:[20,50,100,200],
           onChange:(next,size) => { setPage(next); setPageSize(size); } }}
         locale={{emptyText:'该条件下没有已同步的 REST 数据'}}/></Card>
     <Drawer title="更多筛选" open={filterOpen} onClose={() => setFilterOpen(false)} width={420}
@@ -237,15 +215,5 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
         <label>最低 eCPM（美元）<InputNumber min={0} value={filters.minEcpm === '' ? null : Number(filters.minEcpm)}
           onChange={value => setFilter('minEcpm',value)} style={{width:'100%'}}/></label>
       </Space></Drawer>
-    <Modal title="报表下钻明细" open={Boolean(drill)} onCancel={() => setDrill(null)} footer={null} width="92vw">
-      {drill && <><Space wrap style={{marginBottom:16}}>
-        <Statistic title="当前分组收入" value={money(drill.row.revenue)}/>
-        <Statistic title="展示" value={number(drill.row.impressions)}/>
-        <Statistic title="点击" value={number(drill.row.clicks)}/>
-        <Text type="secondary">按日期、小时、网站、国家及广告单元等维度查看同一分组</Text>
-      </Space><Table size="small" rowKey={(row,index) => String(detailPage) + '-' + index} loading={detailLoading}
-        dataSource={detailRows} columns={detailColumns} scroll={{x:'max-content'}}
-        pagination={{current:detailPage,pageSize:50,total:detailTotal,onChange:setDetailPage}}/></>}
-    </Modal>
   </Space>;
 }

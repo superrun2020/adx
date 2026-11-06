@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { approvedLinksForAccount, catalogLinksForAccount, hostname } from '../src/link-catalog.mjs';
+import { approvedLinksForAccount, catalogLinksForAccount, catalogLinksWithManual, hostname } from '../src/link-catalog.mjs';
 
 const account = { id: 7, name: 'GAM A', networkCode: '123456' };
 const site = (url, approvalStatus, id = 1) => ({ name: 'networks/123456/sites/' + id, url, approvalStatus });
@@ -57,5 +57,14 @@ test('a standalone GAM child site has no invented parent row', () => {
   const rows = catalogLinksForAccount(account, [site('news.example.com', 'APPROVED')]);
   assert.deepEqual(rows.map(row => [row.domain, row.type, row.parentDomain]), [
     ['news.example.com', 'sub', '']
+  ]);
+});
+
+test('manual links join GAM Sites without hiding registered domains', () => {
+  const rows = catalogLinksWithManual(account, [site('example.com', 'DRAFT')],
+    ['example.com', 'news.example.com']);
+  assert.deepEqual(rows.map(row => [row.domain, row.type, row.source]), [
+    ['example.com', 'main', 'GAM Sites'],
+    ['news.example.com', 'sub', '本地新增']
   ]);
 });

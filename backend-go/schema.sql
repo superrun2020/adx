@@ -50,6 +50,12 @@ CREATE TABLE IF NOT EXISTS gam_ad_unit_creations (
   created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, published_at TEXT,
   UNIQUE(network_code,ad_unit_code), FOREIGN KEY(gam_account_id) REFERENCES soap_accounts(id)
 );
+CREATE TABLE IF NOT EXISTS link_metadata (
+  network_code TEXT NOT NULL, domain TEXT NOT NULL COLLATE NOCASE, is_manual INTEGER NOT NULL DEFAULT 0,
+  monitor_domains_json TEXT NOT NULL DEFAULT '[]', channel_id INTEGER, notes TEXT NOT NULL DEFAULT '',
+  updated_by TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(network_code,domain), FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE SET NULL
+);
 CREATE TABLE IF NOT EXISTS import_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, actor_email TEXT NOT NULL, channel_id INTEGER NOT NULL, source_file TEXT NOT NULL,
   total_rows INTEGER NOT NULL, accepted_rows INTEGER NOT NULL, rejected_rows INTEGER NOT NULL, status TEXT NOT NULL,

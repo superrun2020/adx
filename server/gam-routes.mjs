@@ -233,6 +233,85 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     res.json({ ok: true, items });
   }));
 
+  const linkFields = input => {
+    const gamAccount = account(input?.gamAccountId);
+    if (!gamAccount || gamAccount.status !== 'active') throw new Error('invalid_gam_account_status');
+    let domain;
+    try { domain = siteDomain(input?.domain); } catch { throw new Error('invalid_link_domain'); }
+    if (input?.monitorDomains != null && !Array.isArray(input.monitorDomains)) throw new Error('invalid_monitor_domain');
+    if ((input?.monitorDomains || []).length > 20) throw new Error('invalid_monitor_domain');
+    let monitors;
+    try { monitors = [...new Set((input?.monitorDomains || []).map(siteDomain))]; }
+    catch { throw new Error('invalid_monitor_domain'); }
+    const notes = String(input?.notes || '').trim();
+    if (notes.length > 2000) throw new Error('invalid_link_metadata');
+    let channelId = null;
+    if (input?.channelId != null) {
+      channelId = Number(input.channelId);
+      if (!Number.isSafeInteger(channelId) || channelId <= 0 ||
+          !db.prepare("SELECT id FROM channels WHERE id=? AND status='active'").get(channelId)) throw new Error('invalid_channel_id');
+    }
+    return { gamAccount, network: gamAccount.network_code, domain, monitors: JSON.stringify(monitors), channelId, notes };
+  };
+  const rootDomain = domain => {
+    const parts = domain.split('.');
+    const count = new Set(['co.uk', 'com.cn', 'com.au', 'co.jp', 'co.kr']).has(parts.slice(-2).join('.')) ? 3 : 2;
+    return parts.slice(-count).join('.');
+  };
+  app.get('/api/admin/link-metadata', requireAuth, requireAdmin, route((_req, res) => {
+    res.json({ ok: true,
+      items: db.prepare("SELECT m.network_code networkCode,m.domain,m.is_manual isManual,m.monitor_domains_json monitorDomainsJson,m.channel_id channelId,COALESCE(c.name,'') channelName,m.notes FROM link_metadata m LEFT JOIN channels c ON c.id=m.channel_id ORDER BY m.network_code,m.domain").all(),
+      channels: db.prepare("SELECT id,name FROM channels WHERE status='active' ORDER BY name").all(),
+      assignments: db.prepare("SELECT cd.domain,c.id channelId,c.name channelName FROM channel_domains cd JOIN channels c ON c.id=cd.channel_id WHERE c.status='active' ORDER BY cd.domain").all()
+    });
+  }));
+  app.post('/api/admin/link-metadata', requireAuth, requireAdmin, route((req, res) => {
+    const fields = linkFields(req.body);
+    if (db.prepare('SELECT 1 FROM link_metadata WHERE network_code=? AND domain=?').get(fields.network, fields.domain))
+      throw new Error('link_already_exists');
+    try {
+      db.exec('BEGIN IMMEDIATE');
+      const root = rootDomain(fields.domain);
+      if (root !== fields.domain) db.prepare('INSERT OR IGNORE INTO link_metadata(network_code,domain,is_manual,updated_by) VALUES(?,?,1,?)')
+        .run(fields.network, root, req.user.email);
+      db.prepare('INSERT INTO link_metadata(network_code,domain,is_manual,monitor_domains_json,channel_id,notes,updated_by) VALUES(?,?,1,?,?,?,?)')
+        .run(fields.network, fields.domain, fields.monitors, fields.channelId, fields.notes, req.user.email);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      if (/unique/i.test(String(error.message))) throw new Error('link_already_exists');
+      throw error;
+    }
+    audit(req.user.email, 'gam.link_create', 'link', fields.network + ':' + fields.domain, '{}', req.ip);
+    res.status(201).json({ ok: true });
+  }));
+  app.put('/api/admin/link-metadata', requireAuth, requireAdmin, route(async (req, res) => {
+    const fields = linkFields(req.body);
+    let originalDomain;
+    try { originalDomain = siteDomain(req.body?.originalDomain); } catch { throw new Error('invalid_link_domain'); }
+    const originalNetwork = String(req.body?.originalNetworkCode || '').trim();
+    const existing = db.prepare('SELECT is_manual isManual FROM link_metadata WHERE network_code=? AND domain=?')
+      .get(originalNetwork, originalDomain);
+    if (existing?.isManual === 1 && !req.body?.siteName) {
+      if ((originalNetwork !== fields.network || originalDomain !== fields.domain) &&
+          db.prepare('SELECT 1 FROM link_metadata WHERE network_code=? AND domain=?').get(fields.network, fields.domain))
+        throw new Error('link_already_exists');
+      try {
+        db.prepare('UPDATE link_metadata SET network_code=?,domain=?,monitor_domains_json=?,channel_id=?,notes=?,updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE network_code=? AND domain=? AND is_manual=1')
+          .run(fields.network, fields.domain, fields.monitors, fields.channelId, fields.notes, req.user.email, originalNetwork, originalDomain);
+      } catch (error) { if (/unique/i.test(String(error.message))) throw new Error('link_already_exists'); throw error; }
+    } else {
+      if (originalNetwork !== fields.network || originalDomain !== fields.domain) throw new Error('invalid_gam_site_move');
+      const siteName = gamSiteResource(req.body?.siteName, fields.network);
+      const site = await getGamSite(fields.network, await tokenFor(fields.gamAccount), siteName);
+      if (site.name !== siteName || siteDomain(site.url) !== fields.domain) throw new Error('invalid_gam_site_domain');
+      db.prepare("INSERT INTO link_metadata(network_code,domain,is_manual,monitor_domains_json,channel_id,notes,updated_by) VALUES(?,?,0,?,?,?,?) ON CONFLICT(network_code,domain) DO UPDATE SET is_manual=0,monitor_domains_json=excluded.monitor_domains_json,channel_id=excluded.channel_id,notes=excluded.notes,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP")
+        .run(fields.network, fields.domain, fields.monitors, fields.channelId, fields.notes, req.user.email);
+    }
+    audit(req.user.email, 'gam.link_update', 'link', fields.network + ':' + fields.domain, '{}', req.ip);
+    res.json({ ok: true });
+  }));
+
   const creation = id => {
     const number = Number(id);
     return Number.isSafeInteger(number) && number > 0 ? db.prepare('SELECT * FROM gam_ad_unit_creations WHERE id=?').get(number) : null;
