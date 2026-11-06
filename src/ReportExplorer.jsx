@@ -59,7 +59,9 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
   const [cachedRows, setCachedRows] = useState(() => Boolean(readCached(user, defaultReportPath(range))));
   const [page, setPage] = useState(1), [pageSize, setPageSize] = useState(50);
   const [dailyRows, setDailyRows] = useState([]), [dailyTotal, setDailyTotal] = useState(0);
-  const [dailyPage, setDailyPage] = useState(1), [dailyLoading, setDailyLoading] = useState(false);
+  const [dailyBreakdown, setDailyBreakdown] = useState('');
+  const [dailyPage, setDailyPage] = useState(1), [dailyPageSize, setDailyPageSize] = useState(10);
+  const [dailyLoading, setDailyLoading] = useState(false);
   const [dailyCached, setDailyCached] = useState(false);
   const [selectedDate, setSelectedDate] = useState(null);
   const [loading, setLoading] = useState(false), [error, setError] = useState('');
@@ -68,6 +70,9 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
   const [detailTotal, setDetailTotal] = useState(0), [detailPage, setDetailPage] = useState(1);
   const [detailLoading, setDetailLoading] = useState(false);
   const shownDimensions = dimensions.filter(([key]) => admin || !['channel','advertiser','bd'].includes(key));
+  const dailyBreakdownOptions = [{value:'',label:'仅按日期'},
+    ...shownDimensions.filter(([key]) => !['date','hour'].includes(key))
+      .map(([value,label]) => ({value,label:'日期 + ' + label}))];
   const shownMetrics = [...coreMetrics, ...(admin ? adminMetrics : [])];
   const setFilter = (key, value) => setFilters(current => ({ ...current, [key]:value ?? '' }));
   const params = (dims, pageNumber, size, extra = {}) => new URLSearchParams({
@@ -98,15 +103,19 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
   useEffect(() => {
     if (!selectedDimensions.includes('date')) { setDailyRows([]); setDailyTotal(0); setDailyCached(false); return; }
     let active = true; setDailyLoading(true);
-    const path = '/api/reports?' + params(['date'],dailyPage,200);
+    const path = '/api/reports?' + params(['date', ...(dailyBreakdown ? [dailyBreakdown] : [])],dailyPage,dailyPageSize);
     const saved = readCached(user, path);
     setDailyRows(saved?.data?.items || []); setDailyTotal(saved?.data?.total || 0); setDailyCached(Boolean(saved));
     getJson(path)
-      .then(data => { if (active) { rememberRead(user, path, data); setDailyRows(data.items || []); setDailyTotal(data.total || 0); setDailyCached(false); } })
+      .then(data => { if (active) {
+        if (dailyPage > 1 && !(data.items || []).length) { setDailyPage(1); return; }
+        rememberRead(user, path, data); setDailyRows(data.items || []);
+        setDailyTotal(data.total || 0); setDailyCached(false);
+      } })
       .catch(cause => { if (active) message.error('每日汇总加载失败：' + cause.message); })
       .finally(() => { if (active) setDailyLoading(false); });
     return () => { active = false; };
-  }, [range[0].valueOf(),range[1].valueOf(),applied,dailyPage,selectedDimensions.includes('date')]);
+  }, [range[0].valueOf(),range[1].valueOf(),applied,dailyBreakdown,dailyPage,dailyPageSize,selectedDimensions.includes('date')]);
   const detailDimensions = shownDimensions.map(([key]) => key);
   useEffect(() => {
     if (!drill) return;
@@ -120,8 +129,8 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
   const search = () => { setPage(1); setDailyPage(1); setSelectedDate(null); setApplied({ ...filters }); setFilterOpen(false); };
   const reset = () => { setFilters(defaultFilters); setApplied(defaultFilters); setPage(1); setDailyPage(1); setSelectedDate(null);
     setSelectedDimensions(defaultDimensions); setSelectedMetrics(coreMetrics.map(([key]) => key)); };
-  const openDetail = row => {
-    const values = Object.fromEntries(selectedDimensions.map(key =>
+  const openDetail = (row, keys = selectedDimensions) => {
+    const values = Object.fromEntries(keys.map(key =>
       [key, key === 'channel' ? row.channelId : key === 'url' ? row.rawUrl : row[key]]));
     setDetailRows([]); setDetailTotal(0); setDetailPage(1); setDrill({ row, values });
   };
@@ -144,6 +153,9 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
     render:value => value === null || value === undefined || value === '' ? '—' : String(value)
   }));
   const columns = [...dimensionColumns(selectedDimensions),...metricColumns(selectedMetrics,admin)];
+  const dailyColumns = [{title:'日期',dataIndex:'date',width:130,fixed:'left'},
+    ...dimensionColumns(dailyBreakdown ? [dailyBreakdown] : []),
+    ...metricColumns(selectedMetrics,admin)];
   const detailColumns = [...dimensionColumns(detailDimensions),...metricColumns(selectedMetrics,admin)];
   return <Space direction="vertical" size={16} className="page-stack report-explorer">
     <div className="page-heading"><div><Title level={2}>数据报告</Title>
@@ -178,17 +190,22 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
         options={shownMetrics.map(([value,label]) => ({value,label}))} style={{width:'100%'}}/></Col>
     </Row></Card>
     {selectedDimensions.includes('date') && <Card title="所选区间每日汇总"
-      extra={<Text type="secondary">{range[0].format('YYYY-MM-DD')} 至 {range[1].format('YYYY-MM-DD')} · {number(dailyTotal)} 个有数据日期</Text>}>
-      <Text type="secondary">按最新日期排序；点击日期可查看该日明细，再点一次或选择“全部日期”恢复整个区间。</Text>
-      <Table style={{marginTop:12}} size="small" rowKey="date" loading={dailyLoading && !dailyCached} dataSource={dailyRows}
-        columns={[{title:'日期',dataIndex:'date',width:130},{title:'请求',dataIndex:'requests',align:'right',render:number},
-          {title:'展示',dataIndex:'impressions',align:'right',render:number},
-          {title:'收入',dataIndex:'revenue',align:'right',render:money}]}
-        scroll={{x:520,y:240}} onRow={row => ({
-          onClick:() => { setPage(1); setSelectedDate(current => current === row.date ? null : row.date); },
-          style:{cursor:'pointer',background:selectedDate === row.date ? 'var(--report-accent-soft)' : undefined}
-        })} pagination={dailyTotal > 200 ? {current:dailyPage,pageSize:200,total:dailyTotal,
-          showSizeChanger:false,onChange:setDailyPage} : false}
+      extra={<Space wrap><Text type="secondary">{range[0].format('YYYY-MM-DD')} 至 {range[1].format('YYYY-MM-DD')} · 共 {number(dailyTotal)} {dailyBreakdown ? '组' : '个有数据日期'}</Text>
+        <Select aria-label="每日汇总分组维度" value={dailyBreakdown} options={dailyBreakdownOptions} style={{width:190}}
+          onChange={value => { setDailyPage(1); setPage(1); setSelectedDate(null); setDailyBreakdown(value); }}/></Space>}>
+      <Text type="secondary">按最新日期排序；汇总列随上方“显示指标”变化。{dailyBreakdown ? '点击行查看该组明细。' : '点击日期可查看该日明细，再点一次或选择“全部日期”恢复整个区间。'}</Text>
+      <Table style={{marginTop:12}} size="small" rowKey={row => dailyBreakdown
+        ? row.date + ':' + String(dailyBreakdown === 'channel' ? row.channelId : row[dailyBreakdown]) : row.date}
+        loading={dailyLoading && !dailyCached} dataSource={dailyRows}
+        columns={dailyColumns}
+        scroll={{x:'max-content'}} onRow={row => ({
+          onClick:() => { if (dailyBreakdown) openDetail(row,['date',dailyBreakdown]);
+            else { setPage(1); setSelectedDate(current => current === row.date ? null : row.date); } },
+          style:{cursor:'pointer',background:!dailyBreakdown && selectedDate === row.date ? 'var(--report-accent-soft)' : undefined}
+        })} pagination={{current:dailyPage,pageSize:dailyPageSize,total:dailyTotal,
+          showSizeChanger:true,pageSizeOptions:['5','10','20','50'],
+          showTotal:(count, span) => count ? span[0] + '-' + span[1] + ' / 共 ' + count + (dailyBreakdown ? ' 组' : ' 天') : '共 0 ' + (dailyBreakdown ? '组' : '天'),
+          onChange:(next,size) => { setDailyPage(size === dailyPageSize ? next : 1); setDailyPageSize(size); }}}
         locale={{emptyText:'所选日期范围内没有已同步的数据'}}/>
     </Card>}
     <Card title={selectedDimensions.includes('date') ? '按日期拆分的数据明细' : '所选区间汇总'} extra={<Space><Text type="secondary">{range[0].format('YYYY-MM-DD')} 至 {range[1].format('YYYY-MM-DD')} · 共 {number(total)} 组</Text>

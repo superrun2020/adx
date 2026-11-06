@@ -386,3 +386,39 @@ test('Ad Manager account edit preserves credentials and pauses disabled sync', a
   assert.equal(reset.status, 'untested');
   db.close();
 });
+
+test('daily interval summary pages through dates and returns detailed metrics', async () => {
+  cookie = '';
+  const login = await request('/api/auth/login', { method:'POST', body:JSON.stringify({ email:'admin@example.test', password:'AdminPass123!' }) });
+  cookie = login.response.headers.get('set-cookie').split(';')[0];
+  const channelId = (await request('/api/admin/channels')).body.items[0].id;
+  const payload = Array.from({ length:7 }, (_, index) => ({
+    date:'2026-10-' + String(24 + index), url:'https://daily-' + index + '.example.test',
+    ad_unit:'daily-unit-' + index, requests:100, matched_requests:80,
+    impressions:40, clicks:4, revenue:10
+  }));
+  payload.push({ date:'2026-10-30', url:'https://daily-extra.example.test',
+    ad_unit:'daily-extra-unit', requests:50, matched_requests:40,
+    impressions:20, clicks:2, revenue:5 });
+  const imported = await request('/api/admin/imports', { method:'POST',
+    body:JSON.stringify({ channelId, fileName:'daily-pages.json', payload }) });
+  assert.equal(imported.body.accepted, 8);
+  const route = '/api/reports?start=2026-10-24&end=2026-10-30&dimensions=date&pageSize=5';
+  const first = await request(route + '&page=1');
+  const second = await request(route + '&page=2');
+  assert.equal(first.body.total, 7);
+  assert.equal(second.body.total, 7);
+  assert.deepEqual(first.body.items.map(item => item.date),
+    ['2026-10-30','2026-10-29','2026-10-28','2026-10-27','2026-10-26']);
+  assert.deepEqual(second.body.items.map(item => item.date), ['2026-10-25','2026-10-24']);
+  assert.equal(first.body.items[0].matchedRequests, 120);
+  assert.equal(first.body.items[0].clicks, 6);
+  assert.equal(first.body.items[0].matchRate, 80);
+  assert.equal(first.body.items[0].impressionRate, 50);
+  assert.equal(first.body.items[0].clickRate, 10);
+  assert.equal(first.body.items[0].ecpm, 250);
+  const byDomain = await request(route.replace('dimensions=date', 'dimensions=date,url') + '&page=2');
+  assert.equal(byDomain.body.total, 8);
+  assert.equal(byDomain.body.items.length, 3);
+  assert.ok(byDomain.body.items.every(item => item.url.endsWith('.example.test')));
+});
