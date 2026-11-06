@@ -200,7 +200,7 @@ func restInteger(value any) (int64, error) {
 		return 0, err
 	}
 	number := importNumber(scalar)
-	if math.IsNaN(number) || math.IsInf(number, 0) || number < 0 || number > 9007199254740991 || number != math.Trunc(number) {
+	if math.IsNaN(number) || math.IsInf(number, 0) || math.Abs(number) > 9007199254740991 || number != math.Trunc(number) {
 		return 0, errors.New("invalid_rest_report_integer")
 	}
 	return int64(number), nil
@@ -250,7 +250,7 @@ func normalizeRestRows(rows []any, channelID int64, accountKey, sourceFile strin
 		if err != nil {
 			return nil, err
 		}
-		if hour > 23 {
+		if hour < 0 || hour > 23 {
 			return nil, errors.New("invalid_rest_report_hour")
 		}
 		urlValue, err := restString(dimensions[2])

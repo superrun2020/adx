@@ -161,9 +161,6 @@ func normalizeDiagnosticRows(rows []any, start, end string, divisor int64) ([]di
 		if err != nil {
 			return nil, err
 		}
-		if viewable > measurable {
-			return nil, errors.New("invalid_diagnostic_viewability")
-		}
 		facts = append(facts, diagnosticFact{date, category, impressions, measurable, viewable, revenue})
 	}
 	return facts, nil

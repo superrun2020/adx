@@ -135,7 +135,7 @@ function scalar(value) {
 
 function integer(value) {
   const number = Number(scalar(value));
-  if (!Number.isSafeInteger(number) || number < 0) throw new Error('invalid_rest_report_integer');
+  if (!Number.isSafeInteger(number)) throw new Error('invalid_rest_report_integer');
   return number;
 }
 
@@ -158,7 +158,7 @@ export function normalizeRestReportRows(rows, { channelId, accountKey, sourceFil
         metrics.length !== REPORT_METRICS.length) throw new Error('rest_report_columns_mismatch');
     const date = reportDate(dimensions[0]);
     const hour = integer(dimensions[1]);
-    if (hour > 23) throw new Error('invalid_rest_report_hour');
+    if (hour < 0 || hour > 23) throw new Error('invalid_rest_report_hour');
     const url = String(scalar(dimensions[2]) || '').trim();
     const country = String(scalar(dimensions[3]) || '').trim();
     const adUnit = String(scalar(dimensions[4]) || '').trim();

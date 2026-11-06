@@ -120,6 +120,10 @@ test('REST report run polls and reads all result pages', async () => {
   assert.equal(facts[0].reportDate, '2026-10-31');
   assert.equal(facts[0].hour, 13);
   assert.equal(facts[0].requests, 100);
+  const corrected = { ...row, metricValueGroups: [{ primaryValues: row.metricValueGroups[0].primaryValues.map((value,index) => index === 2 ? { intValue:'-1' } : value) }] };
+  assert.equal(normalizeRestReportRows([corrected], { channelId:1, accountKey:'upstream-a', sourceFile:'test', moneyDivisor:1000000 })[0].impressions, -1);
+  const negativeHour = { ...row, dimensionValues: [row.dimensionValues[0], { intValue:'-1' }, ...row.dimensionValues.slice(2)] };
+  assert.throws(() => normalizeRestReportRows([negativeHour], { channelId:1, accountKey:'upstream-a', sourceFile:'test', moneyDivisor:1000000 }), /invalid_rest_report_hour/);
   assert.throws(() => normalizeRestReportRows([{ ...row, metricValueGroups: [] }], { channelId: 1, accountKey: 'upstream-a', sourceFile: 'test', moneyDivisor: 1 }), /columns_mismatch/);
   const six = { ...row, dimensionValues: [...row.dimensionValues, { stringValue:'unit-99' }] };
   assert.equal(normalizeRestReportRows([six], { channelId:1, accountKey:'upstream-a', sourceFile:'test', moneyDivisor:1000000 })[0].adUnitId, 'unit-99');

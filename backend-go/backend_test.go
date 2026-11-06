@@ -95,6 +95,16 @@ func TestRestReportRowNormalization(t *testing.T) {
 	if len(facts) != 1 || facts[0]["reportDate"] != "2026-11-01" || facts[0]["adUnitId"] != "42" || facts[0]["revenue"] != 1.25 {
 		t.Fatalf("facts=%v", facts)
 	}
+	metrics := array(object(array(row["metricValueGroups"])[0])["primaryValues"])
+	metrics[2] = map[string]any{"intValue": "-1"}
+	corrected, err := normalizeRestRows([]any{row}, 1, "upstream", "gam-rest:test", 1000000)
+	if err != nil || len(corrected) != 1 || corrected[0]["impressions"] != int64(-1) {
+		t.Fatalf("signed GAM correction must be preserved: %v %v", corrected, err)
+	}
+	array(row["dimensionValues"])[1] = map[string]any{"intValue": "-1"}
+	if _, err := normalizeRestRows([]any{row}, 1, "upstream", "gam-rest:test", 1000000); err == nil || err.Error() != "invalid_rest_report_hour" {
+		t.Fatalf("invalid hour must still fail: %v", err)
+	}
 	sizes, err := parseGamSizes([]any{"300x250", "fluid", "out-of-page"})
 	if err != nil || len(sizes) != 3 {
 		t.Fatalf("sizes=%v err=%v", sizes, err)

@@ -109,3 +109,17 @@ func TestDiagnosticSyncIsSeparateFromRevenueFacts(t *testing.T) {
 		t.Fatalf("unexpected diagnostic response: %d %s", recorder.Code, recorder.Body.String())
 	}
 }
+
+func TestDiagnosticRowsKeepProviderViewabilityAnomaly(t *testing.T) {
+	rows := []any{map[string]any{
+		"dimensionValues": []any{map[string]any{"stringValue": "20261104"}, map[string]any{"stringValue": "Browser"}},
+		"metricValueGroups": []any{map[string]any{"primaryValues": []any{
+			map[string]any{"intValue": "101"}, map[string]any{"doubleValue": 2500000},
+			map[string]any{"intValue": "100"}, map[string]any{"intValue": "101"},
+		}}},
+	}}
+	facts, err := normalizeDiagnosticRows(rows, "2026-11-04", "2026-11-04", 1000000)
+	if err != nil || len(facts) != 1 || facts[0].viewable != 101 || facts[0].measurable != 100 {
+		t.Fatalf("provider values should be preserved: facts=%v err=%v", facts, err)
+	}
+}
