@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Col, Collapse, DatePicker, Empty, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Switch, Table, Tabs, Tag, Typography, message } from 'antd';
 import { PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { batchUnitTemplates, belongsToSite, prepareGamUnitItems, siteDomain } from './gam-unit-plan.mjs';
+import { batchUnitTemplates, belongsToSite, gamBrowserSizes, prepareGamUnitItems, siteDomain } from './gam-unit-plan.mjs';
 
 const { Text, Title } = Typography;
 const bannerSizes = ['320x50', '336x280', '250x250', '300x250'];
@@ -14,7 +14,8 @@ const unitTypes = [
   { value: 'anchor', label: '锚定广告 (ANC)', sizes: ['320x50'] }
 ];
 const typeFor = value => unitTypes.find(item => item.value === value) || unitTypes[0];
-const sizeOptions = values => values.map(value => ({ value, label: sizeLabels[value] || value }));
+const sizeOptions = (values, available = []) => [...new Set([...values, ...available])]
+  .map(value => ({ value, label: sizeLabels[value] || value }));
 const newRow = (type = 'banner', bannerNo = 1) => ({
   id: Math.random().toString(36).slice(2), type, bannerNo, sizes: [...typeFor(type).sizes], name: '', code: ''
 });
@@ -71,13 +72,13 @@ function remoteSizes(values) {
   }).filter(Boolean).join('、');
 }
 
-function UnitFields({ row, index, onChange, fixedSuffix }) {
+function UnitFields({ row, index, onChange, fixedSuffix, networkSizes }) {
   const template = typeFor(row.type);
   return <Card size="small" title={fixedSuffix || '广告单元 ' + (index + 1)} extra={fixedSuffix && <Tag>{template.label}</Tag>} style={{ marginBottom: 12 }}>
     <Row gutter={[16, 12]}>
       {!fixedSuffix && <Col xs={24} sm={row.type === 'banner' ? 12 : 24}><Text>广告类型</Text><Select style={{ width: '100%', marginTop: 6 }} value={row.type} options={unitTypes.map(item => ({ value: item.value, label: item.label }))} onChange={type => onChange({ type, bannerNo: 1, sizes: [...typeFor(type).sizes], name: '', code: '' })}/></Col>}
       {!fixedSuffix && row.type === 'banner' && <Col xs={24} sm={12}><Text>Banner 序号</Text><InputNumber min={1} max={999} precision={0} style={{ width: '100%', marginTop: 6 }} value={row.bannerNo} onChange={bannerNo => onChange({ bannerNo })}/></Col>}
-      <Col span={24}><Text type="secondary">尺寸模板：{template.sizes.map(size => sizeLabels[size] || size).join('、')}</Text><Select mode="tags" tokenSeparators={[',', '，']} style={{ width: '100%', marginTop: 6 }} value={row.sizes} options={sizeOptions(template.sizes)} placeholder="选择尺寸，或输入宽x高" onChange={sizes => onChange({ sizes })}/></Col>
+      <Col span={24}><Text type="secondary">尺寸模板：{template.sizes.map(size => sizeLabels[size] || size).join('、')}；GAM 账号可选尺寸 {networkSizes.length} 种</Text><Select mode="tags" tokenSeparators={[',', '，']} style={{ width: '100%', marginTop: 6 }} value={row.sizes} options={sizeOptions(template.sizes, networkSizes)} placeholder="选择尺寸，或输入宽x高" onChange={sizes => onChange({ sizes })}/></Col>
       {!fixedSuffix && <Col xs={24} sm={12}><Text>广告单元名称（可选）</Text><Input style={{ marginTop: 6 }} value={row.name} maxLength={255} placeholder="默认：年月日-域名-广告类型" onChange={event => onChange({ name: event.target.value })}/></Col>}
       {!fixedSuffix && <Col xs={24} sm={12}><Text>广告单元代码（可选）</Text><Input style={{ marginTop: 6 }} value={row.code} maxLength={100} placeholder="默认：年月日-域名-广告类型" onChange={event => onChange({ code: event.target.value })}/></Col>}
     </Row>
@@ -93,6 +94,8 @@ export default function GamAdUnitCreator({ accounts = [] }) {
   const [open, setOpen] = useState(false), [mode, setMode] = useState('batch');
   const [accountId, setAccountId] = useState(null), [siteNames, setSiteNames] = useState([]);
   const [sites, setSites] = useState([]), [knownDomains, setKnownDomains] = useState([]);
+  const [networkSizes, setNetworkSizes] = useState([]), [sizeBusy, setSizeBusy] = useState(false);
+  const [sizeError, setSizeError] = useState('');
   const [domainChoices, setDomainChoices] = useState({}), [domainSearch, setDomainSearch] = useState({});
   const [nextSites, setNextSites] = useState('');
   const [inventoryBusy, setInventoryBusy] = useState(false), [inventoryError, setInventoryError] = useState('');
@@ -124,6 +127,28 @@ export default function GamAdUnitCreator({ accounts = [] }) {
       .finally(() => { if (current) setInventoryBusy(false); });
     return () => { current = false; };
   }, [open, accountId, inventoryVersion]);
+  useEffect(() => {
+    if (!open || !accountId) return;
+    let current = true;
+    setNetworkSizes([]); setSizeBusy(true); setSizeError('');
+    (async () => {
+      const items = [], seen = new Set();
+      let pageToken = '';
+      do {
+        const query = pageToken ? '?pageToken=' + encodeURIComponent(pageToken) : '';
+        const result = await api('/api/admin/gam-accounts/' + accountId + '/ad-unit-sizes' + query);
+        items.push(...(result.items || []));
+        const next = result.nextPageToken || '';
+        if (next && seen.has(next)) throw new Error('GAM 尺寸分页重复');
+        seen.add(next);
+        pageToken = next;
+      } while (pageToken && items.length < 1000);
+      if (pageToken) throw new Error('GAM 尺寸数量超出限制');
+      if (current) setNetworkSizes(gamBrowserSizes(items));
+    })().catch(error => { if (current) setSizeError(error.message); })
+      .finally(() => { if (current) setSizeBusy(false); });
+    return () => { current = false; };
+  }, [open, accountId]);
 
   const searchUnits = async (query = { accountId: filterAccountId, name: filterName, statuses: filterStatuses }, pageToken = '') => {
     if (!query.accountId) return message.warning('请先选择账号');
@@ -138,7 +163,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     finally { setListBusy(false); }
   };
   const chooseAccount = value => {
-    setAccountId(value); setSites([]); setKnownDomains([]); setNextSites('');
+    setAccountId(value); setSites([]); setKnownDomains([]); setNetworkSizes([]); setSizeError(''); setNextSites('');
     setSiteNames([]); setDomainChoices({}); setDomainSearch({}); setInventoryError('');
   };
   const loadMoreSites = async () => {
@@ -237,6 +262,9 @@ export default function GamAdUnitCreator({ accounts = [] }) {
           <Col span={24}><Alert type="info" showIcon message="创建层级：顶级广告单元" description="系统自动使用当前 GAM 账号的网络根单元，无需选择现有广告单元。"/></Col>
         </Row>
         {inventoryError && <Alert type="error" style={{ marginTop: 12 }} showIcon message={'GAM 目录加载失败：' + inventoryError} action={<Button size="small" onClick={() => setInventoryVersion(value => value + 1)}>重试</Button>}/>}
+        {accountId && <Text type={sizeError ? 'warning' : 'secondary'} style={{ display: 'block', marginTop: 8 }}>
+          {sizeBusy ? '正在读取该账号的 GAM 尺寸…' : sizeError ? 'GAM 尺寸暂不可用，仍可使用模板或手动输入：' + sizeError : '已读取该账号的 GAM 可选尺寸；模板和手动输入仍可使用。'}
+        </Text>}
         {siteNames.map(siteName => {
           const site = sites.find(item => item.name === siteName);
           return site && <SiteDomainPicker key={siteName} site={site} knownDomains={knownDomains}
@@ -249,8 +277,8 @@ export default function GamAdUnitCreator({ accounts = [] }) {
           message={'本次将创建 ' + previewItems.length + ' 个广告单元' + (mode === 'batch' ? '；名称与代码一致' : '')}
           description={<div data-testid="gam-unit-preview" style={{ maxHeight: 160, overflowY: 'auto' }}>{previewItems.map((item, index) => <div key={index} style={{ overflowWrap: 'anywhere' }}>{index + 1}. {item.name}{item.name !== item.code ? ' · ' + item.code : ''}</div>)}</div>}/>}
         <Tabs style={{ marginTop: 16 }} activeKey={mode} onChange={value => { setMode(value); if (value === 'single') { setSiteNames(previous => previous.slice(0, 1)); setDomainChoices(previous => Object.fromEntries(Object.entries(previous).map(([key, domains]) => [key, domains.slice(0, 1)]))); } }} items={[
-          { key: 'single', label: '创建单个', children: <UnitFields row={single} index={0} onChange={changes => setSingle(previous => ({ ...previous, ...changes }))}/> },
-          { key: 'batch', label: '批量创建', children: <><Text>每个域名固定创建：banner1、banner2、banner3、INT、ANC。修改日期或域名，上方预览会一起更新。</Text><Collapse style={{ marginTop: 12 }} items={[{ key: 'sizes', label: '广告尺寸设置（已预选模板）', children: batchRows.map((row, index) => <UnitFields key={row.id} row={row} index={index} fixedSuffix={batchUnitTemplates[index].suffix} onChange={changes => updateBatchRow(row.id, changes)}/>) }]}/></> }
+          { key: 'single', label: '创建单个', children: <UnitFields row={single} index={0} networkSizes={networkSizes} onChange={changes => setSingle(previous => ({ ...previous, ...changes }))}/> },
+          { key: 'batch', label: '批量创建', children: <><Text>每个域名固定创建：banner1、banner2、banner3、INT、ANC。修改日期或域名，上方预览会一起更新。</Text><Collapse style={{ marginTop: 12 }} items={[{ key: 'sizes', label: '广告尺寸设置（已预选模板）', children: batchRows.map((row, index) => <UnitFields key={row.id} row={row} index={index} networkSizes={networkSizes} fixedSuffix={batchUnitTemplates[index].suffix} onChange={changes => updateBatchRow(row.id, changes)}/>) }]}/></> }
         ]}/>
         <Collapse size="small" items={[{ key: 'advanced', label: '更多设置', children: <Row gutter={[16, 12]}>
           <Col span={24}><Text>说明</Text><Input maxLength={500} style={{ marginTop: 6 }} value={description} onChange={event => setDescription(event.target.value)}/></Col>

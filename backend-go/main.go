@@ -32,6 +32,8 @@ type app struct {
 	gamCreating    map[string]bool
 	gamPublishing  map[int64]bool
 	gamScheduled   bool
+	diagnosticMu   sync.Mutex
+	diagnosticBusy bool
 	gamClient      *http.Client
 	reportCache    *responseCache
 	gamAPIBase     string
@@ -118,6 +120,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /api/dashboard/highlights", a.auth("", a.cachedReport(a.dashboardHighlights)))
 	mux.HandleFunc("GET /api/reports", a.auth("", a.cachedReport(a.reports)))
 	mux.HandleFunc("GET /api/reports/export", a.auth("", a.reportsExport))
+	mux.HandleFunc("GET /api/admin/reports/diagnostics", a.auth("admin", a.diagnosticReport))
 	mux.HandleFunc("GET /api/admin/reports/filter-options", a.auth("admin", a.reportFilterOptions))
 	mux.HandleFunc("GET /api/admin/reports/accounts", a.auth("admin", a.cachedReport(a.accountReport)))
 	mux.HandleFunc("GET /api/admin/report-api-keys", a.auth("admin", a.reportAPIKeys))
@@ -166,6 +169,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /api/admin/regression/events", a.auth("admin", a.regressionEvents))
 	mux.HandleFunc("GET /api/admin/regression/runs", a.auth("admin", a.regressionRuns))
 	mux.HandleFunc("GET /api/admin/gam-accounts/{id}/ad-units", a.auth("admin", gamRoute(a.listGamAccountAdUnits)))
+	mux.HandleFunc("GET /api/admin/gam-accounts/{id}/ad-unit-sizes", a.auth("admin", gamRoute(a.listGamAccountAdUnitSizes)))
 	mux.HandleFunc("GET /api/admin/gam-accounts/{id}/sites", a.auth("admin", gamRoute(a.listGamAccountSites)))
 	mux.HandleFunc("GET /api/admin/gam-accounts/{id}/site-domains", a.auth("admin", gamRoute(a.gamAccountSiteDomains)))
 	mux.HandleFunc("GET /api/admin/link-metadata", a.auth("admin", gamRoute(a.listLinkMetadata)))
@@ -221,6 +225,7 @@ func main() {
 	if os.Getenv("ADX_GAM_WORKER_DISABLED") != "true" {
 		go func() {
 			a.warmDefaultReports()
+			go a.runScheduledDiagnostics()
 			if os.Getenv("ADX_SYNC_ON_START") == "true" {
 				a.runScheduledGamSync()
 			}
@@ -228,6 +233,7 @@ func main() {
 			defer ticker.Stop()
 			for range ticker.C {
 				a.runScheduledGamSync()
+				go a.runScheduledDiagnostics()
 			}
 		}()
 	}

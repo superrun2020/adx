@@ -236,6 +236,9 @@ db.exec("INSERT OR IGNORE INTO upstream_share_versions(upstream_account_id,share
 db.exec("INSERT OR IGNORE INTO upstream_share_versions(upstream_account_id,share_percent,effective_from,created_by) SELECT id,share_percent,'2026-10-11','migration' FROM upstream_accounts");
 db.exec('CREATE TABLE IF NOT EXISTS dashboard_daily (report_date TEXT NOT NULL, channel_id INTEGER NOT NULL, domain TEXT NOT NULL, requests INTEGER NOT NULL, matched_requests INTEGER NOT NULL, impressions INTEGER NOT NULL, clicks INTEGER NOT NULL, revenue REAL NOT NULL, settled_revenue REAL NOT NULL, PRIMARY KEY(report_date,channel_id,domain)) WITHOUT ROWID');
 db.exec('CREATE TABLE IF NOT EXISTS dashboard_rest_daily (report_date TEXT NOT NULL, channel_id INTEGER NOT NULL, network_code TEXT NOT NULL, domain TEXT NOT NULL, requests INTEGER NOT NULL, matched_requests INTEGER NOT NULL, impressions INTEGER NOT NULL, clicks INTEGER NOT NULL, revenue REAL NOT NULL, settled_revenue REAL NOT NULL, PRIMARY KEY(report_date,channel_id,network_code,domain)) WITHOUT ROWID');
+db.exec("CREATE TABLE IF NOT EXISTS gam_diagnostic_reports (account_id INTEGER NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('device','browser','demand')),network_code TEXT NOT NULL,report_name TEXT NOT NULL DEFAULT '',last_synced_at TEXT,last_attempt_at TEXT,last_error TEXT NOT NULL DEFAULT '',PRIMARY KEY(account_id,kind),FOREIGN KEY(account_id) REFERENCES soap_accounts(id) ON DELETE CASCADE)");
+db.exec("CREATE TABLE IF NOT EXISTS gam_diagnostic_facts (account_id INTEGER NOT NULL,network_code TEXT NOT NULL,report_date TEXT NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('device','browser','demand')),category TEXT NOT NULL,impressions INTEGER NOT NULL DEFAULT 0,revenue REAL NOT NULL DEFAULT 0,measurable_impressions INTEGER NOT NULL DEFAULT 0,viewable_impressions INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_id,network_code,report_date,kind,category),FOREIGN KEY(account_id) REFERENCES soap_accounts(id) ON DELETE CASCADE) WITHOUT ROWID");
+db.exec('CREATE INDEX IF NOT EXISTS idx_gam_diagnostic_lookup ON gam_diagnostic_facts(report_date,kind,account_id)');
 
 const normalizeEmail = v => String(v || '').trim().toLowerCase();
 const sha256 = value => crypto.createHash('sha256').update(String(value)).digest('hex');
@@ -707,8 +710,20 @@ function serveReports(req, res, exportCsv = false) {
 }
 app.get('/api/reports', requireAuth, cachedReport, (req, res) => serveReports(req, res));
 app.get('/api/reports/export', requireAuth, (req, res) => serveReports(req, res, true));
+app.get('/api/admin/reports/diagnostics', requireAuth, requireAdmin, (req, res) => {
+  const { start, end, kind, accountId = '' } = req.query;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start || '') || !/^\d{4}-\d{2}-\d{2}$/.test(end || '') || start > end || !['device','browser','demand'].includes(kind))
+    return res.status(400).json({ ok:false, error:'invalid_diagnostic_query' });
+  if (accountId && (!/^\d+$/.test(accountId) || Number(accountId) < 1))
+    return res.status(400).json({ ok:false, error:'invalid_diagnostic_account' });
+  const where = 'f.report_date BETWEEN ? AND ? AND f.kind=? AND f.network_code=s.network_code' + (accountId ? ' AND f.account_id=?' : '');
+  const args = accountId ? [start,end,kind,Number(accountId)] : [start,end,kind];
+  const items = db.prepare('SELECT f.category,SUM(f.impressions) impressions,ROUND(SUM(f.revenue),6) revenue,SUM(f.measurable_impressions) measurableImpressions,SUM(f.viewable_impressions) viewableImpressions,CASE WHEN SUM(f.measurable_impressions)>0 THEN ROUND(100.0*SUM(f.viewable_impressions)/SUM(f.measurable_impressions),2) ELSE 0 END viewability FROM gam_diagnostic_facts f JOIN soap_accounts s ON s.id=f.account_id WHERE ' + where + ' GROUP BY f.category ORDER BY revenue DESC LIMIT 200').all(...args);
+  const status = db.prepare("SELECT s.id accountId,s.name accountName,? kind,d.last_synced_at lastSyncedAt,COALESCE(d.last_error,'') lastError FROM soap_accounts s LEFT JOIN gam_diagnostic_reports d ON d.account_id=s.id AND d.network_code=s.network_code AND d.kind=? WHERE s.status='active' AND s.enabled=1 AND s.rest_sync_enabled=1 AND (?='' OR s.id=?) ORDER BY s.id").all(kind,kind,accountId,accountId);
+  res.json({ ok:true, items, status });
+});
 app.get('/api/admin/reports/filter-options', requireAuth, requireAdmin, (_req, res) => res.json({ ok:true,
-  accounts:db.prepare('SELECT account_key accountKey,name,advertiser FROM upstream_accounts ORDER BY name').all(),
+  accounts:db.prepare('SELECT account_key accountKey,name,advertiser,soap_account_id gamAccountId FROM upstream_accounts ORDER BY name').all(),
   channels:db.prepare('SELECT id,name FROM channels ORDER BY name').all()
 }));
 

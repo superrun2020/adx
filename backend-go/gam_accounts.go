@@ -351,6 +351,35 @@ func (a *app) listGamAccountAdUnits(w http.ResponseWriter, r *http.Request) erro
 	writeJSON(w, 200, map[string]any{"ok": true, "items": items, "nextPageToken": importString(result["nextPageToken"])})
 	return nil
 }
+func (a *app) listGamAccountAdUnitSizes(w http.ResponseWriter, r *http.Request) error {
+	account, err := a.gamAccount(pathID(r))
+	if err != nil {
+		writeError(w, 404, "gam_account_not_found")
+		return nil
+	}
+	if account["status"] != "active" {
+		return errors.New("invalid_gam_account_status")
+	}
+	token, err := a.tokenFor(r.Context(), account)
+	if err != nil {
+		return err
+	}
+	network := importString(account["network_code"])
+	values := url.Values{"pageSize": {"100"}}
+	if page := r.URL.Query().Get("pageToken"); page != "" {
+		values.Set("pageToken", page)
+	}
+	result, err := a.gamRequest(r.Context(), network, token, "networks/"+network+"/adUnitSizes", http.MethodGet, values, nil)
+	if err != nil {
+		return err
+	}
+	items := array(result["adUnitSizes"])
+	if items == nil {
+		items = []any{}
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "items": items, "nextPageToken": importString(result["nextPageToken"])})
+	return nil
+}
 func (a *app) listGamAccountSites(w http.ResponseWriter, r *http.Request) error {
 	account, err := a.gamAccount(pathID(r))
 	if err != nil {

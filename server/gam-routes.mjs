@@ -1,4 +1,4 @@
-import { adUnitResource, buildGamAdUnit, createGamAdUnit, findGamAdUnitByCode, findGamAdUnitByName, gamApiRequest, gamSiteResource, getGamSite, listGamAdUnits, listGamSites } from './gam-beta.mjs';
+import { adUnitResource, buildGamAdUnit, createGamAdUnit, findGamAdUnitByCode, findGamAdUnitByName, gamApiRequest, gamSiteResource, getGamSite, listGamAdUnits, listGamAdUnitSizes, listGamSites } from './gam-beta.mjs';
 import { canView } from './admin-permissions.mjs';
 
 function siteDomain(value) {
@@ -196,6 +196,16 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     if (statuses.length === 2) filters.push('status != ARCHIVED');
     const result = await listGamAdUnits(item.network_code, await tokenFor(item), { pageToken, pageSize: 100, filter: filters.join(' AND ') });
     res.json({ ok: true, items: (result.adUnits || []).map(unit => ({ name: unit.name, displayName: unit.displayName, adUnitCode: unit.adUnitCode, parentAdUnit: unit.parentAdUnit, status: unit.status, adUnitSizes: unit.adUnitSizes || [] })), nextPageToken: result.nextPageToken || '' });
+  }));
+
+  app.get('/api/admin/gam-accounts/:id/ad-unit-sizes', requireAuth, requireAdmin, route(async (req, res) => {
+    const item = account(req.params.id);
+    if (!item) return res.status(404).json({ ok: false, error: 'gam_account_not_found' });
+    if (item.status !== 'active') throw new Error('invalid_gam_account_status');
+    const result = await listGamAdUnitSizes(item.network_code, await tokenFor(item), {
+      pageToken: String(req.query.pageToken || ''), pageSize: 100
+    });
+    res.json({ ok: true, items: result.adUnitSizes || [], nextPageToken: result.nextPageToken || '' });
   }));
 
   app.get('/api/admin/gam-accounts/:id/sites', requireAuth, requireAdmin, route(async (req, res) => {

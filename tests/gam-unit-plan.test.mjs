@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { batchUnitTemplates, prepareGamUnitItems } from '../src/gam-unit-plan.mjs';
+import { batchUnitTemplates, gamBrowserSizes, prepareGamUnitItems } from '../src/gam-unit-plan.mjs';
+
+test('available browser sizes exclude mobile app sizes and duplicates', () => {
+  const items = [
+    { environmentType:'BROWSER', size:{ sizeType:'PIXEL', width:320, height:50 } },
+    { environmentType:'BROWSER', size:{ sizeType:'PIXEL', width:320, height:50 } },
+    { environmentType:'MOBILE_APP', size:{ sizeType:'PIXEL', width:300, height:250 } },
+    { environmentType:'BROWSER', size:{ sizeType:'FLUID' } }
+  ];
+  assert.deepEqual(gamBrowserSizes(items), ['320x50', 'fluid']);
+});
 
 const siteName = 'networks/23375144983/sites/1';
 const rows = () => batchUnitTemplates.map(({ type, bannerNo }) => ({

@@ -72,7 +72,7 @@ func (u user) allowedRequest(r *http.Request) bool {
 		return true
 	case path == "/api/dashboard" || path == "/api/dashboard/highlights":
 		views = []string{"dashboard"}
-	case path == "/api/reports" || path == "/api/reports/export" || path == "/api/admin/reports/accounts" || path == "/api/admin/reports/filter-options":
+	case path == "/api/reports" || path == "/api/reports/export" || path == "/api/admin/reports/accounts" || path == "/api/admin/reports/filter-options" || path == "/api/admin/reports/diagnostics":
 		views = []string{"reports"}
 	case strings.HasPrefix(path, "/api/admin/users") || path == "/api/admin/audit":
 		return false
@@ -87,7 +87,8 @@ func (u user) allowedRequest(r *http.Request) bool {
 	case strings.HasPrefix(path, "/api/admin/gam-accounts/") && method == http.MethodGet &&
 		(strings.HasSuffix(path, "/sites") || strings.HasSuffix(path, "/site-domains")):
 		views = []string{"gam", "links", "ad-units"}
-	case strings.HasPrefix(path, "/api/admin/gam-accounts/") && method == http.MethodGet && strings.HasSuffix(path, "/ad-units"):
+	case strings.HasPrefix(path, "/api/admin/gam-accounts/") && method == http.MethodGet &&
+		(strings.HasSuffix(path, "/ad-units") || strings.HasSuffix(path, "/ad-unit-sizes")):
 		views = []string{"gam", "ad-units"}
 	case strings.HasPrefix(path, "/api/admin/gam-accounts") || strings.HasPrefix(path, "/api/admin/gam-sync/"):
 		views = []string{"gam"}

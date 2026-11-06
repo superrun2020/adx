@@ -7,6 +7,16 @@ export function siteDomain(url) {
 }
 
 export const belongsToSite = (domain, base) => Boolean(domain && base && (domain === base || domain.endsWith('.' + base)));
+export function gamBrowserSizes(items = []) {
+  const special = { FLUID: 'fluid', INTERSTITIAL: 'out-of-page', NATIVE: 'native' };
+  return [...new Set(items.flatMap(item => {
+    if (item.environmentType && item.environmentType !== 'BROWSER') return [];
+    const size = item.size || {};
+    if (size.sizeType === 'PIXEL' && Number.isInteger(size.width) && Number.isInteger(size.height) && size.width > 0 && size.height > 0)
+      return [size.width + 'x' + size.height];
+    return special[size.sizeType] ? [special[size.sizeType]] : [];
+  }))];
+}
 export const batchUnitTemplates = Object.freeze([
   { type: 'banner', bannerNo: 1, suffix: 'banner1' },
   { type: 'banner', bannerNo: 2, suffix: 'banner2' },

@@ -140,6 +140,21 @@ CREATE TABLE IF NOT EXISTS regression_events (
   FOREIGN KEY(soap_account_id) REFERENCES soap_accounts(id) ON DELETE CASCADE
 );
 INSERT OR IGNORE INTO regression_settings(id) VALUES(1);
+CREATE TABLE IF NOT EXISTS gam_diagnostic_reports (
+  account_id INTEGER NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('device','browser','demand')),
+  network_code TEXT NOT NULL, report_name TEXT NOT NULL DEFAULT '', last_synced_at TEXT,
+  last_attempt_at TEXT, last_error TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY(account_id,kind), FOREIGN KEY(account_id) REFERENCES soap_accounts(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS gam_diagnostic_facts (
+  account_id INTEGER NOT NULL, network_code TEXT NOT NULL, report_date TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('device','browser','demand')), category TEXT NOT NULL,
+  impressions INTEGER NOT NULL DEFAULT 0, revenue REAL NOT NULL DEFAULT 0,
+  measurable_impressions INTEGER NOT NULL DEFAULT 0, viewable_impressions INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(account_id,network_code,report_date,kind,category),
+  FOREIGN KEY(account_id) REFERENCES soap_accounts(id) ON DELETE CASCADE
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_gam_diagnostic_lookup ON gam_diagnostic_facts(report_date,kind,account_id);
 CREATE INDEX IF NOT EXISTS idx_regression_runs_due ON regression_runs(soap_account_id,cadence,finished_at);
 CREATE INDEX IF NOT EXISTS idx_regression_runs_retention ON regression_runs(cadence,finished_at);
 CREATE INDEX IF NOT EXISTS idx_regression_events_filter ON regression_events(created_at,soap_account_id,cadence,domain);

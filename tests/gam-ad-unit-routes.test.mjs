@@ -74,6 +74,9 @@ before(async () => {
       { name: 'networks/' + network + '/sites/1', url: 'https://' + network + '.example.com', approvalStatus: 'APPROVED' }
     ] });
     if (path === 'sites/1') return response({ name: 'networks/' + network + '/sites/1', url: 'https://' + network + '.example.com' });
+    if (path === 'adUnitSizes') return response({ adUnitSizes: [
+      { name:'networks/' + network + '/adUnitSizes/1', environmentType:'BROWSER', size:{sizeType:'PIXEL',width:320,height:50} }
+    ] });
     if (path === 'adUnits/9') return response({ name: 'networks/' + network + '/adUnits/9' });
     if (path === 'adUnits' && options.method === 'POST') {
       const unit = JSON.parse(options.body);
@@ -128,6 +131,15 @@ test('site domains are drawn from the selected account only', async () => {
   assert.equal(second.status, 200);
   assert.deepEqual(first.body.items, ['news.123456.example.com', 'sports.123456.example.com']);
   assert.deepEqual(second.body.items, ['shop.999999.example.com']);
+});
+
+test('available ad unit sizes use the selected GAM network', async () => {
+  const first = await request('/api/admin/gam-accounts/1/ad-unit-sizes');
+  const second = await request('/api/admin/gam-accounts/2/ad-unit-sizes');
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  assert.equal(first.body.items[0].name, 'networks/123456/adUnitSizes/1');
+  assert.equal(second.body.items[0].name, 'networks/999999/adUnitSizes/1');
 });
 
 test('links-only administrator receives discovery fields without private account metadata', async () => {

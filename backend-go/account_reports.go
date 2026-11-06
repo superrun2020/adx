@@ -9,7 +9,7 @@ import (
 )
 
 func (a *app) reportFilterOptions(w http.ResponseWriter, r *http.Request) {
-	accounts, err := queryMaps(a.db, "SELECT account_key accountKey,name,advertiser FROM upstream_accounts ORDER BY name")
+	accounts, err := queryMaps(a.db, "SELECT account_key accountKey,name,advertiser,soap_account_id gamAccountId FROM upstream_accounts ORDER BY name")
 	if err != nil {
 		writeError(w, 500, "report_options_unavailable")
 		return

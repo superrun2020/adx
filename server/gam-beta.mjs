@@ -122,6 +122,11 @@ export function listGamSites(network, token, { pageToken = '', pageSize = 100 } 
   return gamApiRequest(code, token, 'networks/' + code + '/sites', { query: { pageSize, pageToken }, fetchImpl });
 }
 
+export function listGamAdUnitSizes(network, token, { pageToken = '', pageSize = 100 } = {}, fetchImpl) {
+  const code = networkCode(network);
+  return gamApiRequest(code, token, 'networks/' + code + '/adUnitSizes', { query: { pageSize, pageToken }, fetchImpl });
+}
+
 export function getGamSite(network, token, name, fetchImpl) {
   const resource = gamSiteResource(name, network);
   return gamApiRequest(network, token, resource, { fetchImpl });

@@ -3,6 +3,7 @@ import { Alert, AutoComplete, Button, Card, Checkbox, Drawer, Input, InputNumber
 import { BarChartOutlined, DownloadOutlined, FilterOutlined, ReloadOutlined } from '@ant-design/icons';
 import { readCached, rememberRead } from './readCache.js';
 import ReportDateFilter from './ReportDateFilter.jsx';
+import DiagnosticReport from './DiagnosticReport.jsx';
 
 const { Title, Text } = Typography;
 const dimensions = [
@@ -203,6 +204,7 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
           onChange:(next,size) => { setDailyPage(size === dailyPageSize ? next : 1); setDailyPageSize(size); }}}
         locale={{emptyText:'所选日期范围内没有已同步的数据'}}/>
     </Card>}
+    {admin && <DiagnosticReport range={range} accounts={options.accounts}/>}
     <Drawer title="更多筛选" open={filterOpen} onClose={() => setFilterOpen(false)} width={420}
       extra={<Button type="primary" onClick={search}>应用筛选</Button>}>
       <Space direction="vertical" style={{width:'100%'}} size={14}>
