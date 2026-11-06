@@ -146,6 +146,24 @@ test('administrator dashboard uses each channel share for settlement totals', as
   assert.equal(dashboard.body.summary.channelRevenue, 15);
 });
 
+test('REST dashboard settlement excludes legacy facts', async () => {
+  cookie = '';
+  const login = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: 'admin@example.test', password: 'AdminPass123!' }) });
+  cookie = login.response.headers.get('set-cookie').split(';')[0];
+  const channelId = (await request('/api/admin/channels')).body.items[0].id;
+  const db = new DatabaseSync(path.join(dir, 'test.sqlite'));
+  const insert = db.prepare('INSERT INTO revenue_facts(channel_id,report_date,url,domain,ad_unit,revenue,source_file) VALUES(?,?,?,?,?,?,?)');
+  insert.run(channelId, '2026-10-23', 'legacy.example.test', 'legacy.example.test', 'legacy-only', 100, 'manual:legacy');
+  insert.run(channelId, '2026-10-23', 'rest.example.test', 'rest.example.test', 'rest-only', 20, 'gam-rest:123456789:report');
+  db.close();
+  const refreshed = await request('/api/admin/ad-unit-domains', { method: 'POST', body: JSON.stringify({ adUnit: 'rest-only', domain: 'https://rest.example.test' }) });
+  assert.equal(refreshed.response.status, 201);
+  const result = await request('/api/dashboard?start=2026-10-23&end=2026-10-23&source=rest');
+  assert.equal(result.body.summary.revenue, 20);
+  assert.equal(result.body.summary.channelRevenue, 15);
+  assert.equal(result.body.topUrls[0].url, 'rest.example.test');
+});
+
 test('upstream account and ad unit rules calculate layered settlement and mapped domain', async () => {
   cookie = '';
   const login = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: 'admin@example.test', password: 'AdminPass123!' }) });

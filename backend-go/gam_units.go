@@ -215,7 +215,7 @@ func (a *app) unlockCreating(key string) {
 }
 func (a *app) createGamDirect(r *http.Request, input map[string]any, actor, ip, providedToken, providedRoot string) (map[string]any, error) {
 	account, err := a.gamAccount(fieldID(input, "gamAccountId"))
-	if err != nil || account["status"] != "active" {
+	if err != nil || account["status"] != "active" || intMap(account, "enabled") != 1 {
 		return nil, errors.New("invalid_gam_account_status")
 	}
 	network := importString(account["network_code"])
@@ -323,7 +323,7 @@ func (a *app) batchGamAdUnits(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 	account, err := a.gamAccount(fieldID(input, "gamAccountId"))
-	if err != nil || account["status"] != "active" {
+	if err != nil || account["status"] != "active" || intMap(account, "enabled") != 1 {
 		return errors.New("invalid_gam_account_status")
 	}
 	entries := array(input["items"])
@@ -437,7 +437,7 @@ func (a *app) retryGamAdUnit(w http.ResponseWriter, r *http.Request) error {
 		return errors.New("ad_unit_already_created")
 	}
 	account, err := a.gamAccount(intMap(row, "gam_account_id"))
-	if err != nil || account["status"] != "active" || account["network_code"] != row["network_code"] {
+	if err != nil || account["status"] != "active" || intMap(account, "enabled") != 1 || account["network_code"] != row["network_code"] {
 		return errors.New("invalid_gam_account_status")
 	}
 	network, code := importString(row["network_code"]), importString(row["ad_unit_code"])
@@ -513,7 +513,7 @@ func (a *app) publishManagedAdUnit(w http.ResponseWriter, r *http.Request) error
 		return nil
 	}
 	account, err := a.gamAccount(fieldID(input, "gamAccountId"))
-	if err != nil || account["status"] != "active" {
+	if err != nil || account["status"] != "active" || intMap(account, "enabled") != 1 {
 		return errors.New("invalid_gam_account_status")
 	}
 	if item["status"] == "created" || item["provider_id"] != nil && item["provider_id"] != "" {

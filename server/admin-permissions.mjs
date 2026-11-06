@@ -23,7 +23,7 @@ export function allowedAdminRequest(user, path, method) {
   if (user.role !== 'admin' || user.is_super_admin || user.isSuperAdmin) return true;
   let views;
   if (path === '/api/auth/me' || path === '/api/auth/logout') return true;
-  if (path === '/api/dashboard') views = ['dashboard'];
+  if (path === '/api/dashboard' || path === '/api/dashboard/highlights') views = ['dashboard'];
   else if (['/api/reports','/api/reports/export','/api/admin/reports/accounts'].includes(path)) views = ['reports'];
   else if (path.startsWith('/api/admin/users') || path === '/api/admin/audit') return false;
   else if (path.startsWith('/api/admin/report-api-keys')) views = ['report-keys'];

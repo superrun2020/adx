@@ -7,7 +7,7 @@ import { normalizeGamFactSite } from '../server/gam-sync.mjs';
 
 const db = new DatabaseSync(':memory:');
 db.exec(
-  'CREATE TABLE soap_accounts(id INTEGER PRIMARY KEY,name TEXT,network_code TEXT,status TEXT);' +
+  'CREATE TABLE soap_accounts(id INTEGER PRIMARY KEY,name TEXT,network_code TEXT,status TEXT,enabled INTEGER NOT NULL DEFAULT 1,account_email TEXT,advertiser_share_percent REAL,notes TEXT,rest_network_timezone TEXT DEFAULT "UTC");' +
   'CREATE TABLE revenue_facts(url TEXT,domain TEXT,ad_unit TEXT,source_file TEXT,raw_json TEXT DEFAULT \'{}\');' +
   'CREATE TABLE gam_ad_unit_creations(' +
   'id INTEGER PRIMARY KEY,gam_account_id INTEGER,network_code TEXT,site_name TEXT,site_url TEXT,domain TEXT,' +
@@ -17,6 +17,7 @@ db.exec(
 );
 db.prepare("INSERT INTO soap_accounts(id,name,network_code,status) VALUES(1,'A','123456','active')").run();
 db.prepare("INSERT INTO soap_accounts(id,name,network_code,status) VALUES(2,'B','999999','active')").run();
+db.prepare("UPDATE soap_accounts SET account_email='private@example.test',advertiser_share_percent=65,notes='private note' WHERE id=1").run();
 for (const [url, adUnit, source, reportSite = ''] of [
   ['news.123456.example.com', '261104-news.example.com-banner1', 'gam-rest:123456:2026-11-01_2026-11-01', 'https://news.123456.example.com'],
   ['sports.123456.example.com', '261104-sports.example.com-INT', 'gam-rest:123456:2026-11-01_2026-11-01', 'https://sports.123456.example.com'],
@@ -37,7 +38,7 @@ db.prepare("INSERT INTO gam_ad_unit_creations(gam_account_id,network_code,site_n
 
 const app = express();
 app.use(express.json());
-const auth = (req, _res, next) => { req.user = { email: 'admin@example.test' }; next(); };
+const auth = (req, _res, next) => { req.user = { email: 'admin@example.test', role: 'admin', sidebar_permissions: '["links"]' }; next(); };
 registerGamRoutes(app, { db, requireAuth: auth, requireAdmin: (_req, _res, next) => next(),
   tokenFor: async () => 'test-token', audit: () => {}, gamSync: {}, encryptCredential: () => '' });
 
@@ -123,6 +124,16 @@ test('site domains are drawn from the selected account only', async () => {
   assert.equal(second.status, 200);
   assert.deepEqual(first.body.items, ['news.123456.example.com', 'sports.123456.example.com']);
   assert.deepEqual(second.body.items, ['shop.999999.example.com']);
+});
+
+test('links-only administrator receives discovery fields without private account metadata', async () => {
+  const result = await request('/api/admin/gam-accounts');
+  assert.equal(result.status, 200);
+  assert.equal(result.body.items[0].networkCode, '999999');
+  const account = result.body.items.find(item => item.id === 1);
+  assert.equal(account.accountEmail, undefined);
+  assert.equal(account.advertiserSharePercent, undefined);
+  assert.equal(account.notes, undefined);
 });
 
 test('batch creates real REST resources, isolates networks, and reconciles a failed response', async () => {
@@ -218,4 +229,17 @@ test('batch creates real REST resources, isolates networks, and reconciles a fai
   assert.equal(retried.body.item.status, 'created');
   assert.equal(retried.body.item.domain, 'retry.123456.example.com');
   assert.equal(posts.length, postsBeforeRetry);
+});
+
+test('disabled account cannot create or retry GAM ad units', async () => {
+  db.prepare('UPDATE soap_accounts SET enabled=0 WHERE id=1').run();
+  try {
+    const before = posts.length;
+    const input = { gamAccountId: 1, siteName: 'networks/123456/sites/1', name: 'Blocked', code: 'blocked', size: '300x250' };
+    assert.equal((await request('/api/admin/gam-ad-units', 'POST', input)).status, 400);
+    assert.equal((await request('/api/admin/gam-ad-units/batch', 'POST', { gamAccountId: 1, items: [input] })).status, 400);
+    assert.equal(posts.length, before);
+  } finally {
+    db.prepare('UPDATE soap_accounts SET enabled=1 WHERE id=1').run();
+  }
 });

@@ -11,24 +11,24 @@ test('normalizes domains from GAM URLs and rejects invalid hosts', () => {
   assert.equal(hostname('localhost'), '');
 });
 
-test('shows GAM Sites and matching child sites under an existing main site', () => {
+test('shows only registered GAM Sites, including separately registered child sites', () => {
   const rows = catalogLinksForAccount(account, [
-    site('https://example.com', 'APPROVED')
+    site('https://example.com', 'APPROVED'), site('https://news.example.com', 'APPROVED', 2)
   ], ['news.example.com', 'unrelated.net']);
   assert.deepEqual(rows.map(row => [row.domain, row.type, row.approval]), [
     ['example.com', 'main', 'APPROVED'],
-    ['news.example.com', 'sub', 'PARENT_APPROVED']
+    ['news.example.com', 'sub', 'APPROVED']
   ]);
   assert.equal(rows[1].parentDomain, 'example.com');
   assert.equal(rows[1].networkCode, '123456');
-  assert.deepEqual(approvedLinksForAccount(account, [site('example.com', 'APPROVED')], ['news.example.com'])
+  assert.deepEqual(approvedLinksForAccount(account, [site('example.com', 'APPROVED')])
     .map(row => row.domain), ['example.com']);
 });
 
 test('excludes rejected Sites and their descendants even under an approved root', () => {
   const rows = approvedLinksForAccount(account, [
     site('example.com', 'APPROVED'), site('rejected.example.com', 'DISAPPROVED', 2)
-  ], ['rejected.example.com', 'sub.rejected.example.com', 'good.example.com']);
+  ]);
   assert.deepEqual(rows.map(row => row.domain), ['example.com']);
 });
 
@@ -47,15 +47,15 @@ test('catalog still shows draft Sites without labeling them approved', () => {
   assert.deepEqual(approvedLinksForAccount(account, [site('example.com', 'DRAFT')]), []);
 });
 
-test('unrelated report and creation domains are ignored without a GAM parent site', () => {
-  assert.deepEqual(catalogLinksForAccount(account, [], ['finance.nextvisiona.com']), []);
+test('report-only domains are ignored even beneath a registered GAM site', () => {
+  assert.deepEqual(catalogLinksForAccount(account, [site('example.com', 'APPROVED')], ['news.example.com'])
+    .map(row => row.domain), ['example.com']);
   assert.deepEqual(approvedLinksForAccount(account, [], ['finance.nextvisiona.com']), []);
 });
 
 test('a standalone GAM child site has no invented parent row', () => {
-  const rows = catalogLinksForAccount(account, [site('news.example.com', 'APPROVED')], ['m.news.example.com']);
+  const rows = catalogLinksForAccount(account, [site('news.example.com', 'APPROVED')]);
   assert.deepEqual(rows.map(row => [row.domain, row.type, row.parentDomain]), [
-    ['m.news.example.com', 'sub', 'news.example.com'],
     ['news.example.com', 'sub', '']
   ]);
 });

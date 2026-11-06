@@ -114,14 +114,20 @@ function DataImport() {
 
 function GamAccounts() {
   const [items,setItems] = useState([]), [channels,setChannels] = useState([]), [upstream,setUpstream] = useState([]), [runs,setRuns] = useState([]);
+  const [loadError,setLoadError] = useState('');
   const [filters,setFilters] = useState({});
   const [busy,setBusy] = useState(''), [editing,setEditing] = useState(null), [reportAccount,setReportAccount] = useState(null);
   const [file,setFile] = useState(null), [credentials,setCredentials] = useState(null), [preview,setPreview] = useState(null);
   const [dates,setDates] = useState(null);
   const [form] = Form.useForm(), [filterForm] = Form.useForm(), [reportForm] = Form.useForm();
   const load = async () => {
-    const [a,c,u,r] = await Promise.all([api('/api/admin/gam-accounts'),api('/api/admin/channels'),api('/api/admin/upstream-accounts'),api('/api/admin/gam-sync/runs')]);
-    setItems(a.items); setChannels(c.items); setUpstream(u.items); setRuns(r.items);
+    const [a,c,u,r] = await Promise.allSettled([api('/api/admin/gam-accounts'),api('/api/admin/channels'),api('/api/admin/upstream-accounts'),api('/api/admin/gam-sync/runs')]);
+    if (a.status === 'rejected') { setLoadError('账号列表加载失败：' + a.reason.message); throw a.reason; }
+    setItems(a.value.items || []);
+    if (c.status === 'fulfilled') setChannels(c.value.items || []);
+    if (u.status === 'fulfilled') setUpstream(u.value.items || []);
+    if (r.status === 'fulfilled') setRuns(r.value.items || []);
+    setLoadError([c,u,r].some(result => result.status === 'rejected') ? '部分辅助信息加载失败，账号列表仍可使用；请刷新重试。' : '');
   };
   useEffect(() => { load().catch(e => message.error(e.message)); }, []);
   const choose = async e => {
@@ -190,6 +196,7 @@ function GamAccounts() {
   };
   return <Space direction="vertical" size={16} className="page-stack">
     <div className="page-heading"><div><Title level={2}>账号管理</Title><Text type="secondary">管理 Ad Manager 账号、授权密钥与数据同步</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={openCreate}>新增账号</Button></div>
+    {loadError && <Alert type="warning" showIcon message={loadError} action={<Button size="small" onClick={() => load().catch(e => message.error(e.message))}>重试</Button>}/>}
     <Card className="account-filter-card"><Form form={filterForm} onFinish={setFilters} className="account-filter-form">
       <Form.Item name="search"><Input allowClear placeholder="账号名称 / 邮箱"/></Form.Item>
       <Form.Item name="advertiser"><Select allowClear placeholder="广告主" options={advertiserOptions}/></Form.Item>

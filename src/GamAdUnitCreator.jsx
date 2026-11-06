@@ -77,7 +77,7 @@ function UnitFields({ row, index, onChange, fixedSuffix }) {
 }
 
 export default function GamAdUnitCreator({ accounts = [] }) {
-  const activeAccounts = accounts.filter(item => item.status === 'active');
+  const activeAccounts = accounts.filter(item => item.status === 'active' && Boolean(item.enabled));
   const [filterAccountId, setFilterAccountId] = useState(null), [filterName, setFilterName] = useState('');
   const [filterStatuses, setFilterStatuses] = useState(['ACTIVE', 'INACTIVE']);
   const [queried, setQueried] = useState(false), [remoteUnits, setRemoteUnits] = useState([]);

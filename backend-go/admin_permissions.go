@@ -70,7 +70,7 @@ func (u user) allowedRequest(r *http.Request) bool {
 	switch {
 	case path == "/api/auth/me" || path == "/api/auth/logout":
 		return true
-	case path == "/api/dashboard":
+	case path == "/api/dashboard" || path == "/api/dashboard/highlights":
 		views = []string{"dashboard"}
 	case path == "/api/reports" || path == "/api/reports/export" || path == "/api/admin/reports/accounts":
 		views = []string{"reports"}

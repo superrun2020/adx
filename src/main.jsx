@@ -89,45 +89,42 @@ function MetricCards({ summary, admin }) {
   return <Row gutter={[16, 16]}>{items.map(([title, value, icon]) => <Col xs={24} sm={12} xl={6} key={title}><Card className="metric"><Statistic title={title} value={value} prefix={icon} /></Card></Col>)}</Row>;
 }
 
-function DashboardTopLinks({ user, currentPath, currentData, refreshKey }) {
-  const today = dayjs().format('YYYY-MM-DD');
-  const monthStart = dayjs().startOf('month').format('YYYY-MM-DD');
-  const todayPath = '/api/dashboard?start=' + today + '&end=' + today;
-  const monthPath = '/api/dashboard?start=' + monthStart + '&end=' + today;
-  const [snapshots, setSnapshots] = useState(() => ({
-    today: readCached(user, todayPath)?.data || null,
-    month: readCached(user, monthPath)?.data || null
-  }));
+function DashboardTopLinks({ user, refreshKey }) {
+  const path = '/api/dashboard/highlights';
+  const [data, setData] = useState(() => readCached(user, path)?.data || null);
   useEffect(() => {
     let active = true;
-    for (const [key, path] of [['today', todayPath], ['month', monthPath]]) {
-      if (path === currentPath) continue;
+    const load = () => {
       const cached = readCached(user, path);
-      if (cached) setSnapshots(previous => ({ ...previous, [key]: cached.data }));
-      if (cached && Date.now() - cached.savedAt < 10000 && refreshKey === 0) continue;
+      if (cached && active) setData(cached.data);
+      if (cached && Date.now() - cached.savedAt < 10000 && refreshKey === 0) return;
       api(path).then(result => {
         rememberRead(user, path, result);
-        if (active) setSnapshots(previous => ({ ...previous, [key]: result }));
+        if (active) setData(result);
       }).catch(error => { if (active) message.error('收益榜加载失败：' + error.message); });
-    }
-    return () => { active = false; };
-  }, [user.id, currentPath, todayPath, monthPath, refreshKey]);
-  const daily = currentPath === todayPath ? currentData : snapshots.today;
-  const monthly = currentPath === monthPath ? currentData : snapshots.month;
+    };
+    load();
+    const timer = window.setInterval(load, 15 * 60 * 1000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [user.id, refreshKey]);
   const columns = [
     { title:'排名', width:64, render:(_, row, index) => <span className={'rank-badge rank-' + (index + 1)}>{index + 1}</span> },
     { title:'链接', dataIndex:'url', ellipsis:true, render:value => <strong className="rank-url" title={value}>{value || '—'}</strong> },
     { title:'展示', dataIndex:'impressions', align:'right', width:110, render:number },
     { title:'收益', dataIndex:'revenue', align:'right', width:120, render:value => <strong>{money(value)}</strong> }
   ];
-  return <Row gutter={[16,16]}>
-    {[['当日链接收益 Top 10', daily], ['当月链接收益 Top 10', monthly]].map(([title, result]) => <Col xs={24} xl={12} key={title}><Card className="highlight-ranking" title={title} extra="USD"><Table size="small" rowKey="url" pagination={false} columns={columns} dataSource={result?.topUrls || []} scroll={{x:520}} locale={{emptyText:<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无已同步数据"/>}}/></Card></Col>)}
-  </Row>;
+  return <Space direction="vertical" size={8} style={{width:'100%'}}>
+    <Text type="secondary">当日、当月按各 Ad Manager 账号时区计算，仅统计 REST 同步数据。</Text>
+    {data?.timeZoneWarnings?.length > 0 && <Alert type="warning" showIcon message={'以下账号未配置有效时区，暂按 UTC 计算：' + data.timeZoneWarnings.join('、')}/>}
+    <Row gutter={[16,16]}>
+      {[['当日链接收益 Top 10', data?.daily], ['当月链接收益 Top 10', data?.monthly]].map(([title, rows]) => <Col xs={24} xl={12} key={title}><Card className="highlight-ranking" title={title} extra="USD"><Table size="small" rowKey="url" pagination={false} columns={columns} dataSource={rows || []} scroll={{x:520}} locale={{emptyText:<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无已同步数据"/>}}/></Card></Col>)}
+    </Row>
+  </Space>;
 }
 
 function Dashboard({ range, setRange, admin, user, initialDashboard }) {
   const rangeKey = range[0].format('YYYY-MM-DD') + ':' + range[1].format('YYYY-MM-DD');
-  const path = '/api/dashboard?start=' + range[0].format('YYYY-MM-DD') + '&end=' + range[1].format('YYYY-MM-DD');
+  const path = '/api/dashboard?start=' + range[0].format('YYYY-MM-DD') + '&end=' + range[1].format('YYYY-MM-DD') + '&source=rest';
   const saved = readCached(user, path);
   const freshInitial = initialDashboard?.key === rangeKey && initialDashboard.fresh;
   const [data, setData] = useState(initialDashboard?.key === rangeKey ? initialDashboard.data || saved?.data || null : saved?.data || null);
@@ -168,7 +165,7 @@ function Dashboard({ range, setRange, admin, user, initialDashboard }) {
     <div className="page-heading"><div><Title level={2}>经营总览</Title><Text type="secondary">收入、流量质量与渠道结算一屏掌握</Text>{showingCached && <Tag color="gold" style={{marginLeft:10}}>{loading ? '已显示缓存，正在更新' : '已显示缓存数据'}</Tag>}</div><Space wrap><ReportDateFilter value={range} onChange={setRange}/><Button icon={<ReloadOutlined />} loading={loading} onClick={() => { load(true); setHighlightRefresh(value => value + 1); }}>刷新</Button></Space></div>
     <Text type="secondary">所选区间：{range[0].format('YYYY-MM-DD')} 至 {range[1].format('YYYY-MM-DD')}</Text>
     <MetricCards summary={currentData?.summary} admin={admin} />
-    <DashboardTopLinks user={user} currentPath={path} currentData={currentData} refreshKey={highlightRefresh}/>
+    <DashboardTopLinks user={user} refreshKey={highlightRefresh}/>
     <Card title="所选区间每日收益趋势" extra={currentData?.lastSync ? '最近同步 ' + currentData.lastSync : '尚未同步'}><div className="chart"><PageErrorBoundary><RevenueChart data={currentData?.trend || []} formatMoney={money}/></PageErrorBoundary></div></Card>
   </Space>;
 }

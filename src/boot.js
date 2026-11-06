@@ -52,8 +52,8 @@ function retryAutomatically() {
   } catch { /* Manual retry remains available. */ }
 }
 
-const dashboardPath = '/api/dashboard?start=' + start + '&end=' + end;
-const todayPath = '/api/dashboard?start=' + end + '&end=' + end;
+const dashboardPath = '/api/dashboard?start=' + start + '&end=' + end + '&source=rest';
+const highlightsPath = '/api/dashboard/highlights';
 async function requestDashboard(path = dashboardPath) {
   const response = await fetch(path, { credentials: 'include' });
   const data = await response.json().catch(() => ({}));
@@ -81,7 +81,7 @@ async function openApp(user) {
     return;
   }
   const saved = readCached(user, dashboardPath);
-  const todaySaved = readCached(user, todayPath);
+  const highlightsSaved = readCached(user, highlightsPath);
   const initialDashboard = { key: dashboardKey, data: saved?.data };
   initialDashboard.promise = requestDashboard().then(data => {
     initialDashboard.data = data;
@@ -89,13 +89,13 @@ async function openApp(user) {
     rememberRead(user, dashboardPath, data);
     return { data };
   }, error => ({ error }));
-  const todayPromise = todayPath === dashboardPath ? initialDashboard.promise : requestDashboard(todayPath).then(data => {
-    rememberRead(user, todayPath, data);
+  const highlightsPromise = requestDashboard(highlightsPath).then(data => {
+    rememberRead(user, highlightsPath, data);
     return { data };
   }, error => ({ error }));
   try {
     const app = await prepareApp();
-    if (!saved?.data || !todaySaved?.data) await Promise.all([initialDashboard.promise, todayPromise]);
+    if (!saved?.data || !highlightsSaved?.data) await Promise.all([initialDashboard.promise, highlightsPromise]);
     await app.mountApp(user, 'dashboard', initialDashboard);
     mounted = true;
     // Warm secondary views only after the visible workspace is ready.

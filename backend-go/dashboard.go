@@ -76,6 +76,11 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_report_range")
 		return
 	}
+	restOnly := r.URL.Query().Get("source") == "rest"
+	if mode := r.URL.Query().Get("source"); mode != "" && mode != "all" && mode != "rest" {
+		writeError(w, 400, "invalid_report_source")
+		return
+	}
 	var scope int64
 	if u.Role == "channel" {
 		scope = u.ChannelID.Int64
@@ -90,9 +95,19 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 		args = append(args, scope)
 	}
 	ready := a.dailyReady.Load()
+	if restOnly {
+		ready = a.restDailyReady.Load()
+	}
+	if restOnly && !ready {
+		where += " AND source_file LIKE 'gam-rest:%'"
+	}
 	source := "revenue_facts"
 	if ready {
-		source = "dashboard_daily"
+		if restOnly {
+			source = "dashboard_rest_daily"
+		} else {
+			source = "dashboard_daily"
+		}
 	}
 	summary, err := firstMap(a.db, "SELECT COALESCE(SUM(requests),0) requests,COALESCE(SUM(matched_requests),0) matched,COALESCE(SUM(impressions),0) impressions,COALESCE(SUM(clicks),0) clicks,COALESCE(SUM(revenue),0) revenue FROM "+source+" WHERE "+where, args...)
 	if err != nil {
@@ -127,7 +142,7 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 	settledWhere := strings.ReplaceAll(strings.ReplaceAll(where, "report_date", "rf.report_date"), "channel_id", "rf.channel_id")
 	settledSQL := "SELECT COALESCE(SUM(" + settledRevenueSQL("rf") + "),0) value FROM revenue_facts rf WHERE " + settledWhere
 	if ready {
-		settledSQL = "SELECT COALESCE(SUM(settled_revenue),0) value FROM dashboard_daily WHERE " + where
+		settledSQL = "SELECT COALESCE(SUM(settled_revenue),0) value FROM " + source + " WHERE " + where
 	}
 	settled, err := firstMap(a.db, settledSQL, args...)
 	if err != nil {
@@ -136,7 +151,11 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	settlementMS := time.Since(started) - sumMS - trendMS - topMS
 	var lastSync sql.NullString
-	_ = a.db.QueryRowContext(r.Context(), "SELECT MAX(value) FROM (SELECT MAX(created_at) value FROM import_runs UNION ALL SELECT MAX(finished_at) value FROM soap_sync_runs WHERE status='success')").Scan(&lastSync)
+	lastSyncSQL := "SELECT MAX(value) FROM (SELECT MAX(created_at) value FROM import_runs UNION ALL SELECT MAX(finished_at) value FROM soap_sync_runs WHERE status='success')"
+	if restOnly {
+		lastSyncSQL = "SELECT MAX(finished_at) FROM soap_sync_runs WHERE status='success'"
+	}
+	_ = a.db.QueryRowContext(r.Context(), lastSyncSQL).Scan(&lastSync)
 	var last any
 	if lastSync.Valid {
 		last = lastSync.String
@@ -165,6 +184,10 @@ func (a *app) initializeDashboardDaily() error {
 	if err != nil {
 		return err
 	}
+	_, err = a.db.Exec("CREATE TABLE IF NOT EXISTS dashboard_rest_daily (report_date TEXT NOT NULL,channel_id INTEGER NOT NULL,network_code TEXT NOT NULL,domain TEXT NOT NULL,requests INTEGER NOT NULL,matched_requests INTEGER NOT NULL,impressions INTEGER NOT NULL,clicks INTEGER NOT NULL,revenue REAL NOT NULL,settled_revenue REAL NOT NULL,PRIMARY KEY(report_date,channel_id,network_code,domain)) WITHOUT ROWID")
+	if err != nil {
+		return err
+	}
 	var daily, facts int
 	if err := a.db.QueryRow("SELECT COUNT(*) FROM dashboard_daily").Scan(&daily); err != nil {
 		return err
@@ -173,13 +196,35 @@ func (a *app) initializeDashboardDaily() error {
 		return err
 	}
 	if daily == 0 && facts > 0 {
-		return a.refreshDashboardDaily(0, "", "")
+		if err := a.refreshDashboardDaily(0, "", ""); err != nil {
+			return err
+		}
+	} else {
+		a.dailyReady.Store(true)
 	}
-	a.dailyReady.Store(true)
+	var restDaily, restFacts int
+	if err := a.db.QueryRow("SELECT COUNT(*) FROM dashboard_rest_daily").Scan(&restDaily); err != nil {
+		return err
+	}
+	if err := a.db.QueryRow("SELECT COUNT(*) FROM revenue_facts WHERE source_file LIKE 'gam-rest:%'").Scan(&restFacts); err != nil {
+		return err
+	}
+	if restDaily == 0 && restFacts > 0 {
+		return a.refreshDashboardRestDaily(0, "", "")
+	}
+	a.restDailyReady.Store(true)
 	return nil
 }
 
 func (a *app) refreshDashboardDaily(channelID int64, start, end string) error {
+	return a.refreshDashboardTable("dashboard_daily", channelID, start, end, false)
+}
+
+func (a *app) refreshDashboardRestDaily(channelID int64, start, end string) error {
+	return a.refreshDashboardTable("dashboard_rest_daily", channelID, start, end, true)
+}
+
+func (a *app) refreshDashboardTable(table string, channelID int64, start, end string, restOnly bool) error {
 	scoped := channelID > 0 && validDate(start) && validDate(end)
 	tx, err := a.db.Begin()
 	if err != nil {
@@ -189,25 +234,45 @@ func (a *app) refreshDashboardDaily(channelID int64, start, end string) error {
 	where := ""
 	var args []any
 	if scoped {
-		if _, err = tx.Exec("DELETE FROM dashboard_daily WHERE channel_id=? AND report_date BETWEEN ? AND ?", channelID, start, end); err != nil {
+		if _, err = tx.Exec("DELETE FROM "+table+" WHERE channel_id=? AND report_date BETWEEN ? AND ?", channelID, start, end); err != nil {
 			return err
 		}
 		where = " WHERE rf.channel_id=? AND rf.report_date BETWEEN ? AND ?"
 		args = []any{channelID, start, end}
-	} else if _, err = tx.Exec("DELETE FROM dashboard_daily"); err != nil {
+	} else if _, err = tx.Exec("DELETE FROM " + table); err != nil {
 		return err
 	}
+	if restOnly {
+		if where == "" {
+			where = " WHERE rf.source_file LIKE 'gam-rest:%'"
+		} else {
+			where += " AND rf.source_file LIKE 'gam-rest:%'"
+		}
+	}
 	domain := mappedDomainSQL("rf")
-	query := "INSERT INTO dashboard_daily(report_date,channel_id,domain,requests,matched_requests,impressions,clicks,revenue,settled_revenue) " +
-		"SELECT rf.report_date,rf.channel_id," + domain + ",SUM(rf.requests),SUM(rf.matched_requests),SUM(rf.impressions),SUM(rf.clicks),SUM(rf.revenue),SUM(" + settledRevenueSQL("rf") + ") FROM revenue_facts rf" + where +
-		" GROUP BY rf.report_date,rf.channel_id," + domain
+	columns := "report_date,channel_id,domain,requests,matched_requests,impressions,clicks,revenue,settled_revenue"
+	group := "rf.report_date,rf.channel_id," + domain
+	selectFields := "rf.report_date,rf.channel_id," + domain
+	if restOnly {
+		network := "CASE WHEN instr(substr(rf.source_file,10),':')>0 THEN substr(rf.source_file,10,instr(substr(rf.source_file,10),':')-1) ELSE substr(rf.source_file,10) END"
+		columns = "report_date,channel_id,network_code,domain,requests,matched_requests,impressions,clicks,revenue,settled_revenue"
+		group = "rf.report_date,rf.channel_id," + network + "," + domain
+		selectFields = "rf.report_date,rf.channel_id," + network + "," + domain
+	}
+	query := "INSERT INTO " + table + "(" + columns + ") " +
+		"SELECT " + selectFields + ",SUM(rf.requests),SUM(rf.matched_requests),SUM(rf.impressions),SUM(rf.clicks),SUM(rf.revenue),SUM(" + settledRevenueSQL("rf") + ") FROM revenue_facts rf" + where +
+		" GROUP BY " + group
 	if _, err = tx.Exec(query, args...); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	a.dailyReady.Store(true)
+	if restOnly {
+		a.restDailyReady.Store(true)
+	} else {
+		a.dailyReady.Store(true)
+	}
 	return nil
 }
 
@@ -216,5 +281,9 @@ func (a *app) refreshDailySafely(channelID int64, start, end string) {
 	if err := a.refreshDashboardDaily(channelID, start, end); err != nil {
 		a.dailyReady.Store(false)
 		log.Printf("dashboard_daily_refresh_failed: %v", err)
+	}
+	if err := a.refreshDashboardRestDaily(channelID, start, end); err != nil {
+		a.restDailyReady.Store(false)
+		log.Printf("dashboard_rest_daily_refresh_failed: %v", err)
 	}
 }

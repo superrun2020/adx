@@ -19,25 +19,26 @@ import (
 )
 
 type app struct {
-	db            *sql.DB
-	root          string
-	adminHost     string
-	publisherHost string
-	production    bool
-	attempts      *loginLimiter
-	apiLimiter    *requestLimiter
-	gamMu         sync.Mutex
-	gamTokens     map[int64]*gamTokenEntry
-	gamBusy       map[int64]bool
-	gamCreating   map[string]bool
-	gamPublishing map[int64]bool
-	gamScheduled  bool
-	gamClient     *http.Client
-	reportCache   *responseCache
-	gamAPIBase    string
-	oauthURL      string
-	dailyReady    atomic.Bool
-	credentialKey [32]byte
+	db             *sql.DB
+	root           string
+	adminHost      string
+	publisherHost  string
+	production     bool
+	attempts       *loginLimiter
+	apiLimiter     *requestLimiter
+	gamMu          sync.Mutex
+	gamTokens      map[int64]*gamTokenEntry
+	gamBusy        map[int64]bool
+	gamCreating    map[string]bool
+	gamPublishing  map[int64]bool
+	gamScheduled   bool
+	gamClient      *http.Client
+	reportCache    *responseCache
+	gamAPIBase     string
+	oauthURL       string
+	dailyReady     atomic.Bool
+	restDailyReady atomic.Bool
+	credentialKey  [32]byte
 }
 
 func envDefault(key, fallback string) string {
@@ -114,6 +115,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /api/auth/me", a.auth("", a.me))
 	mux.HandleFunc("POST /api/auth/logout", a.auth("", a.logout))
 	mux.HandleFunc("GET /api/dashboard", a.auth("", a.cachedReport(a.dashboard)))
+	mux.HandleFunc("GET /api/dashboard/highlights", a.auth("", a.cachedReport(a.dashboardHighlights)))
 	mux.HandleFunc("GET /api/reports", a.auth("", a.cachedReport(a.reports)))
 	mux.HandleFunc("GET /api/reports/export", a.auth("", a.reportsExport))
 	mux.HandleFunc("GET /api/admin/reports/accounts", a.auth("admin", a.cachedReport(a.accountReport)))

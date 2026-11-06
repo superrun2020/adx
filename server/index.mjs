@@ -229,6 +229,7 @@ db.exec("CREATE TABLE IF NOT EXISTS upstream_share_versions (id INTEGER PRIMARY 
 db.exec("INSERT OR IGNORE INTO upstream_share_versions(upstream_account_id,share_percent,effective_from,created_by) SELECT id,100,'1900-01-01','migration' FROM upstream_accounts");
 db.exec("INSERT OR IGNORE INTO upstream_share_versions(upstream_account_id,share_percent,effective_from,created_by) SELECT id,share_percent,'2026-10-11','migration' FROM upstream_accounts");
 db.exec('CREATE TABLE IF NOT EXISTS dashboard_daily (report_date TEXT NOT NULL, channel_id INTEGER NOT NULL, domain TEXT NOT NULL, requests INTEGER NOT NULL, matched_requests INTEGER NOT NULL, impressions INTEGER NOT NULL, clicks INTEGER NOT NULL, revenue REAL NOT NULL, settled_revenue REAL NOT NULL, PRIMARY KEY(report_date,channel_id,domain)) WITHOUT ROWID');
+db.exec('CREATE TABLE IF NOT EXISTS dashboard_rest_daily (report_date TEXT NOT NULL, channel_id INTEGER NOT NULL, network_code TEXT NOT NULL, domain TEXT NOT NULL, requests INTEGER NOT NULL, matched_requests INTEGER NOT NULL, impressions INTEGER NOT NULL, clicks INTEGER NOT NULL, revenue REAL NOT NULL, settled_revenue REAL NOT NULL, PRIMARY KEY(report_date,channel_id,network_code,domain)) WITHOUT ROWID');
 
 const normalizeEmail = v => String(v || '').trim().toLowerCase();
 const sha256 = value => crypto.createHash('sha256').update(String(value)).digest('hex');
@@ -248,7 +249,7 @@ function audit(actor, action, targetType, targetId = '', detail = '', ip = '') {
   if (['upstream_account.create','upstream_account.update','ad_unit_domain.create','ad_unit_domain.update',
     'share_rule.create','domain_share_rule.create','domain_share_rule.update','channel.update'].includes(action)) {
     try { refreshDashboardDaily(); }
-    catch (error) { dashboardDailyReady = false; console.error('dashboard_daily_refresh_failed', error.message); }
+    catch (error) { dashboardDailyReady = dashboardRestDailyReady = false; console.error('dashboard_daily_refresh_failed', error.message); }
   }
 }
 
@@ -304,7 +305,7 @@ function domainFromAdUnit(value) { const raw=String(value||''); const labelled=r
 const gamSync = createGamSync({ db, transaction, tokenFor: gamTokenFor, normalizedDomain, audit,
   onFactsChanged: (channelId, start, end) => {
     try { refreshDashboardDaily(channelId, start, end); }
-    catch (error) { dashboardDailyReady = false; console.error('dashboard_daily_refresh_failed', error.message); }
+    catch (error) { dashboardDailyReady = dashboardRestDailyReady = false; console.error('dashboard_daily_refresh_failed', error.message); }
   } });
 
 const adminEmail = normalizeEmail(process.env.ADX_ADMIN_EMAIL);
@@ -454,41 +455,95 @@ const regression = registerRegressionMonitor(app, { db, requireAuth, requireAdmi
 const { runHourlyGamSync } = registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptCredential, tokenFor: gamTokenFor, gamSync, audit, onScheduledSync: regression.runForAccount });
 
 let dashboardDailyReady = true;
+let dashboardRestDailyReady = true;
 function refreshDashboardDaily(channelId, start, end) {
   const scoped = Number.isSafeInteger(channelId) && channelId > 0 && validDate(start) && validDate(end);
   const where = scoped ? 'WHERE rf.channel_id=? AND rf.report_date BETWEEN ? AND ?' : '';
   const params = scoped ? [channelId, start, end] : [];
   const domain = mappedDomainSql('rf');
   const settled = settledRevenueSql('rf');
-  const insertSql = 'INSERT INTO dashboard_daily(report_date,channel_id,domain,requests,matched_requests,impressions,clicks,revenue,settled_revenue) '
-    + 'SELECT rf.report_date,rf.channel_id,' + domain + ',SUM(rf.requests),SUM(rf.matched_requests),'
-    + 'SUM(rf.impressions),SUM(rf.clicks),SUM(rf.revenue),SUM(' + settled + ') '
-    + 'FROM revenue_facts rf ' + where + ' GROUP BY rf.report_date,rf.channel_id,' + domain;
   transaction(() => {
-    if (scoped) db.prepare('DELETE FROM dashboard_daily WHERE channel_id=? AND report_date BETWEEN ? AND ?').run(...params);
-    else db.exec('DELETE FROM dashboard_daily');
-    db.prepare(insertSql).run(...params);
+    for (const [table, restOnly] of [['dashboard_daily', false], ['dashboard_rest_daily', true]]) {
+      if (scoped) db.prepare('DELETE FROM ' + table + ' WHERE channel_id=? AND report_date BETWEEN ? AND ?').run(...params);
+      else db.exec('DELETE FROM ' + table);
+      const condition = where + (restOnly ? (where ? " AND " : "WHERE ") + "rf.source_file LIKE 'gam-rest:%'" : '');
+      const network = "CASE WHEN instr(substr(rf.source_file,10),':')>0 THEN substr(rf.source_file,10,instr(substr(rf.source_file,10),':')-1) ELSE substr(rf.source_file,10) END";
+      const columns = restOnly ? 'report_date,channel_id,network_code,domain,requests,matched_requests,impressions,clicks,revenue,settled_revenue'
+        : 'report_date,channel_id,domain,requests,matched_requests,impressions,clicks,revenue,settled_revenue';
+      const dimensions = 'rf.report_date,rf.channel_id,' + (restOnly ? network + ',' : '') + domain;
+      const insertSql = 'INSERT INTO ' + table + '(' + columns + ') '
+        + 'SELECT ' + dimensions + ',SUM(rf.requests),SUM(rf.matched_requests),'
+        + 'SUM(rf.impressions),SUM(rf.clicks),SUM(rf.revenue),SUM(' + settled + ') '
+        + 'FROM revenue_facts rf ' + condition + ' GROUP BY ' + dimensions;
+      db.prepare(insertSql).run(...params);
+    }
   });
   dashboardDailyReady = true;
+  dashboardRestDailyReady = true;
   invalidateReportCache();
 }
-if (!db.prepare('SELECT 1 FROM dashboard_daily LIMIT 1').get() &&
+if ((!db.prepare('SELECT 1 FROM dashboard_daily LIMIT 1').get() || !db.prepare('SELECT 1 FROM dashboard_rest_daily LIMIT 1').get()) &&
     db.prepare('SELECT 1 FROM revenue_facts LIMIT 1').get()) refreshDashboardDaily();
 
 app.get('/api/dashboard', requireAuth, cachedReport, (req, res) => {
   const scope = reportScope(req), { start, end } = range(req), where = whereScope(scope, start, end);
-  const source = dashboardDailyReady ? 'dashboard_daily' : 'revenue_facts';
+  if (req.query.source && !['rest','all'].includes(req.query.source)) return res.status(400).json({ok:false,error:'invalid_report_source'});
+  const restOnly = req.query.source === 'rest', ready = restOnly ? dashboardRestDailyReady : dashboardDailyReady;
+  if (restOnly && !ready) where.sql += " AND source_file LIKE 'gam-rest:%'";
+  const source = ready ? restOnly ? 'dashboard_rest_daily' : 'dashboard_daily' : 'revenue_facts';
   const sums = db.prepare('SELECT COALESCE(SUM(requests),0) requests,COALESCE(SUM(matched_requests),0) matched,COALESCE(SUM(impressions),0) impressions,COALESCE(SUM(clicks),0) clicks,COALESCE(SUM(revenue),0) revenue FROM ' + source + ' WHERE ' + where.sql).get(...where.params);
-  const factor = req.user.role === 'channel' ? (dashboardDailyReady ? 'settled_revenue' : settledRevenueSql('revenue_facts')) : 'revenue';
-  const domain = dashboardDailyReady ? 'domain' : mappedDomainSql('revenue_facts');
+  const factor = req.user.role === 'channel' ? (ready ? 'settled_revenue' : settledRevenueSql('revenue_facts')) : 'revenue';
+  const domain = ready ? 'domain' : mappedDomainSql('revenue_facts');
   const trend = db.prepare('SELECT report_date date,ROUND(SUM(' + factor + '),6) revenue FROM ' + source + ' WHERE ' + where.sql + ' GROUP BY report_date ORDER BY report_date').all(...where.params);
   const topUrls = db.prepare('SELECT ' + domain + ' url,SUM(impressions) impressions,ROUND(SUM(' + factor + '),6) revenue FROM ' + source + ' WHERE ' + where.sql + ' GROUP BY ' + domain + ' ORDER BY revenue DESC LIMIT 10').all(...where.params);
-  const lastSync = db.prepare("SELECT MAX(value) value FROM (SELECT MAX(created_at) value FROM import_runs UNION ALL SELECT MAX(finished_at) value FROM soap_sync_runs WHERE status='success')").get()?.value || null;
+  const lastSync = db.prepare(restOnly ? "SELECT MAX(finished_at) value FROM soap_sync_runs WHERE status='success'" : "SELECT MAX(value) value FROM (SELECT MAX(created_at) value FROM import_runs UNION ALL SELECT MAX(finished_at) value FROM soap_sync_runs WHERE status='success')").get()?.value || null;
   const settledWhere = where.sql.replaceAll('report_date', 'rf.report_date').replaceAll('channel_id', 'rf.channel_id');
-  const settledRevenue = dashboardDailyReady
-    ? db.prepare('SELECT COALESCE(SUM(settled_revenue),0) value FROM dashboard_daily WHERE ' + where.sql).get(...where.params).value
+  const settledRevenue = ready
+    ? db.prepare('SELECT COALESCE(SUM(settled_revenue),0) value FROM ' + source + ' WHERE ' + where.sql).get(...where.params).value
     : db.prepare('SELECT COALESCE(SUM(' + settledRevenueSql('rf') + '),0) value FROM revenue_facts rf WHERE ' + settledWhere).get(...where.params).value;
   res.json({ ok: true, summary: { ...sums, revenue: req.user.role === 'channel' ? settledRevenue : sums.revenue, channelRevenue: settledRevenue, matchRate: sums.requests ? sums.matched * 100 / sums.requests : 0 }, trend, topUrls, lastSync });
+});
+
+function dateInNetworkZone(now, zone) {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now);
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return values.year + '-' + values.month + '-' + values.day;
+}
+
+app.get('/api/dashboard/highlights', requireAuth, cachedReport, (req, res) => {
+  const scope = reportScope(req);
+  const accounts = db.prepare("SELECT name,network_code,rest_network_timezone FROM soap_accounts WHERE rest_report_name<>'' ORDER BY id").all();
+  const warnings = [], now = new Date();
+  const periods = accounts.map(account => {
+    let today, fallback = !account.rest_network_timezone;
+    try { today = dateInNetworkZone(now, account.rest_network_timezone || 'UTC'); }
+    catch { today = dateInNetworkZone(now, 'UTC'); fallback = true; }
+    if (fallback) warnings.push(account.name);
+    return { code: account.network_code, today, monthStart: today.slice(0, 7) + '-01' };
+  });
+  const top = monthly => {
+    if (!periods.length) return [];
+    const ready = dashboardRestDailyReady;
+    const conditions = [], params = [];
+    for (const period of periods) {
+      if (ready) {
+        conditions.push('(rd.network_code=? AND rd.report_date BETWEEN ? AND ?)');
+        params.push(period.code, monthly ? period.monthStart : period.today, period.today);
+      } else {
+        conditions.push('(rf.source_file>=? AND rf.source_file<? AND rf.report_date BETWEEN ? AND ?)');
+        const prefix = 'gam-rest:' + period.code;
+        params.push(prefix + ':', prefix + ';', monthly ? period.monthStart : period.today, period.today);
+      }
+    }
+    let where = '(' + conditions.join(' OR ') + ')';
+    const alias = ready ? 'rd' : 'rf';
+    if (scope) { where += ' AND ' + alias + '.channel_id=?'; params.push(scope); }
+    const factor = req.user.role === 'channel' ? (ready ? 'rd.settled_revenue' : settledRevenueSql('rf')) : alias + '.revenue';
+    const domain = ready ? 'rd.domain' : mappedDomainSql('rf');
+    const source = ready ? 'dashboard_rest_daily rd' : 'revenue_facts rf';
+    return db.prepare('SELECT ' + domain + ' url,SUM(' + alias + '.impressions) impressions,ROUND(SUM(' + factor + '),6) revenue FROM ' + source + ' WHERE ' + where + ' GROUP BY ' + domain + ' ORDER BY revenue DESC LIMIT 10').all(...params);
+  };
+  res.json({ ok: true, daily: top(false), monthly: top(true), timeZoneWarnings: warnings });
 });
 
 const reportDimensionMap = {
@@ -943,7 +998,7 @@ app.post('/api/admin/imports', requireAuth, requireAdmin, (req,res)=>{
     if (fact.reportDate > lastDate) lastDate = fact.reportDate;
   }
   try { refreshDashboardDaily(channelId, firstDate, lastDate); }
-  catch (error) { dashboardDailyReady = false; console.error('dashboard_daily_refresh_failed', error.message); }
+  catch (error) { dashboardDailyReady = dashboardRestDailyReady = false; console.error('dashboard_daily_refresh_failed', error.message); }
   audit(req.user.email,'data.import','import',runId,JSON.stringify({channelId,fileName,total:rows.length,accepted:valid.length,rejected}),req.ip); res.json({ok:true,runId,total:rows.length,accepted:valid.length,rejected});
 });
 app.get('/api/admin/imports', requireAuth, requireAdmin, (_req,res)=>res.json({ok:true,items:db.prepare(`SELECT r.id,r.source_file sourceFile,r.total_rows totalRows,r.accepted_rows acceptedRows,r.rejected_rows rejectedRows,r.status,r.created_at createdAt,c.name channelName FROM import_runs r JOIN channels c ON c.id=r.channel_id ORDER BY r.id DESC LIMIT 100`).all()}));

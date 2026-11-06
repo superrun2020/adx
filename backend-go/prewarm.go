@@ -27,7 +27,8 @@ func (a *app) warmDefaultReports() {
 		path    string
 		handler http.HandlerFunc
 	}{
-		{"/api/dashboard?start=" + monthStart + "&end=" + today, a.cachedReport(a.dashboard)},
+		{"/api/dashboard?start=" + monthStart + "&end=" + today + "&source=rest", a.cachedReport(a.dashboard)},
+		{"/api/dashboard/highlights", a.cachedReport(a.dashboardHighlights)},
 		{"/api/reports?start=" + monthStart + "&end=" + today + "&dimensions=url%2CadUnit%2CadUnitId&page=1&pageSize=50&source=rest", a.cachedReport(a.reports)},
 	}
 	warmed := 0

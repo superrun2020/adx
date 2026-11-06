@@ -1,4 +1,5 @@
 import { adUnitResource, buildGamAdUnit, createGamAdUnit, findGamAdUnitByCode, gamApiRequest, gamSiteResource, getGamSite, listGamAdUnits, listGamSites } from './gam-beta.mjs';
+import { canView } from './admin-permissions.mjs';
 
 function siteDomain(value) {
   const raw = String(value || '').trim();
@@ -40,6 +41,7 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     return Number.isSafeInteger(number) && number > 0 ? db.prepare('SELECT * FROM soap_accounts WHERE id=?').get(number) : null;
   };
   const accountColumns = 'id,name,network_code networkCode,account_email accountEmail,advertiser,bd,advertiser_share_percent advertiserSharePercent,operation_status operationStatus,enabled,notes,CASE WHEN length(credential_ciphertext)>0 THEN 1 ELSE 0 END credentialConfigured,status,last_test_at lastTestAt,last_test_status lastTestStatus,last_test_summary lastTestSummary,rest_report_name reportName,rest_channel_id channelId,rest_upstream_account_id upstreamAccountId,rest_money_divisor moneyDivisor,rest_sync_enabled syncEnabled,rest_last_preview_at lastPreviewAt,rest_last_preview_rows lastPreviewRows,rest_network_timezone timeZone,created_at createdAt';
+  const restrictedAccountColumns = 'id,name,network_code networkCode,status,enabled,rest_network_timezone timeZone';
   const publicAccount = id => db.prepare('SELECT ' + accountColumns + ' FROM soap_accounts WHERE id=?').get(id);
   const metadata = body => {
     const email = String(body?.accountEmail || '').trim();
@@ -62,8 +64,9 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     res.status(status).json({ ok: false, error: detail });
   });
 
-  app.get('/api/admin/gam-accounts', requireAuth, requireAdmin, (_req, res) => {
-    res.json({ ok: true, items: db.prepare('SELECT ' + accountColumns + ' FROM soap_accounts ORDER BY id DESC').all() });
+  app.get('/api/admin/gam-accounts', requireAuth, requireAdmin, (req, res) => {
+    const columns = canView(req.user, 'gam') ? accountColumns : restrictedAccountColumns;
+    res.json({ ok: true, items: db.prepare('SELECT ' + columns + ' FROM soap_accounts ORDER BY id DESC').all() });
   });
 
   app.post('/api/admin/gam-accounts', requireAuth, requireAdmin, route((req, res) => {
@@ -216,7 +219,7 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     const rows = db.prepare("WITH reported AS (SELECT url AS siteUrl, " +
       "CASE WHEN json_valid(raw_json) THEN json_extract(raw_json, '$.dimensionValues[2].stringValue') END AS reportSite " +
       "FROM revenue_facts WHERE source_file>=? AND source_file<? AND url<>'') " +
-      "SELECT DISTINCT siteUrl, reportSite FROM reported WHERE reportSite IS NOT NULL ORDER BY siteUrl LIMIT 5000")
+      "SELECT DISTINCT siteUrl, reportSite FROM reported WHERE reportSite IS NOT NULL ORDER BY siteUrl")
       .all(prefix + ':', prefix + ';');
     const items = [...new Set(rows.flatMap(row => {
       try {
@@ -252,7 +255,7 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
 
   const createDirect = async (input, actor, ip, context = {}) => {
     const gamAccount = account(input?.gamAccountId);
-    if (!gamAccount || gamAccount.status !== 'active') throw new Error('invalid_gam_account_status');
+    if (!gamAccount || gamAccount.status !== 'active' || gamAccount.enabled !== 1) throw new Error('invalid_gam_account_status');
     const network = gamAccount.network_code;
     const siteName = gamSiteResource(input?.siteName, network);
     const token = context.token || await tokenFor(gamAccount);
@@ -294,7 +297,7 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
   app.post('/api/admin/gam-ad-units/batch', requireAuth, requireAdmin, route(async (req, res) => {
     const inputs = req.body?.items;
     const gamAccount = account(req.body?.gamAccountId);
-    if (!gamAccount || gamAccount.status !== 'active') throw new Error('invalid_gam_account_status');
+    if (!gamAccount || gamAccount.status !== 'active' || gamAccount.enabled !== 1) throw new Error('invalid_gam_account_status');
     if (!Array.isArray(inputs) || !inputs.length || inputs.length > 100) throw new Error('invalid_ad_unit_batch');
     const token = await tokenFor(gamAccount);
     const root = await rootAdUnit(gamAccount.network_code, token);
@@ -331,7 +334,7 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     if (!row) return res.status(404).json({ ok: false, error: 'ad_unit_not_found' });
     if (row.status === 'created') throw new Error('ad_unit_already_created');
     const gamAccount = account(row.gam_account_id);
-    if (!gamAccount || gamAccount.status !== 'active' || gamAccount.network_code !== row.network_code)
+    if (!gamAccount || gamAccount.status !== 'active' || gamAccount.enabled !== 1 || gamAccount.network_code !== row.network_code)
       throw new Error('invalid_gam_account_status');
     if (creating.has(row.network_code + ':' + row.ad_unit_code.toLowerCase())) throw new Error('gam_account_busy');
     creating.add(row.network_code + ':' + row.ad_unit_code.toLowerCase());
@@ -362,7 +365,7 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     const gamAccountId = Number(req.body?.gamAccountId);
     const gamAccount = Number.isSafeInteger(gamAccountId) ? account(gamAccountId) : null;
     if (!item) return res.status(404).json({ ok: false, error: 'ad_unit_not_found' });
-    if (!gamAccount || gamAccount.status !== 'active') throw new Error('invalid_gam_account_status');
+    if (!gamAccount || gamAccount.status !== 'active' || gamAccount.enabled !== 1) throw new Error('invalid_gam_account_status');
     if (item.status === 'created' || item.provider_id) throw new Error('ad_unit_already_created');
     if (publishing.has(id)) throw new Error('gam_account_busy');
     publishing.add(id);

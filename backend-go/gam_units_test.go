@@ -27,6 +27,17 @@ func TestGamSelectedSiteDomain(t *testing.T) {
 	}
 }
 
+func TestDisabledGamAccountCannotCreateAdUnits(t *testing.T) {
+	a := testApp(t)
+	if _, err := a.db.Exec("INSERT INTO soap_accounts(id,name,network_code,credential_ciphertext,status,enabled,created_by) VALUES(1,'Disabled','123456','cipher','active',0,'test')"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := a.createGamDirect(nil, map[string]any{"gamAccountId": float64(1)}, "test", "", "", "")
+	if err == nil || err.Error() != "invalid_gam_account_status" {
+		t.Fatalf("disabled account create err=%v", err)
+	}
+}
+
 func TestGamSiteDomainsAreAccountScoped(t *testing.T) {
 	a := testApp(t)
 	statements := []string{

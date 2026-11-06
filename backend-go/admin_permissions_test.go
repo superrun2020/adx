@@ -1,9 +1,38 @@
 package main
 
 import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 )
+
+func TestLinksOnlyAdminReceivesRestrictedGamAccountFields(t *testing.T) {
+	a := testApp(t)
+	if _, err := a.db.Exec("INSERT INTO soap_accounts(name,network_code,credential_ciphertext,account_email,advertiser_share_percent,notes,status,created_by) VALUES('GAM','123456','cipher','private@example.test',65,'private note','active','test')"); err != nil {
+		t.Fatal(err)
+	}
+	u := user{Role: "admin", SidebarPermissions: sql.NullString{String: adminPermissionsJSON([]string{"links"}), Valid: true}}
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/gam-accounts", nil)
+	request = request.WithContext(context.WithValue(request.Context(), userKey{}, u))
+	response := httptest.NewRecorder()
+	a.gamAccounts(response, request)
+	var payload map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	items, ok := payload["items"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("payload=%s", response.Body.String())
+	}
+	account := items[0].(map[string]any)
+	if account["name"] != "GAM" || account["networkCode"] != "123456" || account["accountEmail"] != nil || account["advertiserSharePercent"] != nil || account["notes"] != nil {
+		t.Fatalf("restricted account fields=%v", account)
+	}
+}
 
 func TestLegacyAdminMigrationPrefersNamedActiveOwner(t *testing.T) {
 	t.Setenv("ADX_DB_PATH", filepath.Join(t.TempDir(), "adx.sqlite"))

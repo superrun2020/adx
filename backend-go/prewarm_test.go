@@ -18,7 +18,8 @@ func TestDefaultViewsArePrewarmedPerUser(t *testing.T) {
 		path    string
 		handler http.HandlerFunc
 	}{
-		{"/api/dashboard?end=" + end + "&start=" + start, a.cachedReport(a.dashboard)},
+		{"/api/dashboard?end=" + end + "&source=rest&start=" + start, a.cachedReport(a.dashboard)},
+		{"/api/dashboard/highlights", a.cachedReport(a.dashboardHighlights)},
 		{"/api/reports?source=rest&pageSize=50&page=1&dimensions=url%2CadUnit%2CadUnitId&end=" + end + "&start=" + start, a.cachedReport(a.reports)},
 	}
 	for _, view := range paths {

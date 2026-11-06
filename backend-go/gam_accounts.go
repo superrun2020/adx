@@ -65,7 +65,11 @@ func (a *app) publicGamAccount(id int64) map[string]any {
 	return account
 }
 func (a *app) gamAccounts(w http.ResponseWriter, r *http.Request) {
-	a.sendItems(w, "SELECT "+gamAccountColumns+" FROM soap_accounts ORDER BY id DESC")
+	columns := gamAccountColumns
+	if !currentUser(r).canView("gam") {
+		columns = "id,name,network_code networkCode,status,enabled,rest_network_timezone timeZone"
+	}
+	a.sendItems(w, "SELECT "+columns+" FROM soap_accounts ORDER BY id DESC")
 }
 func (a *app) createGamAccount(w http.ResponseWriter, r *http.Request) error {
 	input, ok := bodyMap(w, r)
@@ -392,7 +396,7 @@ func (a *app) gamAccountSiteDomains(w http.ResponseWriter, r *http.Request) erro
 			THEN json_extract(raw_json, '$.dimensionValues[2].stringValue') END AS reportSite
 		FROM revenue_facts WHERE source_file>=? AND source_file<? AND url<>''
 	) SELECT DISTINCT siteUrl, reportSite FROM reported
-	  WHERE reportSite IS NOT NULL ORDER BY siteUrl LIMIT 5000`
+	  WHERE reportSite IS NOT NULL ORDER BY siteUrl`
 	rows, err := queryMaps(a.db, query, prefix+":", prefix+";")
 	if err != nil {
 		return err
