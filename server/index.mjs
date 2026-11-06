@@ -9,6 +9,7 @@ import { registerGamRoutes } from './gam-routes.mjs';
 import { createGamSync } from './gam-sync.mjs';
 import { registerRegressionMonitor } from './regression-monitor.mjs';
 import { ensureAdUnitIdDimension } from './revenue-schema.mjs';
+import { adminSidebarViews, allowedAdminRequest, parseSidebarPermissions, sidebarPermissionsFor } from './admin-permissions.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -108,7 +109,8 @@ CREATE TABLE IF NOT EXISTS managed_ad_units (
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL UNIQUE COLLATE NOCASE, name TEXT NOT NULL,
   password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','channel')), channel_id INTEGER,
-  status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  status TEXT NOT NULL DEFAULT 'active', is_super_admin INTEGER NOT NULL DEFAULT 0, sidebar_permissions TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS sessions (
@@ -218,6 +220,9 @@ if (!db.prepare("SELECT 1 FROM pragma_table_info('soap_sync_runs') WHERE name='t
   db.exec("ALTER TABLE soap_sync_runs ADD COLUMN timings_json TEXT NOT NULL DEFAULT '{}'");
 }
 ensureAdUnitIdDimension(db);
+if (!db.prepare("SELECT 1 FROM pragma_table_info('users') WHERE name='is_super_admin'").get()) db.exec('ALTER TABLE users ADD COLUMN is_super_admin INTEGER NOT NULL DEFAULT 0');
+if (!db.prepare("SELECT 1 FROM pragma_table_info('users') WHERE name='sidebar_permissions'").get()) db.exec('ALTER TABLE users ADD COLUMN sidebar_permissions TEXT');
+db.exec("UPDATE users SET is_super_admin=1 WHERE id=(SELECT id FROM users WHERE role='admin' AND status='active' ORDER BY CASE WHEN lower(email)='eddyappcone.kr@gmail.com' THEN 0 ELSE 1 END,id LIMIT 1) AND NOT EXISTS (SELECT 1 FROM users WHERE role='admin' AND status='active' AND is_super_admin=1)");
 db.exec('CREATE INDEX IF NOT EXISTS idx_revenue_ad_unit_id ON revenue_facts(ad_unit_id, report_date)');
 db.exec("INSERT OR IGNORE INTO channel_share_versions(channel_id,share_percent,effective_from,created_by) SELECT id,share_percent,'1900-01-01','migration' FROM channels");
 db.exec("CREATE TABLE IF NOT EXISTS upstream_share_versions (id INTEGER PRIMARY KEY AUTOINCREMENT, upstream_account_id INTEGER NOT NULL, share_percent REAL NOT NULL CHECK(share_percent BETWEEN 0 AND 100), effective_from TEXT NOT NULL, created_by TEXT NOT NULL, UNIQUE(upstream_account_id,effective_from), FOREIGN KEY(upstream_account_id) REFERENCES upstream_accounts(id) ON DELETE CASCADE)");
@@ -308,7 +313,7 @@ const hasActiveAdmin = Boolean(db.prepare("SELECT 1 FROM users WHERE role='admin
 const bootstrapCredentialsValid = Boolean(adminEmail && adminPassword.length >= (production ? 12 : 10) && !/replace|change|example\.com/i.test(adminPassword));
 if (production && !hasActiveAdmin && !bootstrapCredentialsValid) throw new Error('production_admin_credentials_required');
 if (!hasActiveAdmin && bootstrapCredentialsValid) {
-  db.prepare("INSERT INTO users(email,name,password_hash,role,status) VALUES(?,?,?,'admin','active')")
+  db.prepare("INSERT INTO users(email,name,password_hash,role,status,is_super_admin) VALUES(?,?,?,'admin','active',1)")
     .run(adminEmail, '平台管理员', passwordHash(adminPassword));
 }
 
@@ -338,15 +343,17 @@ function loginRateLimited(req, email) {
 }
 function requireAuth(req, res, next) {
   const token = tokenFrom(req); if (!token) return res.status(401).json({ ok: false, error: 'unauthorized' });
-  const row = db.prepare(`SELECT u.id,u.email,u.name,u.role,u.channel_id,u.status,s.expires_at
+  const row = db.prepare(`SELECT u.id,u.email,u.name,u.role,u.channel_id,u.status,u.is_super_admin,u.sidebar_permissions,s.expires_at
     FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>datetime('now')`).get(sha256(token));
   if (!row || row.status !== 'active') return res.status(401).json({ ok: false, error: 'unauthorized' });
   const requiredRole = portalRole(req);
   if (requiredRole && row.role !== requiredRole) return res.status(403).json({ ok: false, error: 'wrong_portal' });
+  if (!allowedAdminRequest(row, req.path, req.method)) return res.status(403).json({ ok: false, error: 'permission_denied' });
   req.user = row; req.sessionToken = token; next();
 }
 function requireAdmin(req, res, next) { return req.user?.role === 'admin' ? next() : res.status(403).json({ ok: false, error: 'forbidden' }); }
-const userJson = row => ({ id: row.id, email: row.email, name: row.name, role: row.role, channelId: row.channel_id || null });
+const userJson = row => ({ id: row.id, email: row.email, name: row.name, role: row.role, channelId: row.channel_id || null,
+  isSuperAdmin: Boolean(row.is_super_admin), sidebarPermissions: sidebarPermissionsFor(row) });
 
 function reportApiKeyFrom(req) {
   return String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
@@ -832,12 +839,42 @@ app.get('/api/channel/api-secret', requireAuth, (req, res) => {
   res.json({ ok: true, secret: value.secret });
 });
 
-app.get('/api/admin/users', requireAuth, requireAdmin, (_req, res) => res.json({ ok: true, items: db.prepare("SELECT id,email,name,status,created_at createdAt FROM users WHERE role='admin' ORDER BY id").all() }));
+app.get('/api/admin/users', requireAuth, requireAdmin, (_req, res) => res.json({ ok: true, items: db.prepare("SELECT id,email,name,status,is_super_admin,sidebar_permissions,created_at createdAt FROM users WHERE role='admin' ORDER BY id").all().map(row => ({
+  id: row.id, email: row.email, name: row.name, status: row.status, createdAt: row.createdAt,
+  isSuperAdmin: Boolean(row.is_super_admin), sidebarPermissions: sidebarPermissionsFor({ ...row, role: 'admin' })
+})) }));
 app.post('/api/admin/users', requireAuth, requireAdmin, (req, res) => {
   const email = normalizeEmail(req.body?.email), name = String(req.body?.name || '').trim(), password = String(req.body?.password || '');
-  if (!email || !name || password.length < 10) return res.status(400).json({ ok: false, error: 'invalid_admin' });
-  try { const r = db.prepare("INSERT INTO users(email,name,password_hash,role,status) VALUES(?,?,?,'admin','active')").run(email,name,passwordHash(password)); audit(req.user.email,'admin.create','user',r.lastInsertRowid,email,req.ip); res.status(201).json({ok:true}); }
+  if (!email || !name || password.length < 10 || (req.body?.isSuperAdmin != null && typeof req.body.isSuperAdmin !== 'boolean')) return res.status(400).json({ ok: false, error: 'invalid_admin' });
+  let permissions;
+  try { permissions = parseSidebarPermissions(req.body?.sidebarPermissions ?? ['dashboard','reports']); }
+  catch { return res.status(400).json({ok:false,error:'invalid_sidebar_permissions'}); }
+  const superAdmin = req.body?.isSuperAdmin === true;
+  try { const r = db.prepare("INSERT INTO users(email,name,password_hash,role,status,is_super_admin,sidebar_permissions) VALUES(?,?,?,'admin','active',?,?)").run(email,name,passwordHash(password),superAdmin?1:0,superAdmin?null:JSON.stringify(permissions)); audit(req.user.email,'admin.create','user',r.lastInsertRowid,JSON.stringify({email,superAdmin,permissions}),req.ip); res.status(201).json({ok:true}); }
   catch { res.status(409).json({ok:false,error:'email_exists'}); }
+});
+app.put('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
+  const id=Number(req.params.id), target=db.prepare("SELECT id,email,name,status,is_super_admin,sidebar_permissions FROM users WHERE id=? AND role='admin'").get(id);
+  if (!target) return res.status(404).json({ok:false,error:'admin_not_found'});
+  const name=String(req.body?.name||'').trim(), status=String(req.body?.status||'');
+  if (!name || name.length>200 || !['active','disabled'].includes(status) || (req.body?.isSuperAdmin != null && typeof req.body.isSuperAdmin !== 'boolean')) return res.status(400).json({ok:false,error:'invalid_admin'});
+  const superAdmin=req.body?.isSuperAdmin ?? Boolean(target.is_super_admin);
+  let permissions;
+  try { permissions=parseSidebarPermissions(req.body?.sidebarPermissions ?? (target.sidebar_permissions ? JSON.parse(target.sidebar_permissions) : adminSidebarViews)); }
+  catch { return res.status(400).json({ok:false,error:'invalid_sidebar_permissions'}); }
+  if (id===req.user.id && (!superAdmin || status!=='active')) return res.status(400).json({ok:false,error:'cannot_remove_own_super_access'});
+  if (target.is_super_admin && (!superAdmin || status!=='active') && !db.prepare("SELECT 1 FROM users WHERE role='admin' AND is_super_admin=1 AND status='active' AND id<>?").get(id)) return res.status(400).json({ok:false,error:'last_super_admin'});
+  transaction(()=>{db.prepare('UPDATE users SET name=?,status=?,is_super_admin=?,sidebar_permissions=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(name,status,superAdmin?1:0,superAdmin?null:JSON.stringify(permissions),id);if(id!==req.user.id)db.prepare('DELETE FROM sessions WHERE user_id=?').run(id)});
+  audit(req.user.email,'admin.update','user',id,JSON.stringify({email:target.email,status,superAdmin,permissions}),req.ip);res.json({ok:true});
+});
+app.delete('/api/admin/users/:id', requireAuth, requireAdmin, (req, res) => {
+  const id=Number(req.params.id);
+  if (id===req.user.id) return res.status(400).json({ok:false,error:'cannot_delete_self'});
+  const target=db.prepare("SELECT email,is_super_admin FROM users WHERE id=? AND role='admin'").get(id);
+  if (!target) return res.status(404).json({ok:false,error:'admin_not_found'});
+  if (target.is_super_admin && !db.prepare("SELECT 1 FROM users WHERE role='admin' AND is_super_admin=1 AND status='active' AND id<>?").get(id)) return res.status(400).json({ok:false,error:'last_super_admin'});
+  db.prepare("DELETE FROM users WHERE id=? AND role='admin'").run(id);
+  audit(req.user.email,'admin.delete','user',id,target.email,req.ip);res.json({ok:true});
 });
 app.post('/api/admin/users/:id/password', requireAuth, requireAdmin, (req, res) => {
   const id=Number(req.params.id), password=String(req.body?.password||''); if(password.length<10)return res.status(400).json({ok:false,error:'weak_password'});

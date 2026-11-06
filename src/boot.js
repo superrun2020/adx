@@ -65,6 +65,21 @@ async function openApp(user) {
   if (mounted || opening) return;
   opening = true;
   button.disabled = true;
+  if (user.role === 'admin' && !user.isSuperAdmin &&
+      Array.isArray(user.sidebarPermissions) && !user.sidebarPermissions.includes('dashboard')) {
+    try {
+      const app = await prepareApp();
+      await app.mountApp(user, user.sidebarPermissions[0] || 'api', null);
+      mounted = true;
+    } catch (error) {
+      console.error('app_load_failed', error);
+      status.textContent = '后台资源加载失败，请刷新重试。';
+      retryButton.hidden = false;
+    } finally {
+      opening = false;
+    }
+    return;
+  }
   const saved = readCached(user, dashboardPath);
   const todaySaved = readCached(user, todayPath);
   const initialDashboard = { key: dashboardKey, data: saved?.data };

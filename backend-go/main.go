@@ -140,6 +140,8 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /api/channel/api-secret", a.auth("", a.channelAPISecret))
 	mux.HandleFunc("GET /api/admin/users", a.auth("admin", a.admins))
 	mux.HandleFunc("POST /api/admin/users", a.auth("admin", a.createAdmin))
+	mux.HandleFunc("PUT /api/admin/users/{id}", a.auth("admin", a.updateAdmin))
+	mux.HandleFunc("DELETE /api/admin/users/{id}", a.auth("admin", a.deleteAdmin))
 	mux.HandleFunc("POST /api/admin/users/{id}/password", a.auth("admin", a.resetAdminPassword))
 	mux.HandleFunc("GET /api/admin/audit", a.auth("admin", a.auditLogs))
 	mux.HandleFunc("POST /api/admin/imports/preview", a.auth("admin", a.previewImport))

@@ -20,13 +20,15 @@ import (
 )
 
 type user struct {
-	ID        int64
-	Email     string
-	Name      string
-	Role      string
-	ChannelID sql.NullInt64
-	Status    string
-	Token     string
+	ID                 int64
+	Email              string
+	Name               string
+	Role               string
+	ChannelID          sql.NullInt64
+	Status             string
+	IsSuperAdmin       bool
+	SidebarPermissions sql.NullString
+	Token              string
 }
 
 func (u user) public() map[string]any {
@@ -35,7 +37,8 @@ func (u user) public() map[string]any {
 		channel = u.ChannelID.Int64
 	}
 	return map[string]any{"id": u.ID, "email": u.Email, "name": u.Name,
-		"role": u.Role, "channelId": channel}
+		"role": u.Role, "channelId": channel, "isSuperAdmin": u.IsSuperAdmin,
+		"sidebarPermissions": u.sidebarViews()}
 }
 
 type userKey struct{}
@@ -153,9 +156,11 @@ func (a *app) auth(role string, next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		var u user
+		var super int64
 		err := a.db.QueryRowContext(r.Context(),
-			"SELECT u.id,u.email,u.name,u.role,u.channel_id,u.status FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>datetime('now')",
-			sha256Hex(token)).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.ChannelID, &u.Status)
+			"SELECT u.id,u.email,u.name,u.role,u.channel_id,u.status,u.is_super_admin,u.sidebar_permissions FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>datetime('now')",
+			sha256Hex(token)).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.ChannelID, &u.Status, &super, &u.SidebarPermissions)
+		u.IsSuperAdmin = super == 1
 		if err != nil || u.Status != "active" {
 			writeError(w, 401, "unauthorized")
 			return
@@ -166,6 +171,10 @@ func (a *app) auth(role string, next http.HandlerFunc) http.HandlerFunc {
 		}
 		if role != "" && u.Role != role {
 			writeError(w, 403, "forbidden")
+			return
+		}
+		if !u.allowedRequest(r) {
+			writeError(w, 403, "permission_denied")
 			return
 		}
 		u.Token = token
@@ -202,9 +211,11 @@ func (a *app) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var u user
+	var super int64
 	var encoded string
-	err := a.db.QueryRowContext(r.Context(), "SELECT id,email,name,role,channel_id,status,password_hash FROM users WHERE email=?", email).
-		Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.ChannelID, &u.Status, &encoded)
+	err := a.db.QueryRowContext(r.Context(), "SELECT id,email,name,role,channel_id,status,password_hash,is_super_admin,sidebar_permissions FROM users WHERE email=?", email).
+		Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.ChannelID, &u.Status, &encoded, &super, &u.SidebarPermissions)
+	u.IsSuperAdmin = super == 1
 	if err != nil || u.Status != "active" || (a.portalRole(r) != "" && a.portalRole(r) != u.Role) || !passwordMatches(input["password"], encoded) {
 		writeError(w, 401, "invalid_credentials")
 		return

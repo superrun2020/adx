@@ -12,7 +12,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { clearCachedUser, readCached, rememberRead } from './readCache.js';
-import { viewForPath, viewPaths } from './navigation.js';
+import { canVisit, viewForPath, viewPaths } from './navigation.js';
 import ReportDateFilter from './ReportDateFilter.jsx';
 import RevenueChart from './RevenueChart.jsx';
 import './styles.css';
@@ -175,19 +175,23 @@ function Dashboard({ range, setRange, admin, user, initialDashboard }) {
 
 function Shell({ user, onLogout, initialView = 'dashboard', initialDashboard, onReady }) {
   const admin=user.role==='admin';
-  const [view,setView]=useState(() => viewForPath(window.location.pathname, initialView, user.role)); const [collapsed,setCollapsed]=useState(false); const [range,setRange]=useState([dayjs().startOf('month'),dayjs()]);
+  const [view,setView]=useState(() => viewForPath(window.location.pathname, initialView, user)); const [collapsed,setCollapsed]=useState(false); const [range,setRange]=useState([dayjs().startOf('month'),dayjs()]);
   useEffect(() => { onReady(); }, []);
+  useEffect(() => {
+    if (window.location.pathname !== viewPaths[view]) window.history.replaceState({ view }, '', viewPaths[view]);
+  }, [view]);
   useEffect(() => {
     const onPopState = () => {
       const requested = viewForPath(window.location.pathname, 'dashboard', 'admin');
-      const next = viewForPath(window.location.pathname, 'dashboard', user.role);
+      const next = viewForPath(window.location.pathname, 'dashboard', user);
       if (requested !== next) window.history.replaceState({ view: next }, '', viewPaths[next]);
       setView(next);
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
-  }, [user.role]);
+  }, [user]);
   const navigate = key => {
+    if (!canVisit(user, key)) return;
     const path = viewPaths[key] || '/';
     if (window.location.pathname !== path) window.history.pushState({ view: key }, '', path);
     setView(key);
@@ -201,9 +205,9 @@ function Shell({ user, onLogout, initialView = 'dashboard', initialDashboard, on
     ]},
     ...(admin?[{type:'group',label:'平台管理',children:[{key:'channels',icon:<TeamOutlined/>,label:'渠道管理'},{key:'settlement',icon:<DollarOutlined/>,label:'结算配置'},{key:'admins',icon:<UserSwitchOutlined/>,label:'管理员账户'},{key:'report-keys',icon:<KeyOutlined/>,label:'账户日报 API Key'}]}]:[]),
     {type:'group',label:'开发能力',children:[{key:'api',icon:<ApiOutlined/>,label:'渠道 API'}]}
-  ],[admin]);
+  ].map(group=>({...group,children:group.children.filter(item=>canVisit(user,item.key))})).filter(group=>group.children.length),[user]);
   const body=view==='dashboard'?<Dashboard range={range} setRange={setRange} admin={admin} user={user} initialDashboard={initialDashboard}/>:view==='reports'?<Reports range={range} setRange={setRange} admin={admin} user={user}/>:view==='links'?<LinkManager/>:view==='regression'?<RegressionMonitor/>:<AdminPages view={view} user={user}/>;
-  return <Layout className="app-shell"><Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={238}><div className="side-brand"><span>AX</span>{!collapsed&&<div><b>{admin?'AdX Control':'AdX Publisher'}</b><small>{admin?'平台管理端':'渠道工作台'}</small></div>}</div><Menu theme="dark" mode="inline" selectedKeys={[view]} items={menu} onClick={({key})=>navigate(key)}/></Sider><Layout><Header><div><Text strong>{user.name||user.email}</Text><Tag color={admin?'blue':'cyan'}>{admin?'平台管理员':'渠道账号'}</Tag></div><Popconfirm title="确认退出登录？" onConfirm={onLogout}><Button icon={<LogoutOutlined/>}>退出</Button></Popconfirm></Header><Content><PageErrorBoundary key={view}><React.Suspense fallback={<Card className="route-loading">正在加载页面…</Card>}>{body}</React.Suspense></PageErrorBoundary></Content></Layout></Layout>;
+  return <Layout className="app-shell"><Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={238}><div className="side-brand"><span>AX</span>{!collapsed&&<div><b>{admin?'AdX Control':'AdX Publisher'}</b><small>{admin?'平台管理端':'渠道工作台'}</small></div>}</div><Menu theme="dark" mode="inline" selectedKeys={[view]} items={menu} onClick={({key})=>navigate(key)}/></Sider><Layout><Header><div><Text strong>{user.name||user.email}</Text><Tag color={admin?'blue':'cyan'}>{user.isSuperAdmin?'最高管理员':admin?'平台管理员':'渠道账号'}</Tag></div><Popconfirm title="确认退出登录？" onConfirm={onLogout}><Button icon={<LogoutOutlined/>}>退出</Button></Popconfirm></Header><Content><PageErrorBoundary key={view}><React.Suspense fallback={<Card className="route-loading">正在加载页面…</Card>}>{body}</React.Suspense></PageErrorBoundary></Content></Layout></Layout>;
 }
 
 function Root({ initialUser, initialView, initialDashboard, onReady }) {

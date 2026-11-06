@@ -91,6 +91,19 @@ test('successful login switches directly to the real application', async () => {
   assert.equal(page.calls.some(call => call.path.startsWith('/api/dashboard?')), true);
 });
 
+test('restricted login skips dashboard prefetch and opens the first granted menu', async () => {
+  let mountedView;
+  const page = start({ loginResponse: { ok: true, json: async () => ({ user: {
+    role: 'admin', isSuperAdmin: false, sidebarPermissions: ['reports']
+  } }) }, loadApp: async () => ({ mountApp: async (_user, view) => {
+    mountedView = view;
+    page.loginPage.hidden = true;
+  } }) });
+  await page.listeners.submit({ preventDefault() {} });
+  assert.equal(mountedView, 'reports');
+  assert.equal(page.calls.some(call => call.path.startsWith('/api/dashboard?')), false);
+});
+
 test('application load failure leaves a retryable login page', async () => {
   const page = start({ loginResponse: { ok: true, json: async () => ({ user: { role: 'admin' } }) },
     loadApp: async () => { throw new Error('asset_failed'); } });

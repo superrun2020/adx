@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Alert, Button, Card, Col, Collapse, DatePicker, Descriptions, Drawer, Dropdown, Empty, Form,
+  Alert, Button, Card, Checkbox, Col, Collapse, DatePicker, Descriptions, Drawer, Dropdown, Empty, Form,
   Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Statistic, Switch, Table,
   Tag, Typography, message
 } from 'antd';
@@ -11,6 +11,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import GamAdUnitCreator from './GamAdUnitCreator.jsx';
+import { adminPermissionOptions } from './navigation.js';
 
 const { Title, Text } = Typography;
 const money = value => '$' + Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -256,13 +257,40 @@ function GamAccounts() {
   </Space>;
 }
 
-function AdminUsers(){
-  const[items,setItems]=useState([]),[open,setOpen]=useState(false),[loading,setLoading]=useState(true);const[form]=Form.useForm();const load=async()=>{setLoading(true);try{setItems((await api('/api/admin/users')).items)}catch(e){message.error(`管理员账户加载失败：${e.message}`)}finally{setLoading(false)}};useEffect(()=>{load()},[]);
-  const save=async v=>{await api('/api/admin/users',{method:'POST',body:JSON.stringify(v)});message.success('管理员已创建');setOpen(false);load()};
-  const reset=r=>Modal.confirm({title:`重置 ${r.name} 的密码`,content:<Input.Password id="admin-new-password" placeholder="至少10位"/>,onOk:async()=>{const password=document.getElementById('admin-new-password')?.value||'';await api(`/api/admin/users/${r.id}/password`,{method:'POST',body:JSON.stringify({password})});message.success('密码已更新')}});
-  return <Space direction="vertical" size={16} className="page-stack"><div className="page-heading"><div><Title level={2}>管理员账户</Title><Text type="secondary">管理后台账号与渠道账号分开维护</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={()=>setOpen(true)}>新增管理员</Button></div><Card><Table loading={loading} rowKey="id" dataSource={items} columns={[{title:'姓名',dataIndex:'name'},{title:'邮箱',dataIndex:'email'},{title:'状态',dataIndex:'status'},{title:'创建时间',dataIndex:'createdAt'},{title:'操作',render:(_,r)=><Button type="link" onClick={()=>reset(r)}>重置密码</Button>}]}/></Card><Drawer title="新增管理员" open={open} onClose={()=>setOpen(false)} width={480}><Form form={form} layout="vertical" onFinish={save}><Form.Item name="name" label="姓名" rules={[{required:true}]}><Input/></Form.Item><Form.Item name="email" label="登录邮箱" rules={[{required:true,type:'email'}]}><Input/></Form.Item><Form.Item name="password" label="初始密码" rules={[{required:true,min:10}]}><Input.Password/></Form.Item><Button type="primary" htmlType="submit">创建账户</Button></Form></Drawer></Space>;
+function AdminUsers({user}){
+  const [items,setItems]=useState([]),[editing,setEditing]=useState(null),[open,setOpen]=useState(false),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false);
+  const [form]=Form.useForm();
+  const isSuper=Form.useWatch('isSuperAdmin',form);
+  const load=async()=>{setLoading(true);try{setItems((await api('/api/admin/users')).items||[])}catch(e){message.error('管理员账户加载失败：'+e.message)}finally{setLoading(false)}};
+  useEffect(()=>{load()},[]);
+  const openCreate=()=>{setEditing(null);form.resetFields();form.setFieldsValue({isSuperAdmin:false,sidebarPermissions:['dashboard','reports']});setOpen(true)};
+  const openEdit=item=>{setEditing(item);form.setFieldsValue({name:item.name,status:item.status,isSuperAdmin:item.isSuperAdmin,sidebarPermissions:item.sidebarPermissions});setOpen(true)};
+  const save=async values=>{setSaving(true);try{const path=editing?'/api/admin/users/'+editing.id:'/api/admin/users';await api(path,{method:editing?'PUT':'POST',body:JSON.stringify(values)});message.success(editing?'管理员权限已更新；该账号需重新登录':'管理员已创建');setOpen(false);await load()}catch(e){message.error('保存失败：'+e.message)}finally{setSaving(false)}};
+  const reset=item=>Modal.confirm({title:'重置 '+item.name+' 的密码',content:<Input.Password id="admin-new-password" placeholder="至少10位"/>,onOk:async()=>{const password=document.getElementById('admin-new-password')?.value||'';try{await api('/api/admin/users/'+item.id+'/password',{method:'POST',body:JSON.stringify({password})});message.success('密码已更新，旧会话已退出')}catch(e){message.error('重置失败：'+e.message);throw e}}});
+  const remove=async item=>{try{await api('/api/admin/users/'+item.id,{method:'DELETE'});message.success('管理员已删除，旧会话已失效');await load()}catch(e){message.error('删除失败：'+e.message)}};
+  return <Space direction="vertical" size={16} className="page-stack">
+    <div className="page-heading"><div><Title level={2}>管理员账户</Title><Text type="secondary">最高管理员可授权菜单并管理其他管理员；权限同时在后端接口校验</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={openCreate}>新增管理员</Button></div>
+    <Card><Table loading={loading} rowKey="id" dataSource={items} scroll={{x:1100}} columns={[
+      {title:'姓名',dataIndex:'name',width:130},{title:'邮箱',dataIndex:'email',width:250},
+      {title:'身份',dataIndex:'isSuperAdmin',width:130,render:value=><Tag color={value?'gold':'blue'}>{value?'最高管理员':'普通管理员'}</Tag>},
+      {title:'可访问菜单',dataIndex:'sidebarPermissions',render:(views,row)=>row.isSuperAdmin?'全部菜单':(views||[]).map(view=>adminPermissionOptions.find(option=>option.value===view)?.label||view).join('、')},
+      {title:'状态',dataIndex:'status',width:100,render:value=><Tag color={value==='active'?'green':'default'}>{value==='active'?'启用':'停用'}</Tag>},
+      {title:'操作',width:250,render:(_,item)=><Space><Button type="link" onClick={()=>openEdit(item)}>编辑授权</Button><Button type="link" onClick={()=>reset(item)}>重置密码</Button><Popconfirm title={'删除 '+item.email+'？'} description="账户及登录会话将立即删除" onConfirm={()=>remove(item)} disabled={item.id===user.id}><Button type="link" danger disabled={item.id===user.id}>删除</Button></Popconfirm></Space>}
+    ]}/></Card>
+    <Drawer title={editing?'编辑管理员授权':'新增管理员'} open={open} onClose={()=>setOpen(false)} width={560} destroyOnClose={false}>
+      <Form form={form} layout="vertical" onFinish={save}>
+        <Form.Item name="name" label="姓名" rules={[{required:true}]}><Input/></Form.Item>
+        {!editing&&<Form.Item name="email" label="登录邮箱" rules={[{required:true,type:'email'}]}><Input/></Form.Item>}
+        {!editing&&<Form.Item name="password" label="初始密码" rules={[{required:true,min:10}]}><Input.Password/></Form.Item>}
+        {editing&&<Form.Item name="status" label="账户状态" rules={[{required:true}]}><Select options={[{value:'active',label:'启用'},{value:'disabled',label:'停用'}]} disabled={editing.id===user.id}/></Form.Item>}
+        <Form.Item name="isSuperAdmin" label="最高管理员" valuePropName="checked"><Switch disabled={editing?.id===user.id} /></Form.Item>
+        <Alert type="info" showIcon style={{marginBottom:16}} message={isSuper?'最高管理员可访问全部菜单，并可管理和删除其他管理员':'勾选普通管理员可以访问的侧边栏菜单；管理员账户仅最高管理员可访问'}/>
+        <Form.Item name="sidebarPermissions" label="侧边栏访问权限" rules={[{type:'array',min:1,message:'请至少勾选一个菜单'}]}><Checkbox.Group options={adminPermissionOptions} disabled={Boolean(isSuper)} style={{display:'grid',gridTemplateColumns:'repeat(2,minmax(0,1fr))',gap:10}}/></Form.Item>
+        <Button type="primary" htmlType="submit" loading={saving}>{editing?'保存授权':'创建账户'}</Button>
+      </Form>
+    </Drawer>
+  </Space>;
 }
-
 function ReportApiKeys(){
   const [items,setItems]=useState([]),[loading,setLoading]=useState(true),[name,setName]=useState('账户日报查询');
   const load=async()=>{setLoading(true);try{setItems((await api('/api/admin/report-api-keys')).items||[])}catch(e){message.error(`日报 Key 加载失败：${e.message}`)}finally{setLoading(false)}};
@@ -333,7 +361,7 @@ export default function AdminPages({ view, user }) {
   if (view === 'gam') return <GamAccounts/>;
   if (view === 'settlement') return <SettlementConfigEditor/>;
   if (view === 'ad-units') return <AdUnitBuilder/>;
-  if (view === 'admins') return <AdminUsers/>;
+  if (view === 'admins') return <AdminUsers user={user}/>;
   if (view === 'report-keys') return <ReportApiKeys/>;
   return <ApiDocs user={user}/>;
 }

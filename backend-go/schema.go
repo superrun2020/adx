@@ -66,6 +66,7 @@ func (a *app) ensureSchema() error {
 		{"upstream_accounts", "soap_account_id", "INTEGER"}, {"upstream_accounts", "advertiser", "TEXT NOT NULL DEFAULT ''"}, {"upstream_accounts", "bd", "TEXT NOT NULL DEFAULT ''"},
 		{"revenue_facts", "raw_json", "TEXT NOT NULL DEFAULT '{}'"},
 		{"soap_sync_runs", "stage", "TEXT NOT NULL DEFAULT ''"}, {"soap_sync_runs", "timings_json", "TEXT NOT NULL DEFAULT '{}'"},
+		{"users", "is_super_admin", "INTEGER NOT NULL DEFAULT 0"}, {"users", "sidebar_permissions", "TEXT"},
 	} {
 		if err = a.ensureColumn(item.table, item.column, item.definition); err != nil {
 			return fmt.Errorf("schema_column_%s_%s: %w", item.table, item.column, err)
@@ -84,6 +85,9 @@ func (a *app) ensureSchema() error {
 		return err
 	}
 	if _, err = a.db.Exec("INSERT OR IGNORE INTO upstream_share_versions(upstream_account_id,share_percent,effective_from,created_by) SELECT id,share_percent,'2026-10-11','migration' FROM upstream_accounts"); err != nil {
+		return err
+	}
+	if _, err = a.db.Exec("UPDATE users SET is_super_admin=1 WHERE id=(SELECT id FROM users WHERE role='admin' AND status='active' ORDER BY CASE WHEN lower(email)='eddyappcone.kr@gmail.com' THEN 0 ELSE 1 END,id LIMIT 1) AND NOT EXISTS (SELECT 1 FROM users WHERE role='admin' AND status='active' AND is_super_admin=1)"); err != nil {
 		return err
 	}
 	return a.ensureAdmin()
@@ -114,6 +118,6 @@ func (a *app) ensureAdmin() error {
 	if err != nil {
 		return err
 	}
-	_, err = a.db.Exec("INSERT INTO users(email,name,password_hash,role,status) VALUES(?,?,?,'admin','active')", email, "平台管理员", hash)
+	_, err = a.db.Exec("INSERT INTO users(email,name,password_hash,role,status,is_super_admin) VALUES(?,?,?,'admin','active',1)", email, "平台管理员", hash)
 	return err
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 )
@@ -206,7 +207,19 @@ func (a *app) channelAPISecret(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) admins(w http.ResponseWriter, r *http.Request) {
-	a.sendItems(w, "SELECT id,email,name,status,created_at createdAt FROM users WHERE role='admin' ORDER BY id")
+	rows, err := queryMaps(a.db, "SELECT id,email,name,status,is_super_admin,sidebar_permissions,created_at createdAt FROM users WHERE role='admin' ORDER BY id")
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	for _, row := range rows {
+		u := user{Role: "admin", IsSuperAdmin: intMap(row, "is_super_admin") == 1, SidebarPermissions: adminPermissionsFromRow(row)}
+		row["isSuperAdmin"] = u.IsSuperAdmin
+		row["sidebarPermissions"] = u.sidebarViews()
+		delete(row, "is_super_admin")
+		delete(row, "sidebar_permissions")
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "items": rows})
 }
 func (a *app) createAdmin(w http.ResponseWriter, r *http.Request) {
 	input, ok := bodyMap(w, r)
@@ -218,18 +231,149 @@ func (a *app) createAdmin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_admin")
 		return
 	}
+	super := false
+	if value, exists := input["isSuperAdmin"]; exists {
+		var valid bool
+		super, valid = value.(bool)
+		if !valid {
+			writeError(w, 400, "invalid_admin")
+			return
+		}
+	}
+	views := []string{"dashboard", "reports"}
+	if value, exists := input["sidebarPermissions"]; exists {
+		var err error
+		views, err = validSidebarPermissions(value)
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+	}
 	hash, err := passwordHash(password)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
-	id, err := execID(a.db, "INSERT INTO users(email,name,password_hash,role,status) VALUES(?,?,?,'admin','active')", email, name, hash)
+	var permissions any = adminPermissionsJSON(views)
+	if super {
+		permissions = nil
+	}
+	id, err := execID(a.db, "INSERT INTO users(email,name,password_hash,role,status,is_super_admin,sidebar_permissions) VALUES(?,?,?,'admin','active',?,?)", email, name, hash, super, permissions)
 	if err != nil {
 		writeError(w, 409, "email_exists")
 		return
 	}
-	a.audit(currentUser(r).Email, "admin.create", "user", id, email, clientIP(r))
+	a.audit(currentUser(r).Email, "admin.create", "user", id, marshalText(map[string]any{"email": email, "super": super, "views": views}), clientIP(r))
 	writeJSON(w, 201, map[string]any{"ok": true})
+}
+func (a *app) updateAdmin(w http.ResponseWriter, r *http.Request) {
+	id := pathID(r)
+	target, found := a.one("SELECT id,email,name,status,is_super_admin,sidebar_permissions FROM users WHERE id=? AND role='admin'", id)
+	if !found {
+		writeError(w, 404, "admin_not_found")
+		return
+	}
+	input, ok := bodyMap(w, r)
+	if !ok {
+		return
+	}
+	name, status := fieldString(input, "name"), fieldString(input, "status")
+	if name == "" || len(name) > 200 || (status != "active" && status != "disabled") {
+		writeError(w, 400, "invalid_admin")
+		return
+	}
+	super := intMap(target, "is_super_admin") == 1
+	if value, exists := input["isSuperAdmin"]; exists {
+		var valid bool
+		super, valid = value.(bool)
+		if !valid {
+			writeError(w, 400, "invalid_admin")
+			return
+		}
+	}
+	views := []string{"dashboard", "reports"}
+	if value, exists := input["sidebarPermissions"]; exists {
+		var err error
+		views, err = validSidebarPermissions(value)
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+	} else if existing := adminPermissionsFromRow(target); existing.Valid {
+		_ = json.Unmarshal([]byte(existing.String), &views)
+	} else if !super {
+		views = append([]string(nil), adminSidebarViews...)
+	}
+	if id == currentUser(r).ID && (!super || status != "active") {
+		writeError(w, 400, "cannot_remove_own_super_access")
+		return
+	}
+	if intMap(target, "is_super_admin") == 1 && (!super || status != "active") &&
+		!a.exists("SELECT id FROM users WHERE role='admin' AND is_super_admin=1 AND status='active' AND id<>?", id) {
+		writeError(w, 400, "last_super_admin")
+		return
+	}
+	var permissions any = adminPermissionsJSON(views)
+	if super {
+		permissions = nil
+	}
+	tx, err := a.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec("UPDATE users SET name=?,status=?,is_super_admin=?,sidebar_permissions=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND (is_super_admin<>1 OR (?=1 AND ?='active') OR EXISTS (SELECT 1 FROM users keeper WHERE keeper.role='admin' AND keeper.is_super_admin=1 AND keeper.status='active' AND keeper.id<>users.id))", name, status, super, permissions, id, super, status)
+	if err == nil {
+		var changed int64
+		changed, err = result.RowsAffected()
+		if err == nil && changed == 0 {
+			writeError(w, 400, "last_super_admin")
+			return
+		}
+	}
+	if err == nil && id != currentUser(r).ID {
+		_, err = tx.Exec("DELETE FROM sessions WHERE user_id=?", id)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	a.audit(currentUser(r).Email, "admin.update", "user", id, marshalText(map[string]any{"email": target["email"], "super": super, "status": status, "views": views}), clientIP(r))
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+func (a *app) deleteAdmin(w http.ResponseWriter, r *http.Request) {
+	id := pathID(r)
+	if id == currentUser(r).ID {
+		writeError(w, 400, "cannot_delete_self")
+		return
+	}
+	target, found := a.one("SELECT email,is_super_admin FROM users WHERE id=? AND role='admin'", id)
+	if !found {
+		writeError(w, 404, "admin_not_found")
+		return
+	}
+	if intMap(target, "is_super_admin") == 1 && !a.exists("SELECT id FROM users WHERE role='admin' AND is_super_admin=1 AND status='active' AND id<>?", id) {
+		writeError(w, 400, "last_super_admin")
+		return
+	}
+	result, err := a.db.ExecContext(r.Context(), "DELETE FROM users WHERE id=? AND role='admin' AND (is_super_admin<>1 OR EXISTS (SELECT 1 FROM users keeper WHERE keeper.role='admin' AND keeper.is_super_admin=1 AND keeper.status='active' AND keeper.id<>users.id))", id)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	if changed, err := result.RowsAffected(); err == nil && changed == 0 {
+		writeError(w, 400, "last_super_admin")
+		return
+	} else if err != nil {
+		serverError(w, err)
+		return
+	}
+	a.audit(currentUser(r).Email, "admin.delete", "user", id, fieldString(target, "email"), clientIP(r))
+	writeJSON(w, 200, map[string]any{"ok": true})
 }
 func (a *app) resetAdminPassword(w http.ResponseWriter, r *http.Request) {
 	input, ok := bodyMap(w, r)
