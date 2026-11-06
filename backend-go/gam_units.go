@@ -160,11 +160,32 @@ func (a *app) findGamAdUnitByCode(r *http.Request, network, token, code string) 
 	}
 	for _, value := range array(result["adUnits"]) {
 		unit := object(value)
-		if unit["adUnitCode"] == code {
+		if strings.EqualFold(importString(unit["adUnitCode"]), code) {
 			return unit, nil
 		}
 	}
 	return nil, nil
+}
+func (a *app) findGamAdUnitByName(r *http.Request, network, token, name string) (map[string]any, error) {
+	encoded, _ := json.Marshal(name)
+	values := url.Values{"pageSize": {"100"}, "filter": {"displayName = " + string(encoded)}}
+	for {
+		result, err := a.gamRequest(r.Context(), network, token, "networks/"+network+"/adUnits", http.MethodGet, values, nil)
+		if err != nil {
+			return nil, err
+		}
+		for _, value := range array(result["adUnits"]) {
+			unit := object(value)
+			if strings.EqualFold(importString(unit["displayName"]), name) {
+				return unit, nil
+			}
+		}
+		next := importString(result["nextPageToken"])
+		if next == "" {
+			return nil, nil
+		}
+		values.Set("pageToken", next)
+	}
 }
 func (a *app) remoteCreateGamAdUnit(r *http.Request, network, token string, unit map[string]any) (map[string]any, error) {
 	return a.gamRequest(r.Context(), network, token, "networks/"+network+"/adUnits", http.MethodPost, nil, unit)
@@ -199,18 +220,24 @@ func (a *app) saveGamCreated(row, remote map[string]any, actor, ip string) (map[
 	a.audit(actor, "gam.ad_unit_create", "gam_ad_unit_creation", id, marshalText(map[string]any{"networkCode": network, "siteName": row["site_name"], "parentAdUnit": row["parent_ad_unit"], "remoteName": remote["name"]}), ip)
 	return a.publicGamCreation(id), nil
 }
-func (a *app) lockCreating(key string) bool {
+func (a *app) lockCreating(keys ...string) bool {
 	a.gamMu.Lock()
 	defer a.gamMu.Unlock()
-	if a.gamCreating[key] {
-		return false
+	for _, key := range keys {
+		if a.gamCreating[key] {
+			return false
+		}
 	}
-	a.gamCreating[key] = true
+	for _, key := range keys {
+		a.gamCreating[key] = true
+	}
 	return true
 }
-func (a *app) unlockCreating(key string) {
+func (a *app) unlockCreating(keys ...string) {
 	a.gamMu.Lock()
-	delete(a.gamCreating, key)
+	for _, key := range keys {
+		delete(a.gamCreating, key)
+	}
 	a.gamMu.Unlock()
 }
 func (a *app) createGamDirect(r *http.Request, input map[string]any, actor, ip, providedToken, providedRoot string) (map[string]any, error) {
@@ -245,13 +272,17 @@ func (a *app) createGamDirect(r *http.Request, input map[string]any, actor, ip, 
 		return nil, err
 	}
 	code := importString(unit["adUnitCode"])
-	key := network + ":" + strings.ToLower(code)
-	if !a.lockCreating(key) {
+	name := importString(unit["displayName"])
+	codeKey, nameKey := network+":code:"+strings.ToLower(code), network+":name:"+strings.ToLower(name)
+	if !a.lockCreating(codeKey, nameKey) {
 		return nil, errors.New("gam_account_busy")
 	}
-	defer a.unlockCreating(key)
-	if a.exists("SELECT id FROM gam_ad_unit_creations WHERE network_code=? AND ad_unit_code=?", network, code) {
+	defer a.unlockCreating(codeKey, nameKey)
+	if a.exists("SELECT id FROM gam_ad_unit_creations WHERE network_code=? AND lower(ad_unit_code)=lower(?)", network, code) {
 		return nil, errors.New("ad_unit_already_created")
+	}
+	if a.exists("SELECT id FROM gam_ad_unit_creations WHERE network_code=? AND lower(display_name)=lower(?)", network, name) {
+		return nil, errors.New("ad_unit_name_already_created")
 	}
 	site, err := a.getGamSite(r, network, token, siteName)
 	if err != nil {
@@ -264,8 +295,15 @@ func (a *app) createGamDirect(r *http.Request, input map[string]any, actor, ip, 
 	if err != nil {
 		return nil, err
 	}
-	if existing != nil && !sameRemoteGamUnit(existing, unit) {
+	if existing != nil {
 		return nil, errors.New("ad_unit_already_exists_in_gam")
+	}
+	existingName, err := a.findGamAdUnitByName(r, network, token, name)
+	if err != nil {
+		return nil, err
+	}
+	if existingName != nil {
+		return nil, errors.New("ad_unit_name_already_exists_in_gam")
 	}
 	domain, err := gamSelectedSiteDomain(importString(site["url"]), fieldString(input, "domain"))
 	if err != nil {
@@ -281,10 +319,7 @@ func (a *app) createGamDirect(r *http.Request, input map[string]any, actor, ip, 
 		return nil, err
 	}
 	row := a.gamCreation(id)
-	remote := existing
-	if remote == nil {
-		remote, err = a.remoteCreateGamAdUnit(r, network, token, unit)
-	}
+	remote, err := a.remoteCreateGamAdUnit(r, network, token, unit)
 	if err == nil {
 		var created map[string]any
 		created, err = a.saveGamCreated(row, remote, actor, ip)
@@ -340,7 +375,7 @@ func (a *app) batchGamAdUnits(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	prepared := make([]map[string]any, len(entries))
-	seen := make(map[string]bool)
+	seenCodes, seenNames := make(map[string]bool), make(map[string]bool)
 	for index, value := range entries {
 		item := object(value)
 		if item == nil {
@@ -358,10 +393,14 @@ func (a *app) batchGamAdUnits(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 		code := strings.ToLower(importString(unit["adUnitCode"]))
-		if seen[code] {
+		name := strings.ToLower(importString(unit["displayName"]))
+		if seenCodes[code] {
 			return errors.New("duplicate_ad_unit_code")
 		}
-		seen[code] = true
+		if seenNames[name] {
+			return errors.New("duplicate_ad_unit_name")
+		}
+		seenCodes[code], seenNames[name] = true, true
 		item["gamAccountId"] = intMap(account, "id")
 		prepared[index] = item
 	}
@@ -441,11 +480,12 @@ func (a *app) retryGamAdUnit(w http.ResponseWriter, r *http.Request) error {
 		return errors.New("invalid_gam_account_status")
 	}
 	network, code := importString(row["network_code"]), importString(row["ad_unit_code"])
-	key := network + ":" + strings.ToLower(code)
-	if !a.lockCreating(key) {
+	codeKey := network + ":code:" + strings.ToLower(code)
+	nameKey := network + ":name:" + strings.ToLower(importString(row["display_name"]))
+	if !a.lockCreating(codeKey, nameKey) {
 		return errors.New("gam_account_busy")
 	}
-	defer a.unlockCreating(key)
+	defer a.unlockCreating(codeKey, nameKey)
 	plan := map[string]any{"name": row["display_name"], "code": code, "sizes_json": row["sizes_json"], "description": row["description"], "adsense_enabled": row["adsense_enabled"], "target_window": row["target_window"]}
 	token, err := a.tokenFor(r.Context(), account)
 	if err != nil {

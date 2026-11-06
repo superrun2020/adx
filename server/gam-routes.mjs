@@ -1,4 +1,4 @@
-import { adUnitResource, buildGamAdUnit, createGamAdUnit, findGamAdUnitByCode, gamApiRequest, gamSiteResource, getGamSite, listGamAdUnits, listGamSites } from './gam-beta.mjs';
+import { adUnitResource, buildGamAdUnit, createGamAdUnit, findGamAdUnitByCode, findGamAdUnitByName, gamApiRequest, gamSiteResource, getGamSite, listGamAdUnits, listGamSites } from './gam-beta.mjs';
 import { canView } from './admin-permissions.mjs';
 
 function siteDomain(value) {
@@ -262,32 +262,36 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     const parentName = context.root || await rootAdUnit(network, token);
     if (input?.parentAdUnit && input.parentAdUnit !== parentName) throw new Error('invalid_nested_ad_unit');
     const adUnit = buildGamAdUnit(input, network, parentName);
-    const key = network + ':' + adUnit.adUnitCode.toLowerCase();
-    if (creating.has(key)) throw new Error('gam_account_busy');
-    creating.add(key);
+    const codeKey = network + ':code:' + adUnit.adUnitCode.toLowerCase();
+    const nameKey = network + ':name:' + adUnit.displayName.toLowerCase();
+    if (creating.has(codeKey) || creating.has(nameKey)) throw new Error('gam_account_busy');
+    creating.add(codeKey); creating.add(nameKey);
     try {
-      if (db.prepare('SELECT id FROM gam_ad_unit_creations WHERE network_code=? AND ad_unit_code=?').get(network, adUnit.adUnitCode))
+      if (db.prepare('SELECT id FROM gam_ad_unit_creations WHERE network_code=? AND lower(ad_unit_code)=lower(?)').get(network, adUnit.adUnitCode))
         throw new Error('ad_unit_already_created');
+      if (db.prepare('SELECT id FROM gam_ad_unit_creations WHERE network_code=? AND lower(display_name)=lower(?)').get(network, adUnit.displayName))
+        throw new Error('ad_unit_name_already_created');
       const sites = context.sites || new Map();
       let site = sites.get(siteName);
       if (!site) { site = getGamSite(network, token, siteName); sites.set(siteName, site); }
       site = await site;
       if (site.name !== siteName) throw new Error('invalid_gam_site');
       const existing = await findGamAdUnitByCode(network, token, adUnit.adUnitCode);
-      if (existing && !sameRemoteAdUnit(existing, adUnit)) throw new Error('ad_unit_already_exists_in_gam');
+      if (existing) throw new Error('ad_unit_already_exists_in_gam');
+      if (await findGamAdUnitByName(network, token, adUnit.displayName)) throw new Error('ad_unit_name_already_exists_in_gam');
       const domain = selectedSiteDomain(site.url, input?.domain);
       const inserted = db.prepare('INSERT INTO gam_ad_unit_creations(gam_account_id,network_code,site_name,site_url,domain,parent_ad_unit,display_name,ad_unit_code,sizes_json,description,adsense_enabled,target_window,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
         .run(gamAccount.id, network, siteName, site.url, domain, parentName, adUnit.displayName, adUnit.adUnitCode,
           JSON.stringify(input.sizes || [input.size]), adUnit.description || '', adUnit.appliedAdsenseEnabled ? 1 : 0,
           adUnit.appliedTargetWindow || '', actor);
       const row = creation(inserted.lastInsertRowid);
-      try { return saveCreated(row, existing || await createGamAdUnit(network, token, adUnit), actor, ip); }
+      try { return saveCreated(row, await createGamAdUnit(network, token, adUnit), actor, ip); }
       catch (error) {
         db.prepare("UPDATE gam_ad_unit_creations SET status='failed',publish_error=? WHERE id=?")
           .run(String(error.message).slice(0, 500), row.id);
         throw error;
       }
-    } finally { creating.delete(key); }
+    } finally { creating.delete(codeKey); creating.delete(nameKey); }
   };
 
   app.post('/api/admin/gam-ad-units', requireAuth, requireAdmin, route(async (req, res) => {
@@ -301,14 +305,16 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     if (!Array.isArray(inputs) || !inputs.length || inputs.length > 100) throw new Error('invalid_ad_unit_batch');
     const token = await tokenFor(gamAccount);
     const root = await rootAdUnit(gamAccount.network_code, token);
-    const seen = new Set();
+    const seenCodes = new Set(), seenNames = new Set();
     const prepared = inputs.map(input => {
       gamSiteResource(input?.siteName, gamAccount.network_code);
       if (input?.parentAdUnit && input.parentAdUnit !== root) throw new Error('invalid_nested_ad_unit');
       const adUnit = buildGamAdUnit(input, gamAccount.network_code, root);
       const code = adUnit.adUnitCode.toLowerCase();
-      if (seen.has(code)) throw new Error('duplicate_ad_unit_code');
-      seen.add(code);
+      const name = adUnit.displayName.toLowerCase();
+      if (seenCodes.has(code)) throw new Error('duplicate_ad_unit_code');
+      if (seenNames.has(name)) throw new Error('duplicate_ad_unit_name');
+      seenCodes.add(code); seenNames.add(name);
       return { ...input, gamAccountId: gamAccount.id, code: adUnit.adUnitCode };
     });
     const context = { token, root, sites: new Map() };
@@ -336,8 +342,10 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     const gamAccount = account(row.gam_account_id);
     if (!gamAccount || gamAccount.status !== 'active' || gamAccount.enabled !== 1 || gamAccount.network_code !== row.network_code)
       throw new Error('invalid_gam_account_status');
-    if (creating.has(row.network_code + ':' + row.ad_unit_code.toLowerCase())) throw new Error('gam_account_busy');
-    creating.add(row.network_code + ':' + row.ad_unit_code.toLowerCase());
+    const codeKey = row.network_code + ':code:' + row.ad_unit_code.toLowerCase();
+    const nameKey = row.network_code + ':name:' + row.display_name.toLowerCase();
+    if (creating.has(codeKey) || creating.has(nameKey)) throw new Error('gam_account_busy');
+    creating.add(codeKey); creating.add(nameKey);
     try {
       const token = await tokenFor(gamAccount);
       const root = await rootAdUnit(row.network_code, token);
@@ -357,7 +365,7 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
       db.prepare("UPDATE gam_ad_unit_creations SET status='failed',publish_error=? WHERE id=?")
         .run(String(error.message).slice(0, 500), row.id);
       throw error;
-    } finally { creating.delete(row.network_code + ':' + row.ad_unit_code.toLowerCase()); }
+    } finally { creating.delete(codeKey); creating.delete(nameKey); }
   }));
 
   app.post('/api/admin/ad-units/:id/publish', requireAuth, requireAdmin, route(async (req, res) => {

@@ -64,5 +64,12 @@ export function prepareGamUnitItems({ accountId, siteNames, sites, domainChoices
   }));
   if (items.some(item => item.code.length > 100 || item.name.length > 255))
     throw new Error('广告单元代码最多 100 字符，名称最多 255 字符');
+  const codes = new Set(), names = new Set();
+  for (const item of items) {
+    const code = item.code.toLowerCase(), name = item.name.toLowerCase();
+    if (codes.has(code)) throw new Error('本批次有重复的广告单元代码');
+    if (names.has(name)) throw new Error('本批次有重复的广告单元名称');
+    codes.add(code); names.add(name);
+  }
   return items;
 }

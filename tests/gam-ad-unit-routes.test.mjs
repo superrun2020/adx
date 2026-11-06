@@ -92,6 +92,10 @@ before(async () => {
         const code = JSON.parse(filter.slice('adUnitCode = '.length));
         return response({ adUnits: remoteUnits.has(network + '/' + code) ? [remoteUnits.get(network + '/' + code)] : [] });
       }
+      if (filter?.startsWith('displayName = ') && !filter.includes(' AND ')) {
+        const name = JSON.parse(filter.slice('displayName = '.length));
+        return response({ adUnits: [...remoteUnits.values()].filter(unit => unit.name.startsWith('networks/' + network + '/') && unit.displayName.toLowerCase() === name.toLowerCase()) });
+      }
       if (filter) {
         listFilters.push(filter);
         return response({ adUnits: [...remoteUnits.values()].filter(unit => unit.name.startsWith('networks/' + network + '/')) });
@@ -169,9 +173,27 @@ test('batch creates real REST resources, isolates networks, and reconciles a fai
   const postsBeforeLink = posts.length;
   const linked = await request('/api/admin/gam-ad-units', 'POST', { gamAccountId: 1,
     siteName: site, domain: 'news.123456.example.com', name: existingName, code: existingCode, size: '300x250' });
-  assert.equal(linked.status, 201);
-  assert.equal(linked.body.item.providerId, existingResource);
-  assert.equal(linked.body.item.status, 'created');
+  assert.equal(linked.status, 409);
+  assert.equal(linked.body.error, 'ad_unit_already_exists_in_gam');
+  assert.equal(posts.length, postsBeforeLink);
+  const remoteName = await request('/api/admin/gam-ad-units', 'POST', { gamAccountId: 1,
+    siteName: site, name: existingName.toLowerCase(), code: 'new-code-for-existing-name', size: '300x250' });
+  assert.equal(remoteName.status, 409);
+  assert.equal(remoteName.body.error, 'ad_unit_name_already_exists_in_gam');
+  const localName = await request('/api/admin/gam-ad-units', 'POST', { gamAccountId: 1,
+    siteName: site, name: 'banner a', code: 'new-code-for-local-name', size: '300x250' });
+  assert.equal(localName.status, 409);
+  assert.equal(localName.body.error, 'ad_unit_name_already_created');
+  const localCode = await request('/api/admin/gam-ad-units', 'POST', { gamAccountId: 1,
+    siteName: site, name: 'new name for local code', code: 'BANNER-A', size: '300x250' });
+  assert.equal(localCode.status, 409);
+  assert.equal(localCode.body.error, 'ad_unit_already_created');
+  const duplicateNamesInBatch = await request('/api/admin/gam-ad-units/batch', 'POST', { gamAccountId: 1, items: [
+    { siteName: site, name: 'Repeated', code: 'unique-one', size: '300x250' },
+    { siteName: site, name: 'repeated', code: 'unique-two', size: '300x250' }
+  ] });
+  assert.equal(duplicateNamesInBatch.status, 400);
+  assert.equal(duplicateNamesInBatch.body.error, 'duplicate_ad_unit_name');
   assert.equal(posts.length, postsBeforeLink);
   remoteUnits.set('123456/conflicting-in-gam', { name: 'networks/123456/adUnits/1000',
     parentAdUnit: parent, displayName: 'Different name', adUnitCode: 'conflicting-in-gam',

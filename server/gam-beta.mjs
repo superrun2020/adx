@@ -134,7 +134,18 @@ export function getGamAdUnit(network, token, name, fetchImpl) {
 
 export async function findGamAdUnitByCode(network, token, code, fetchImpl) {
   const result = await listGamAdUnits(network, token, { filter: 'adUnitCode = ' + JSON.stringify(String(code)), pageSize: 100 }, fetchImpl);
-  return (result.adUnits || []).find(unit => unit.adUnitCode === code) || null;
+  return (result.adUnits || []).find(unit => String(unit.adUnitCode || '').toLowerCase() === String(code).toLowerCase()) || null;
+}
+
+export async function findGamAdUnitByName(network, token, name, fetchImpl) {
+  let pageToken = '';
+  do {
+    const result = await listGamAdUnits(network, token, { filter: 'displayName = ' + JSON.stringify(String(name)), pageSize: 100, pageToken }, fetchImpl);
+    const existing = (result.adUnits || []).find(unit => String(unit.displayName || '').toLowerCase() === name.toLowerCase());
+    if (existing) return existing;
+    pageToken = result.nextPageToken || '';
+  } while (pageToken);
+  return null;
 }
 
 export function createGamAdUnit(network, token, adUnit, fetchImpl) {

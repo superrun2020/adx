@@ -18,11 +18,11 @@ func TestCreateGamDirectExistingRemoteUnit(t *testing.T) {
 	const remoteName = "networks/123456/adUnits/42"
 
 	for _, tc := range []struct {
-		name, remoteDisplayName string
-		wantCreated             bool
+		name, remoteDisplayName, remoteCode, wantError string
 	}{
-		{name: "matching remote unit is linked", remoteDisplayName: "news.example.com-banner1", wantCreated: true},
-		{name: "conflicting remote unit is rejected", remoteDisplayName: "different placement", wantCreated: false},
+		{name: "matching remote unit is rejected", remoteDisplayName: "news.example.com-banner1", remoteCode: "news.example.com-banner1", wantError: "ad_unit_already_exists_in_gam"},
+		{name: "conflicting remote code is rejected", remoteDisplayName: "different placement", remoteCode: "news.example.com-banner1", wantError: "ad_unit_already_exists_in_gam"},
+		{name: "matching remote name is rejected", remoteDisplayName: "news.example.com-banner1", remoteCode: "different-code", wantError: "ad_unit_name_already_exists_in_gam"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("ADX_DB_PATH", filepath.Join(t.TempDir(), "adx.sqlite"))
@@ -55,7 +55,7 @@ func TestCreateGamDirectExistingRemoteUnit(t *testing.T) {
 				case "/v1/networks/" + network + "/adUnits":
 					_ = json.NewEncoder(w).Encode(map[string]any{"adUnits": []any{map[string]any{
 						"name": remoteName, "parentAdUnit": root,
-						"displayName": tc.remoteDisplayName, "adUnitCode": "news.example.com-banner1",
+						"displayName": tc.remoteDisplayName, "adUnitCode": tc.remoteCode,
 						"adUnitSizes": []any{map[string]any{
 							"size":            map[string]any{"width": 320, "height": 50, "sizeType": "PIXEL"},
 							"environmentType": "BROWSER",
@@ -77,23 +77,15 @@ func TestCreateGamDirectExistingRemoteUnit(t *testing.T) {
 			}
 			r := httptest.NewRequest(http.MethodPost, "http://localhost/api/admin/gam-ad-units", nil)
 			item, err := a.createGamDirect(r, input, "admin@example.test", "127.0.0.1", "test-token", root)
-			if tc.wantCreated {
-				if err != nil || item["status"] != "created" || item["providerId"] != remoteName {
-					t.Fatalf("matching remote unit should link locally: item=%v err=%v", item, err)
-				}
-			} else if err == nil {
-				t.Fatalf("conflicting remote unit should fail: item=%v", item)
+			if err == nil || err.Error() != tc.wantError {
+				t.Fatalf("existing remote unit should fail: item=%v err=%v", item, err)
 			}
 			var count int
 			if err := a.db.QueryRow("SELECT COUNT(*) FROM gam_ad_unit_creations").Scan(&count); err != nil {
 				t.Fatal(err)
 			}
-			wantCount := 0
-			if tc.wantCreated {
-				wantCount = 1
-			}
-			if count != wantCount || postCount != 0 {
-				t.Fatalf("local rows=%d, remote POSTs=%d; want rows=%d, POSTs=0", count, postCount, wantCount)
+			if count != 0 || postCount != 0 {
+				t.Fatalf("local rows=%d, remote POSTs=%d; want neither", count, postCount)
 			}
 		})
 	}
@@ -177,5 +169,11 @@ func TestBatchGamAdUnitsAcceptsInternalAccountID(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("created records=%d, want 1", count)
+	}
+	duplicateBody := `{"gamAccountId":1,"items":[{"siteName":"` + siteName + `","name":"Repeated","code":"unique-one","sizes":["320x50"]},{"siteName":"` + siteName + `","name":"repeated","code":"unique-two","sizes":["320x50"]}]}`
+	duplicateRequest := httptest.NewRequest(http.MethodPost, "/api/admin/gam-ad-units/batch", strings.NewReader(duplicateBody))
+	duplicateRequest = duplicateRequest.WithContext(context.WithValue(duplicateRequest.Context(), userKey{}, user{Email: "admin@example.test"}))
+	if err := a.batchGamAdUnits(httptest.NewRecorder(), duplicateRequest); err == nil || err.Error() != "duplicate_ad_unit_name" {
+		t.Fatalf("duplicate batch name err=%v", err)
 	}
 }

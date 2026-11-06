@@ -19,6 +19,14 @@ const newRow = (type = 'banner', bannerNo = 1) => ({
   id: Math.random().toString(36).slice(2), type, bannerNo, sizes: [...typeFor(type).sizes], name: '', code: ''
 });
 const initialBatch = () => batchUnitTemplates.map(template => newRow(template.type, template.bannerNo));
+const duplicateMessage = error => ({
+  ad_unit_already_created: '当前 GAM 账号已有相同代码的创建记录',
+  ad_unit_name_already_created: '当前 GAM 账号已有相同名称的创建记录',
+  ad_unit_already_exists_in_gam: '当前 GAM 账号已有相同代码的广告单元',
+  ad_unit_name_already_exists_in_gam: '当前 GAM 账号已有相同名称的广告单元',
+  duplicate_ad_unit_code: '本批次有重复的广告单元代码',
+  duplicate_ad_unit_name: '本批次有重复的广告单元名称'
+})[error] || error;
 
 async function api(path, options = {}) {
   const response = await fetch(path, { credentials: 'include', ...options,
@@ -170,7 +178,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
       if (failures) message.warning('已创建 ' + (rows.length - failures) + ' 个，失败 ' + failures + ' 个；请查看下方逐条错误');
       else message.success('已同步 ' + rows.length + ' 个广告单元到 GAM');
     } catch (error) {
-      message.error('创建失败：' + error.message + '；如已生成失败记录，请在同步记录中重试');
+      message.error('创建失败：' + duplicateMessage(error.message));
       await loadCreations().catch(() => {});
     } finally { setPublishing(false); }
   };
@@ -181,7 +189,14 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     finally { setRetrying(null); }
   };
   let previewItems = [], previewError = '';
-  try { if (accountId && siteNames.length) previewItems = preparedItems(); } catch (error) { previewError = error.message; }
+  try {
+    if (accountId && siteNames.length) previewItems = preparedItems();
+    const existing = creations.filter(row => Number(row.gamAccountId) === Number(accountId));
+    for (const item of previewItems) {
+      if (existing.some(row => row.adUnitCode?.toLowerCase() === item.code.toLowerCase())) { previewError = '当前账号已有相同代码：' + item.code; break; }
+      if (existing.some(row => row.displayName?.toLowerCase() === item.name.toLowerCase())) { previewError = '当前账号已有相同名称：' + item.name; break; }
+    }
+  } catch (error) { previewError = error.message; }
   const accountOptions = activeAccounts.map(item => ({ value: item.id, label: item.name + '（' + item.networkCode + '）' }));
   const historyColumns = [
     { title: '账号', dataIndex: 'networkCode', width: 135 }, { title: '网站', dataIndex: 'domain', width: 170 },
@@ -209,11 +224,11 @@ export default function GamAdUnitCreator({ accounts = [] }) {
       message={'本次同步：成功 ' + results.filter(row => row.status === 'created').length + ' 个，失败 ' + results.filter(row => row.status === 'failed').length + ' 个'}
       description={results.some(row => row.status === 'failed') && <div style={{ maxHeight: 220, overflowY: 'auto', overflowWrap: 'anywhere' }}>
         {results.filter(row => row.status === 'failed').map(row => <div key={row.index} style={{ marginTop: 6 }}>
-          {row.domain ? row.domain + ' · ' : ''}{row.code}：{row.error || '接口未返回错误详情'}
+          {row.domain ? row.domain + ' · ' : ''}{row.code}：{duplicateMessage(row.error || '接口未返回错误详情')}
         </div>)}
       </div>}/>}
     <Collapse items={[{ key: 'history', label: '同步记录与失败重试', children: <Table rowKey="id" size="small" dataSource={creations} columns={historyColumns} pagination={{ pageSize: 10 }} scroll={{ x: 1100 }}/> }]}/>
-    <Modal title="新建广告单元" open={open} width={760} onCancel={() => { if (!publishing) setOpen(false); }} maskClosable={!publishing} closable={!publishing} footer={<Space><Button disabled={publishing} onClick={() => setOpen(false)}>取消</Button><Button type="primary" loading={publishing} disabled={inventoryBusy || !previewItems.length} onClick={publish}>{mode === 'batch' ? '批量创建' : '创建并同步'}</Button></Space>}>
+    <Modal title="新建广告单元" open={open} width={760} onCancel={() => { if (!publishing) setOpen(false); }} maskClosable={!publishing} closable={!publishing} footer={<Space><Button disabled={publishing} onClick={() => setOpen(false)}>取消</Button><Button type="primary" loading={publishing} disabled={inventoryBusy || Boolean(previewError) || !previewItems.length} onClick={publish}>{mode === 'batch' ? '批量创建' : '创建并同步'}</Button></Space>}>
       <div style={{ maxHeight: '68vh', overflowY: 'auto', paddingRight: 8 }}>
         <Row gutter={[16, 12]}>
           <Col xs={24} sm={12}><Text><Text type="danger">* </Text>账号</Text><Select showSearch optionFilterProp="label" style={{ width: '100%', marginTop: 6 }} placeholder="请选择账号" value={accountId} onChange={chooseAccount} options={accountOptions}/></Col>

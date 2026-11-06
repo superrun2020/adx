@@ -38,6 +38,27 @@ func TestDisabledGamAccountCannotCreateAdUnits(t *testing.T) {
 	}
 }
 
+func TestGamCreateRejectsLocalNameAndCodeDuplicates(t *testing.T) {
+	a := testApp(t)
+	if _, err := a.db.Exec("INSERT INTO soap_accounts(id,name,network_code,credential_ciphertext,status,created_by) VALUES(1,'First','123456','cipher','active','test')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.db.Exec(`INSERT INTO gam_ad_unit_creations(gam_account_id,network_code,site_name,site_url,domain,parent_ad_unit,display_name,ad_unit_code,sizes_json,created_by) VALUES(1,'123456','networks/123456/sites/1','https://example.test','example.test','networks/123456/adUnits/9','Banner A','banner-a','["300x250"]','test')`); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/api/admin/gam-ad-units", nil)
+	for _, tc := range []struct{ name, code, want string }{
+		{"banner a", "new-code", "ad_unit_name_already_created"},
+		{"New name", "BANNER-A", "ad_unit_already_created"},
+	} {
+		input := map[string]any{"gamAccountId": float64(1), "siteName": "networks/123456/sites/1", "name": tc.name, "code": tc.code, "size": "300x250"}
+		_, err := a.createGamDirect(r, input, "test", "", "test-token", "networks/123456/adUnits/9")
+		if err == nil || err.Error() != tc.want {
+			t.Fatalf("name=%q code=%q err=%v; want %s", tc.name, tc.code, err, tc.want)
+		}
+	}
+}
+
 func TestGamSiteDomainsAreAccountScoped(t *testing.T) {
 	a := testApp(t)
 	statements := []string{
