@@ -18,7 +18,7 @@ var reportDimensions = map[string]string{
 	"date": "rf.report_date", "hour": "rf.hour", "url": mappedDomainSQL("rf"),
 	"country": "rf.country", "adUnit": "rf.ad_unit", "adUnitId": "rf.ad_unit_id",
 	"account": "rf.account", "channel": "rf.channel_id",
-	"advertiser": "COALESCE(ua.advertiser,'')", "bd": "COALESCE(ua.bd,'')",
+	"advertiser": "COALESCE(NULLIF(sa.advertiser,''),ua.advertiser,'')", "bd": "COALESCE(NULLIF(sa.bd,''),ua.bd,'')",
 }
 
 var reportMetrics = map[string]bool{
@@ -181,8 +181,8 @@ func (a *app) serveReports(w http.ResponseWriter, r *http.Request, export bool) 
 	addExact("rf.ad_unit", q.Get("adUnit"))
 	addExact("rf.ad_unit_id", q.Get("adUnitId"))
 	addExact("rf.country", q.Get("country"))
-	addExact("COALESCE(ua.advertiser,'')", q.Get("advertiser"))
-	addExact("COALESCE(ua.bd,'')", q.Get("bd"))
+	addExact(reportDimensions["advertiser"], q.Get("advertiser"))
+	addExact(reportDimensions["bd"], q.Get("bd"))
 	if q.Get("domain") != "" {
 		addExact(mappedDomainSQL("rf"), normalizedDomain(q.Get("domain")))
 	}
@@ -274,7 +274,7 @@ func (a *app) serveReports(w http.ResponseWriter, r *http.Request, export bool) 
 		"ROUND(SUM(rf.revenue),6) grossRevenue,ROUND(SUM(rf.revenue*(" + upstream + ")/100.0),6) upstreamRevenue," +
 		"ROUND(SUM(" + settledRevenueSQL("rf") + "),6) channelRevenue," +
 		"ROUND(AVG(" + upstream + "),2) upstreamSharePercent,ROUND(AVG(" + channelRuleShareSQL("rf") + "),2) channelSharePercent " +
-		"FROM revenue_facts rf JOIN channels c ON c.id=rf.channel_id LEFT JOIN upstream_accounts ua ON ua.account_key=rf.account " +
+		"FROM revenue_facts rf JOIN channels c ON c.id=rf.channel_id LEFT JOIN upstream_accounts ua ON ua.account_key=rf.account LEFT JOIN soap_accounts sa ON sa.id=ua.soap_account_id " +
 		"WHERE " + strings.Join(where, " AND ") + " GROUP BY " + strings.Join(groups, ",") + ") "
 	if len(metricWhere) > 0 {
 		grouped += "SELECT grouped.*,COUNT(*) OVER() totalRows FROM grouped WHERE " + strings.Join(metricWhere, " AND ")

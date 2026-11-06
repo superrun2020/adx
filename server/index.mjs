@@ -550,7 +550,8 @@ const reportDimensionMap = {
   date: 'rf.report_date', hour: 'rf.hour', url: mappedDomainSql('rf'),
   country: 'rf.country', adUnit: 'rf.ad_unit', adUnitId: 'rf.ad_unit_id',
   account: 'rf.account', channel: 'rf.channel_id',
-  advertiser: "COALESCE(ua.advertiser,'')", bd: "COALESCE(ua.bd,'')"
+  advertiser: "COALESCE(NULLIF(sa.advertiser,''),ua.advertiser,'')",
+  bd: "COALESCE(NULLIF(sa.bd,''),ua.bd,'')"
 };
 const reportMetricMap = {
   requests: 'requests', matchedRequests: 'matchedRequests', impressions: 'impressions',
@@ -594,8 +595,8 @@ function serveReports(req, res, exportCsv = false) {
   addExact('rf.ad_unit', req.query.adUnit);
   addExact('rf.ad_unit_id', req.query.adUnitId);
   addExact('rf.country', req.query.country);
-  addExact("COALESCE(ua.advertiser,'')", req.query.advertiser);
-  addExact("COALESCE(ua.bd,'')", req.query.bd);
+  addExact(reportDimensionMap.advertiser, req.query.advertiser);
+  addExact(reportDimensionMap.bd, req.query.bd);
   if (req.query.domain) addExact(mappedDomainSql('rf'), normalizedDomain(req.query.domain));
   if (req.query.hour !== undefined && req.query.hour !== '') {
     const hour = Number(req.query.hour);
@@ -652,6 +653,7 @@ function serveReports(req, res, exportCsv = false) {
     FROM revenue_facts rf
     JOIN channels c ON c.id=rf.channel_id
     LEFT JOIN upstream_accounts ua ON ua.account_key=rf.account
+    LEFT JOIN soap_accounts sa ON sa.id=ua.soap_account_id
     WHERE ${where.join(' AND ')} GROUP BY ${group}
   ) SELECT grouped.*, COUNT(*) OVER() totalRows FROM grouped ${metricWhere}
     ORDER BY sortDate DESC, ${visible} DESC LIMIT ? OFFSET ?`;

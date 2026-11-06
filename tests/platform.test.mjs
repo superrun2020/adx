@@ -422,3 +422,47 @@ test('daily interval summary pages through dates and returns detailed metrics', 
   assert.equal(byDomain.body.items.length, 3);
   assert.ok(byDomain.body.items.every(item => item.url.endsWith('.example.test')));
 });
+
+test('editing GAM advertiser and BD updates existing REST report dimensions', async () => {
+  cookie = '';
+  const login = await request('/api/auth/login', { method:'POST',
+    body:JSON.stringify({ email:'admin@example.test', password:'AdminPass123!' }) });
+  cookie = login.response.headers.get('set-cookie').split(';')[0];
+  const channelId = (await request('/api/admin/channels')).body.items[0].id;
+  const created = await request('/api/admin/gam-accounts', { method:'POST', body:JSON.stringify({
+    name:'Metadata Network', networkCode:'4455667788',
+    credentials:{ client_email:'metadata@example.test', private_key:'dummy-key' }
+  }) });
+  assert.equal(created.response.status, 200);
+  const gamAccountId = created.body.item.id;
+  const upstream = await request('/api/admin/upstream-accounts', { method:'POST', body:JSON.stringify({
+    accountKey:'metadata-upstream', name:'Metadata Upstream', gamAccountId,
+    sharePercent:100, advertiser:'Old Advertiser', bd:'Old BD'
+  }) });
+  assert.equal(upstream.response.status, 201);
+  const imported = await request('/api/admin/imports', { method:'POST', body:JSON.stringify({
+    channelId, fileName:'metadata-source.json', payload:[{
+      date:'2026-11-02', account:'metadata-upstream', ad_unit:'metadata-unit',
+      url:'https://metadata.example.test', revenue:10
+    }]
+  }) });
+  assert.equal(imported.body.accepted, 1);
+  const db = new DatabaseSync(path.join(dir, 'test.sqlite'));
+  db.prepare('UPDATE revenue_facts SET source_file=? WHERE account=? AND report_date=?')
+    .run('gam-rest:4455667788:test', 'metadata-upstream', '2026-11-02');
+  db.close();
+  const route = '/api/reports?start=2026-11-02&end=2026-11-02&source=rest'
+    + '&dimensions=account,advertiser,bd&upstreamAccount=metadata-upstream';
+  const before = await request(route);
+  assert.equal(before.body.items[0].advertiser, 'Old Advertiser');
+  assert.equal(before.body.items[0].bd, 'Old BD');
+  const updated = await request('/api/admin/gam-accounts/' + gamAccountId, { method:'PUT', body:JSON.stringify({
+    name:'Metadata Network', networkCode:'4455667788', advertiser:'New Advertiser', bd:'New BD', enabled:true
+  }) });
+  assert.equal(updated.response.status, 200);
+  const after = await request(route);
+  assert.equal(after.body.items[0].advertiser, 'New Advertiser');
+  assert.equal(after.body.items[0].bd, 'New BD');
+  assert.equal((await request(route + '&advertiser=New%20Advertiser&bd=New%20BD')).body.total, 1);
+  assert.equal((await request(route + '&advertiser=Old%20Advertiser')).body.total, 0);
+});
