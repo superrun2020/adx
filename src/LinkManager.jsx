@@ -35,7 +35,7 @@ export default function LinkManager() {
   const [busy, setBusy] = useState(false), [progress, setProgress] = useState([0, 0]);
   const [keyword, setKeyword] = useState('');
   const [types, setTypes] = useState(['main', 'sub']), [accountId, setAccountId] = useState(null);
-  const [approvalFilter, setApprovalFilter] = useState('approved');
+  const [approvalFilter, setApprovalFilter] = useState('all');
   const [page, setPage] = useState(1), [pageSize, setPageSize] = useState(20);
   const controller = useRef(null);
 
@@ -114,7 +114,7 @@ export default function LinkManager() {
     <div className="page-heading"><div><Title level={2}>链接管理</Title><Text type="secondary">统一查看所有 Ad Manager 账号的主域名、子域名与审核状态</Text></div>
       <Button icon={<ReloadOutlined/>} loading={busy} onClick={load}>刷新 GAM 链接</Button></div>
     <Alert type="info" showIcon message="仅展示 GAM Sites 中已登记的网站"
-      description="主域名和子域名均来自对应账号的 GAM Sites；默认仅显示审核状态为 APPROVED 的网站。"/>
+      description="默认显示所有已登记的主域名和子域名，并标明真实审核状态；需要时可筛选“已过审”。"/>
     {issues.length > 0 && <Alert type="warning" showIcon message="部分账号网站读取不完整" description={issues.join('；')} />}
     {!busy && lastLoaded && approvedCount === 0 && <Alert type="warning" showIcon message="当前 GAM Sites 未返回已过审站点" description="可切换为“全部审核状态”查看已登记但未过审的网站。"/>}
     <Row gutter={[12, 12]}>
@@ -128,7 +128,7 @@ export default function LinkManager() {
       <Col xs={12} md={4}><Select mode="multiple" style={{ width: '100%' }} value={types} onChange={setTypes} options={[{value:'main',label:'主域名'},{value:'sub',label:'子域名'}]} placeholder="域名类型"/></Col>
       <Col xs={12} md={5}><Select style={{ width: '100%' }} value={approvalFilter} onChange={setApprovalFilter} options={[{value:'approved',label:'已过审'},{value:'all',label:'全部审核状态'},{value:'draft',label:'草稿/待审'},{value:'other',label:'其他状态'}]}/></Col>
       <Col xs={12} md={6}><Select allowClear showSearch optionFilterProp="label" style={{ width: '100%' }} value={accountId} onChange={setAccountId} placeholder="全部账号" options={accounts.map(account => ({value:account.id,label:account.name + '（' + account.networkCode + '）'}))}/></Col>
-      <Col xs={24} md={2}><Button onClick={() => { setKeyword(''); setTypes(['main','sub']); setApprovalFilter('approved'); setAccountId(null); }}>重置</Button></Col>
+      <Col xs={24} md={2}><Button onClick={() => { setKeyword(''); setTypes(['main','sub']); setApprovalFilter('all'); setAccountId(null); }}>重置</Button></Col>
     </Row></Card>
     <Card className="link-results" title={'链接列表（' + filtered.length + '）'} extra={<Text type="secondary">{busy ? '读取中 ' + progress[0] + '/' + progress[1] : lastLoaded ? '上次刷新 ' + lastLoaded : '尚未刷新'}</Text>}>
       <Table rowKey="key" size="middle" loading={busy && !rows.length} dataSource={filtered} columns={columns} pagination={{ current: page, pageSize, onChange: (next, size) => { setPage(next); setPageSize(size); }, showSizeChanger: true, pageSizeOptions: [20, 50, 100] }} scroll={{ x: 1180 }} locale={{ emptyText: <Empty description={busy ? '正在读取 GAM Sites' : '没有符合条件的链接'} /> }}/>
