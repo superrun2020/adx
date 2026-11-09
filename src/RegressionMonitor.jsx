@@ -4,7 +4,7 @@ import { ReloadOutlined, SettingOutlined } from '@ant-design/icons';
 import ReportDateFilter from './ReportDateFilter.jsx';
 
 const { Title, Text } = Typography;
-const cadenceNames = { day: '最近有数据日 · 前次快照', three_days: '近 3 天 · 前 3 天', week: '近 7 天 · 前 7 天', month: '近 30 天 · 前 30 天' };
+const cadenceNames = { day: '单日 · 同日上次快照', three_days: '近 3 天 · 前 3 天', week: '近 7 天 · 前 7 天', month: '近 30 天 · 前 30 天' };
 const money = value => '$' + Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const signedMoney = value => (Number(value) > 0 ? '+' : Number(value) < 0 ? '-' : '') + money(Math.abs(Number(value || 0)));
 const signed = (value, suffix = '') => (Number(value) > 0 ? '+' : '') + Number(value || 0).toLocaleString('en-US', { maximumFractionDigits: suffix ? 2 : 0 }) + suffix;
@@ -80,8 +80,8 @@ export default function RegressionMonitor() {
 
   const columns = [
     { title: '修订时间', dataIndex: 'createdAt', width: 165, render: stamp },
-    { title: '数据日期', width: 210, render: (_, row) => <Space direction="vertical" size={0}><span>{row.periodStart === row.periodEnd ? row.periodEnd : row.periodStart + ' ~ ' + row.periodEnd}</span><Text type="secondary" style={{fontSize:11}}>{cadenceNames[row.cadence]}</Text></Space> },
-    { title: '倒扣起始数据日', dataIndex: 'dropStartDate', width: 155, render: (value, row) => value ? <strong>{value}</strong> : row.alertStatus !== 'not_triggered' ? <Tooltip title="仅有区间汇总或缺少同日历史快照，无法准确定位到某一天"><Text type="secondary">无法确定</Text></Tooltip> : '—' },
+    { title: '数据日期', width: 210, render: (_, row) => <Space direction="vertical" size={0}><Text strong>{row.periodStart === row.periodEnd ? row.periodEnd : row.periodStart + ' ~ ' + row.periodEnd}</Text><Text type="secondary" style={{fontSize:11}}>{cadenceNames[row.cadence]}</Text></Space> },
+    { title: '最早已确认下修数据日', dataIndex: 'dropStartDate', width: 175, render: (value, row) => value ? <Tooltip title="现有同日快照可证实的最早下修日；如历史快照不完整，实际起始日可能更早。"><strong>{value}</strong></Tooltip> : row.alertStatus !== 'not_triggered' ? <Tooltip title="本次多日监测比较的是相邻时段的区间总额；缺少可证实同日下修的历史快照，不能据此确定具体数据日。"><Text type="secondary">区间内未定位</Text></Tooltip> : '—' },
     { title: '账号', dataIndex: 'accountName', width: 160, ellipsis: true },
     { title: '域名', dataIndex: 'domain', width: 230, ellipsis: true },
     { title: '原收入', dataIndex: 'oldRevenue', width: 105, align: 'right', render: money },
@@ -100,7 +100,7 @@ export default function RegressionMonitor() {
       <Space><Button icon={<ReloadOutlined/>} loading={loading} onClick={() => { loadMeta(); loadEvents(); }}>刷新记录</Button><Button type="primary" icon={<SettingOutlined/>} onClick={openSettings}>通知条件设置</Button></Space></div>
     <Alert showIcon type="info" message={
       '飞书条件：原收入 > ' + money(settings?.minRevenue ?? 50) + ' 且收入下降 ≥ ' + Number(settings?.minDropPercent ?? 2).toFixed(2) + '%；' + (settings?.feishuEnabled ? '通知已启用' : '通知未启用')
-    } description="最近有数据的一天每 15 分钟与该日上次快照比较（优先今天，否则昨天）；近 3 天每 24 小时、近 7 天每 3 天、近 30 天每 7 天重新拉取，与前一等长时段比较。倒扣起始数据日仅在同日历史快照可核对时显示；旧区间汇总无法推断具体日期。"/>
+    } description="今天和昨天有数据时，分别每 15 分钟与各自的同日上次快照比较；近 3 天每 24 小时、近 7 天每 3 天、近 30 天每 7 天重新拉取，与前一等长时段比较。数据日期显示本次监测范围；最早已确认下修数据日仅在同日历史快照能证实下降时显示，旧记录缺少证据则显示区间内未定位。"/>
     {latest && <Text type="secondary">最近完成：{latest.accountName} · {cadenceNames[latest.cadence]} · {stamp(latest.finishedAt)}（{latest.timeZone}）</Text>}
     {runs[0]?.status === 'failed' && <Alert type="warning" showIcon message={'最近一次监测失败：' + runs[0].accountName + ' · ' + cadenceNames[runs[0].cadence]} description={runs[0].detail || '请检查 GAM 账号同步状态'} />}
     {runs[0]?.status === 'skipped' && <Alert type="info" showIcon message={'最近一次监测暂未比较：' + runs[0].accountName + ' · ' + cadenceNames[runs[0].cadence]} description={runs[0].detail || '等待 GAM 返回可比较的完整数据'} />}
