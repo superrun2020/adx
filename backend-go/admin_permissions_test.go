@@ -34,6 +34,45 @@ func TestLinksOnlyAdminReceivesRestrictedGamAccountFields(t *testing.T) {
 	}
 }
 
+func TestChannelsOnlyAdminReadsGamDomainsWithoutLinkWriteAccess(t *testing.T) {
+	a := testApp(t)
+	if _, err := a.db.Exec("INSERT INTO channels(id,name,email) VALUES(7,'Channel','channel@example.test')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.db.Exec("INSERT INTO soap_accounts(name,network_code,credential_ciphertext,rest_channel_id,status,created_by) VALUES('GAM','123456','cipher',7,'active','test')"); err != nil {
+		t.Fatal(err)
+	}
+	u := user{Role: "admin", SidebarPermissions: sql.NullString{String: adminPermissionsJSON([]string{"channels"}), Valid: true}}
+	for _, item := range []struct {
+		method, path string
+		allowed      bool
+	}{
+		{http.MethodGet, "/api/admin/gam-accounts", true},
+		{http.MethodGet, "/api/admin/gam-accounts/1/sites", true},
+		{http.MethodGet, "/api/admin/gam-accounts/1/site-domains", true},
+		{http.MethodGet, "/api/admin/link-metadata", true},
+		{http.MethodPut, "/api/admin/link-metadata", false},
+		{http.MethodPost, "/api/admin/link-metadata", false},
+		{http.MethodPost, "/api/admin/gam-accounts", false},
+	} {
+		if got := u.allowedRequest(httptest.NewRequest(item.method, item.path, nil)); got != item.allowed {
+			t.Errorf("%s %s allowed=%t want=%t", item.method, item.path, got, item.allowed)
+		}
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/gam-accounts", nil)
+	request = request.WithContext(context.WithValue(request.Context(), userKey{}, u))
+	response := httptest.NewRecorder()
+	a.gamAccounts(response, request)
+	var payload map[string]any
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &payload) != nil {
+		t.Fatalf("response=%d %s", response.Code, response.Body.String())
+	}
+	account := payload["items"].([]any)[0].(map[string]any)
+	if account["channelId"] != float64(7) || account["credentialConfigured"] != nil {
+		t.Fatalf("restricted account=%v", account)
+	}
+}
+
 func TestLegacyAdminMigrationPrefersNamedActiveOwner(t *testing.T) {
 	t.Setenv("ADX_DB_PATH", filepath.Join(t.TempDir(), "adx.sqlite"))
 	t.Setenv("ADX_ADMIN_EMAIL", "older@example.test")

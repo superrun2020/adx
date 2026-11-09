@@ -8,10 +8,11 @@ import (
 )
 
 func (a *app) listLinkMetadata(w http.ResponseWriter, r *http.Request) error {
-	items, err := queryMaps(a.db, `SELECT m.network_code networkCode,m.domain,m.is_manual isManual,
-        m.monitor_domains_json monitorDomainsJson,m.channel_id channelId,COALESCE(c.name,'') channelName,
-        m.notes FROM link_metadata m
-        LEFT JOIN channels c ON c.id=m.channel_id ORDER BY m.network_code,m.domain`)
+	fields := "m.network_code networkCode,m.domain,m.is_manual isManual,m.channel_id channelId"
+	if currentUser(r).canView("links") {
+		fields += ",m.monitor_domains_json monitorDomainsJson,COALESCE(c.name,'') channelName,m.notes"
+	}
+	items, err := queryMaps(a.db, "SELECT "+fields+" FROM link_metadata m LEFT JOIN channels c ON c.id=m.channel_id ORDER BY m.network_code,m.domain")
 	if err != nil {
 		return err
 	}

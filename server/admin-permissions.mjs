@@ -28,9 +28,10 @@ export function allowedAdminRequest(user, path, method) {
   else if (path.startsWith('/api/admin/users') || path === '/api/admin/audit') return false;
   else if (path.startsWith('/api/admin/report-api-keys')) views = ['report-keys'];
   else if (path.startsWith('/api/admin/regression/')) views = ['regression'];
+  else if (path === '/api/admin/link-metadata' && method === 'GET') views = ['links','channels'];
   else if (path === '/api/admin/link-metadata') views = ['links'];
-  else if (path === '/api/admin/gam-accounts' && method === 'GET') views = ['gam','links','ad-units','regression'];
-  else if (path.startsWith('/api/admin/gam-accounts/') && method === 'GET' && (path.endsWith('/sites') || path.endsWith('/site-domains'))) views = ['gam','links','ad-units'];
+  else if (path === '/api/admin/gam-accounts' && method === 'GET') views = ['gam','links','ad-units','regression','channels'];
+  else if (path.startsWith('/api/admin/gam-accounts/') && method === 'GET' && (path.endsWith('/sites') || path.endsWith('/site-domains'))) views = ['gam','links','ad-units','channels'];
   else if (path.startsWith('/api/admin/gam-accounts/') && method === 'GET' &&
     (path.endsWith('/ad-units') || path.endsWith('/ad-unit-sizes'))) views = ['gam','ad-units'];
   else if (path.startsWith('/api/admin/gam-accounts') || path.startsWith('/api/admin/gam-sync/')) views = ['gam'];

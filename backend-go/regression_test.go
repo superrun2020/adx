@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -26,6 +28,18 @@ func TestRegressionWindowsAndThresholds(t *testing.T) {
 		alertQualified(regressionMeasure{Revenue: 50}, regressionMeasure{Revenue: 30}, c) ||
 		alertQualified(regressionMeasure{Revenue: 100}, regressionMeasure{Revenue: 98.01}, c) {
 		t.Fatal("threshold must require both conditions")
+	}
+}
+
+func TestRegressionAlertMessageIdentifiesSourceAndTime(t *testing.T) {
+	account := map[string]any{"name": "GAM Test", "network_code": "123456"}
+	window := regressionWindow{Cadence: "day", Start: "2026-11-09", End: "2026-11-09"}
+	alert := regressionAlert{Domain: "news.example.com", DropStartDate: "2026-11-09", Old: regressionMeasure{Revenue: 100}, New: regressionMeasure{Revenue: 90}}
+	message := regressionAlertMessage(account, "赵飞", "Asia/Shanghai", "2026-11-09 16:30", window, "单日快照", []regressionAlert{alert})
+	for _, expected := range []string{"GAM Test", "Network 123456", "渠道：赵飞", "2026-11-09 16:30（Asia/Shanghai）", "news.example.com", "倒扣起始数据日：2026-11-09", "回退 $10.00"} {
+		if !strings.Contains(message, expected) {
+			t.Fatalf("missing %q in %q", expected, message)
+		}
 	}
 }
 
@@ -75,7 +89,12 @@ func TestRegressionSnapshotAndNotificationDedup(t *testing.T) {
 	if err != nil || len(alerts) != 1 {
 		t.Fatalf("qualified alerts=%v error=%v", alerts, err)
 	}
-	_, err = a.db.Exec("UPDATE regression_events SET alert_status='sent' WHERE id=?", alerts[0].ID)
+	pendingID := alerts[0].ID
+	alerts, err = a.saveRegressionRun(context.Background(), account, w, "success", "", previous, decreased)
+	if err != nil || len(alerts) != 0 {
+		t.Fatalf("pending dedup alerts=%v error=%v", alerts, err)
+	}
+	_, err = a.db.Exec("UPDATE regression_events SET alert_status='sent' WHERE id=?", pendingID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,5 +143,60 @@ func TestRegressionCoverageRequiresEveryDateFromGAM(t *testing.T) {
 	days, err = a.regressionCoveredDays(context.Background(), account, "2026-11-02", "2026-11-04")
 	if err != nil || days != 3 {
 		t.Fatalf("complete coverage days=%d error=%v", days, err)
+	}
+}
+
+func TestRegressionStartDateNeedsPreviousSameDaySnapshot(t *testing.T) {
+	t.Setenv("ADX_DB_PATH", filepath.Join(t.TempDir(), "adx.sqlite"))
+	a, err := newApp(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.db.Close()
+	defer a.reportCache.close()
+	for _, statement := range []string{
+		"INSERT INTO channels(name,email) VALUES('channel','channel@example.test')",
+		"INSERT INTO soap_accounts(name,network_code,credential_ciphertext,created_by,rest_report_name,rest_channel_id,rest_upstream_account_id,rest_money_divisor) VALUES('GAM','123456','test','admin','networks/123456/reports/1',1,1,1)",
+		"INSERT INTO upstream_accounts(account_key,name,soap_account_id) VALUES('upstream','upstream',1)",
+		"INSERT INTO revenue_facts(channel_id,report_date,domain,account,source_file,revenue) VALUES(1,'2026-11-02','example.com','upstream','gam-rest:123456:test',30)",
+		"INSERT INTO revenue_facts(channel_id,report_date,domain,account,source_file,revenue) VALUES(1,'2026-11-03','example.com','upstream','gam-rest:123456:test',30)",
+		"INSERT INTO revenue_facts(channel_id,report_date,domain,account,source_file,revenue) VALUES(1,'2026-11-04','example.com','upstream','gam-rest:123456:test',30)",
+	} {
+		if _, err := a.db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	account, err := a.gamAccount(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	window := regressionWindow{Cadence: "three_days", Start: "2026-11-02", End: "2026-11-04"}
+	old := map[string]regressionMeasure{"example.com": {Revenue: 100}}
+	first := map[string]regressionMeasure{"example.com": {Revenue: 90}}
+	if _, err := a.saveRegressionRun(context.Background(), account, window, "success", "", old, first); err != nil {
+		t.Fatal(err)
+	}
+	var firstDate sql.NullString
+	if err := a.db.QueryRow("SELECT drop_start_date FROM regression_events ORDER BY id DESC LIMIT 1").Scan(&firstDate); err != nil || firstDate.Valid {
+		t.Fatalf("first date=%v error=%v", firstDate, err)
+	}
+	var priorRunCutoff int64
+	if err := a.db.QueryRow("SELECT MAX(id) FROM regression_runs").Scan(&priorRunCutoff); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.db.Exec("UPDATE revenue_facts SET revenue=25 WHERE report_date='2026-11-03'"); err != nil {
+		t.Fatal(err)
+	}
+	dayWindow := regressionWindow{Cadence: "day", Start: "2026-11-03", End: "2026-11-03"}
+	if _, err := a.saveRegressionRun(context.Background(), account, dayWindow, "success", "", map[string]regressionMeasure{"example.com": {Revenue: 30}}, map[string]regressionMeasure{"example.com": {Revenue: 25}}, priorRunCutoff); err != nil {
+		t.Fatal(err)
+	}
+	second := map[string]regressionMeasure{"example.com": {Revenue: 85}}
+	if _, err := a.saveRegressionRun(context.Background(), account, window, "success", "", old, second, priorRunCutoff); err != nil {
+		t.Fatal(err)
+	}
+	var secondDate sql.NullString
+	if err := a.db.QueryRow("SELECT drop_start_date FROM regression_events ORDER BY id DESC LIMIT 1").Scan(&secondDate); err != nil || !secondDate.Valid || secondDate.String != "2026-11-03" {
+		t.Fatalf("second date=%v error=%v", secondDate, err)
 	}
 }

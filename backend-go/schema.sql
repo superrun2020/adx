@@ -127,6 +127,14 @@ CREATE TABLE IF NOT EXISTS regression_snapshots (
   requests INTEGER NOT NULL, impressions INTEGER NOT NULL, clicks INTEGER NOT NULL,
   PRIMARY KEY(run_id,domain), FOREIGN KEY(run_id) REFERENCES regression_runs(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS regression_daily_snapshots (
+  run_id INTEGER NOT NULL, soap_account_id INTEGER NOT NULL, report_date TEXT NOT NULL,
+  domain TEXT NOT NULL, revenue REAL NOT NULL, requests INTEGER NOT NULL,
+  impressions INTEGER NOT NULL, clicks INTEGER NOT NULL,
+  PRIMARY KEY(run_id,report_date,domain),
+  FOREIGN KEY(run_id) REFERENCES regression_runs(id) ON DELETE CASCADE,
+  FOREIGN KEY(soap_account_id) REFERENCES soap_accounts(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS regression_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER NOT NULL, soap_account_id INTEGER NOT NULL,
   cadence TEXT NOT NULL, period_start TEXT NOT NULL, period_end TEXT NOT NULL,
@@ -135,6 +143,7 @@ CREATE TABLE IF NOT EXISTS regression_events (
   old_impressions INTEGER NOT NULL, new_impressions INTEGER NOT NULL,
   old_clicks INTEGER NOT NULL, new_clicks INTEGER NOT NULL,
   alert_status TEXT NOT NULL DEFAULT 'not_triggered', alert_error TEXT NOT NULL DEFAULT '',
+  drop_start_date TEXT, send_attempts INTEGER NOT NULL DEFAULT 0, last_attempt_at TEXT,
   notified_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(run_id) REFERENCES regression_runs(id) ON DELETE CASCADE,
   FOREIGN KEY(soap_account_id) REFERENCES soap_accounts(id) ON DELETE CASCADE
@@ -158,6 +167,7 @@ CREATE INDEX IF NOT EXISTS idx_gam_diagnostic_lookup ON gam_diagnostic_facts(rep
 CREATE INDEX IF NOT EXISTS idx_regression_runs_due ON regression_runs(soap_account_id,cadence,finished_at);
 CREATE INDEX IF NOT EXISTS idx_regression_runs_retention ON regression_runs(cadence,finished_at);
 CREATE INDEX IF NOT EXISTS idx_regression_events_filter ON regression_events(created_at,soap_account_id,cadence,domain);
+CREATE INDEX IF NOT EXISTS idx_regression_daily_lookup ON regression_daily_snapshots(soap_account_id,report_date,domain,run_id DESC);
 CREATE INDEX IF NOT EXISTS idx_revenue_account_unit ON revenue_facts(account, ad_unit, report_date);
 CREATE INDEX IF NOT EXISTS idx_revenue_ad_unit_id ON revenue_facts(ad_unit_id, report_date);
 CREATE INDEX IF NOT EXISTS idx_revenue_dashboard ON revenue_facts(report_date, channel_id, account, ad_unit, domain, revenue, requests, matched_requests, impressions, clicks);

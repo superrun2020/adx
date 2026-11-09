@@ -67,7 +67,7 @@ func (a *app) publicGamAccount(id int64) map[string]any {
 func (a *app) gamAccounts(w http.ResponseWriter, r *http.Request) {
 	columns := gamAccountColumns
 	if !currentUser(r).canView("gam") {
-		columns = "id,name,network_code networkCode,status,enabled,rest_network_timezone timeZone"
+		columns = "id,name,network_code networkCode,status,enabled,rest_channel_id channelId,rest_network_timezone timeZone"
 	}
 	a.sendItems(w, "SELECT "+columns+" FROM soap_accounts ORDER BY id DESC")
 }

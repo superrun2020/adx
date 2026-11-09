@@ -41,7 +41,7 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     return Number.isSafeInteger(number) && number > 0 ? db.prepare('SELECT * FROM soap_accounts WHERE id=?').get(number) : null;
   };
   const accountColumns = 'id,name,network_code networkCode,account_email accountEmail,advertiser,bd,advertiser_share_percent advertiserSharePercent,operation_status operationStatus,enabled,notes,CASE WHEN length(credential_ciphertext)>0 THEN 1 ELSE 0 END credentialConfigured,status,last_test_at lastTestAt,last_test_status lastTestStatus,last_test_summary lastTestSummary,rest_report_name reportName,rest_channel_id channelId,rest_upstream_account_id upstreamAccountId,rest_money_divisor moneyDivisor,rest_sync_enabled syncEnabled,rest_last_preview_at lastPreviewAt,rest_last_preview_rows lastPreviewRows,rest_network_timezone timeZone,created_at createdAt';
-  const restrictedAccountColumns = 'id,name,network_code networkCode,status,enabled,rest_network_timezone timeZone';
+  const restrictedAccountColumns = 'id,name,network_code networkCode,status,enabled,rest_channel_id channelId,rest_network_timezone timeZone';
   const publicAccount = id => db.prepare('SELECT ' + accountColumns + ' FROM soap_accounts WHERE id=?').get(id);
   const metadata = body => {
     const email = String(body?.accountEmail || '').trim();
@@ -268,9 +268,12 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     const count = new Set(['co.uk', 'com.cn', 'com.au', 'co.jp', 'co.kr']).has(parts.slice(-2).join('.')) ? 3 : 2;
     return parts.slice(-count).join('.');
   };
-  app.get('/api/admin/link-metadata', requireAuth, requireAdmin, route((_req, res) => {
+  app.get('/api/admin/link-metadata', requireAuth, requireAdmin, route((req, res) => {
+    const fields = canView(req.user, 'links')
+      ? "m.network_code networkCode,m.domain,m.is_manual isManual,m.monitor_domains_json monitorDomainsJson,m.channel_id channelId,COALESCE(c.name,'') channelName,m.notes"
+      : 'm.network_code networkCode,m.domain,m.is_manual isManual,m.channel_id channelId';
     res.json({ ok: true,
-      items: db.prepare("SELECT m.network_code networkCode,m.domain,m.is_manual isManual,m.monitor_domains_json monitorDomainsJson,m.channel_id channelId,COALESCE(c.name,'') channelName,m.notes FROM link_metadata m LEFT JOIN channels c ON c.id=m.channel_id ORDER BY m.network_code,m.domain").all(),
+      items: db.prepare('SELECT ' + fields + ' FROM link_metadata m LEFT JOIN channels c ON c.id=m.channel_id ORDER BY m.network_code,m.domain').all(),
       channels: db.prepare("SELECT id,name FROM channels WHERE status='active' ORDER BY name").all(),
       assignments: db.prepare("SELECT cd.domain,c.id channelId,c.name channelName FROM channel_domains cd JOIN channels c ON c.id=cd.channel_id WHERE c.status='active' ORDER BY cd.domain").all()
     });

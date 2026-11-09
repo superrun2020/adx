@@ -80,13 +80,15 @@ func (u user) allowedRequest(r *http.Request) bool {
 		views = []string{"report-keys"}
 	case strings.HasPrefix(path, "/api/admin/regression/"):
 		views = []string{"regression"}
+	case path == "/api/admin/link-metadata" && method == http.MethodGet:
+		views = []string{"links", "channels"}
 	case path == "/api/admin/link-metadata":
 		views = []string{"links"}
 	case path == "/api/admin/gam-accounts" && method == http.MethodGet:
-		views = []string{"gam", "links", "ad-units", "regression"}
+		views = []string{"gam", "links", "ad-units", "regression", "channels"}
 	case strings.HasPrefix(path, "/api/admin/gam-accounts/") && method == http.MethodGet &&
 		(strings.HasSuffix(path, "/sites") || strings.HasSuffix(path, "/site-domains")):
-		views = []string{"gam", "links", "ad-units"}
+		views = []string{"gam", "links", "ad-units", "channels"}
 	case strings.HasPrefix(path, "/api/admin/gam-accounts/") && method == http.MethodGet &&
 		(strings.HasSuffix(path, "/ad-units") || strings.HasSuffix(path, "/ad-unit-sizes")):
 		views = []string{"gam", "ad-units"}

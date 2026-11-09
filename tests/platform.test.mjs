@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,6 +9,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 const port = 4191;
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'adx-platform-'));
+const testCredentialKey = 'adx-local-test-credential-key-2026';
 let child;
 let cookie = '';
 
@@ -25,7 +27,7 @@ before(async () => {
   const goBinary = process.env.ADX_TEST_GO_BINARY;
   child = spawn(goBinary || process.execPath, goBinary ? [] : ['server/index.mjs'], {
     cwd: root,
-    env: { ...process.env, PORT: String(port), ADX_SITE_ROOT: root, ADX_GAM_WORKER_DISABLED: 'true', ADX_DB_PATH: path.join(dir, 'test.sqlite'), ADX_ADMIN_EMAIL: 'admin@example.test', ADX_ADMIN_PASSWORD: 'AdminPass123!' },
+    env: { ...process.env, PORT: String(port), ADX_SITE_ROOT: root, ADX_GAM_WORKER_DISABLED: 'true', ADX_DB_PATH: path.join(dir, 'test.sqlite'), ADX_CREDENTIAL_KEY: testCredentialKey, ADX_ADMIN_EMAIL: 'admin@example.test', ADX_ADMIN_PASSWORD: 'AdminPass123!' },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   for (let i = 0; i < 50; i += 1) {
@@ -73,10 +75,27 @@ test('regression settings are admin-only and never expose the Feishu webhook', a
   assert.equal(initial.body.settings.minDropPercent, 2);
   const invalid = await request('/api/admin/regression/settings', { method: 'PUT', body: JSON.stringify({ feishuEnabled: true, minRevenue: 50, minDropPercent: 2, webhook: 'http://127.0.0.1/hook' }) });
   assert.equal(invalid.response.status, 400);
-  const saved = await request('/api/admin/regression/settings', { method: 'PUT', body: JSON.stringify({ feishuEnabled: false, minRevenue: 75, minDropPercent: 3, webhook: 'https://open.feishu.cn/open-apis/bot/v2/hook/test' }) });
+  const saved = await request('/api/admin/regression/settings', { method: 'PUT', body: JSON.stringify({ feishuEnabled: false, minRevenue: 75, minDropPercent: 3, webhook: 'https://open.feishu.cn/open-apis/bot/v2/hook/test', signingSecret: 'test-signing-secret' }) });
   assert.equal(saved.body.settings.minRevenue, 75);
   assert.equal(saved.body.settings.webhookConfigured, true);
   assert.equal(JSON.stringify(saved.body).includes('/hook/test'), false);
+  const readSavedSecret = () => {
+    const db = new DatabaseSync(path.join(dir, 'test.sqlite'));
+    const encoded = db.prepare('SELECT webhook_ciphertext FROM regression_settings WHERE id=1').get().webhook_ciphertext;
+    db.close();
+    const [iv, tag, data] = encoded.split('.');
+    const key = crypto.createHash('sha256').update(testCredentialKey).digest();
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64url'));
+    decipher.setAuthTag(Buffer.from(tag, 'base64url'));
+    return JSON.parse(Buffer.concat([decipher.update(Buffer.from(data, 'base64url')), decipher.final()]).toString('utf8')).secret;
+  };
+  assert.equal(readSavedSecret(), 'test-signing-secret');
+  const preserved = await request('/api/admin/regression/settings', { method: 'PUT', body: JSON.stringify({ feishuEnabled: false, minRevenue: 75, minDropPercent: 3, signingSecret: '' }) });
+  assert.equal(preserved.response.status, 200);
+  assert.equal(readSavedSecret(), 'test-signing-secret');
+  const cleared = await request('/api/admin/regression/settings', { method: 'PUT', body: JSON.stringify({ feishuEnabled: false, minRevenue: 75, minDropPercent: 3, clearSigningSecret: true }) });
+  assert.equal(cleared.response.status, 200);
+  assert.equal(readSavedSecret(), '');
   const records = await request('/api/admin/regression/events?cadence=day');
   assert.equal(records.response.status, 200);
   assert.deepEqual(records.body.items, []);

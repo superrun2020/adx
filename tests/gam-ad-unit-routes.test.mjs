@@ -7,7 +7,7 @@ import { normalizeGamFactSite } from '../server/gam-sync.mjs';
 
 const db = new DatabaseSync(':memory:');
 db.exec(
-  'CREATE TABLE soap_accounts(id INTEGER PRIMARY KEY,name TEXT,network_code TEXT,status TEXT,enabled INTEGER NOT NULL DEFAULT 1,account_email TEXT,advertiser_share_percent REAL,notes TEXT,rest_network_timezone TEXT DEFAULT "UTC");' +
+  'CREATE TABLE soap_accounts(id INTEGER PRIMARY KEY,name TEXT,network_code TEXT,status TEXT,enabled INTEGER NOT NULL DEFAULT 1,account_email TEXT,advertiser_share_percent REAL,notes TEXT,rest_channel_id INTEGER,rest_network_timezone TEXT DEFAULT "UTC");' +
   'CREATE TABLE revenue_facts(url TEXT,domain TEXT,ad_unit TEXT,source_file TEXT,raw_json TEXT DEFAULT \'{}\');' +
   'CREATE TABLE gam_ad_unit_creations(' +
   'id INTEGER PRIMARY KEY,gam_account_id INTEGER,network_code TEXT,site_name TEXT,site_url TEXT,domain TEXT,' +

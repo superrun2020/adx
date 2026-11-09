@@ -90,6 +90,19 @@ test('manual link can be edited and reassigned without changing a GAM site', asy
   assert.equal(duplicate.status, 409);
 });
 
+test('channels-only role reads assignment fields without link notes and cannot write', async () => {
+  const previous = user.sidebar_permissions;
+  user.sidebar_permissions = '["channels"]';
+  try {
+    const result = await request('/api/admin/link-metadata');
+    assert.equal(result.status, 200);
+    assert.ok(result.body.items.length > 0);
+    assert.equal(Object.hasOwn(result.body.items[0], 'notes'), false);
+    assert.equal(Object.hasOwn(result.body.items[0], 'monitorDomainsJson'), false);
+    assert.equal((await request('/api/admin/link-metadata', 'POST', { domain: 'new.example.com' })).status, 403);
+  } finally { user.sidebar_permissions = previous; }
+});
+
 test('GAM site edit updates only local metadata after remote identity verification', async () => {
   const body = { originalNetworkCode: '123456', originalDomain: 'example.com',
     gamAccountId: 1, domain: 'example.com', siteName: 'networks/123456/sites/1',

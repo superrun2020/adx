@@ -67,6 +67,8 @@ func (a *app) ensureSchema() error {
 		{"revenue_facts", "raw_json", "TEXT NOT NULL DEFAULT '{}'"},
 		{"soap_sync_runs", "stage", "TEXT NOT NULL DEFAULT ''"}, {"soap_sync_runs", "timings_json", "TEXT NOT NULL DEFAULT '{}'"},
 		{"users", "is_super_admin", "INTEGER NOT NULL DEFAULT 0"}, {"users", "sidebar_permissions", "TEXT"},
+		{"regression_events", "drop_start_date", "TEXT"},
+		{"regression_events", "send_attempts", "INTEGER NOT NULL DEFAULT 0"}, {"regression_events", "last_attempt_at", "TEXT"},
 	} {
 		if err = a.ensureColumn(item.table, item.column, item.definition); err != nil {
 			return fmt.Errorf("schema_column_%s_%s: %w", item.table, item.column, err)

@@ -28,6 +28,10 @@ type regressionMeasure struct {
 	Clicks      int64
 }
 
+type regressionDailyKey struct {
+	Date, Domain string
+}
+
 type regressionWindow struct {
 	Cadence, Start, End, BaselineStart, BaselineEnd string
 	Interval                                        time.Duration
@@ -40,9 +44,10 @@ type regressionConfig struct {
 }
 
 type regressionAlert struct {
-	ID       int64
-	Domain   string
-	Old, New regressionMeasure
+	ID            int64
+	Domain        string
+	DropStartDate string
+	Old, New      regressionMeasure
 }
 
 var regressionCadences = []struct {
@@ -157,12 +162,17 @@ func (a *app) updateRegressionSettings(w http.ResponseWriter, r *http.Request) e
 		}
 		secret["url"] = strings.TrimSpace(candidate)
 	}
+	if clear, _ := input["clearSigningSecret"].(bool); clear {
+		secret["secret"] = ""
+	}
 	if raw, exists := input["signingSecret"]; exists {
 		value, valid := raw.(string)
 		if !valid || len(value) > 500 {
 			return errors.New("invalid_feishu_secret")
 		}
-		secret["secret"] = strings.TrimSpace(value)
+		if strings.TrimSpace(value) != "" {
+			secret["secret"] = strings.TrimSpace(value)
+		}
 	}
 	webhook := importString(secret["url"])
 	if webhook != "" && !validFeishuWebhook(webhook) {
@@ -248,7 +258,7 @@ func (a *app) regressionEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "regression_events_unavailable")
 		return
 	}
-	rows, err := queryMaps(a.db, "SELECT e.id,e.cadence,e.period_start periodStart,e.period_end periodEnd,e.domain,s.name accountName,s.network_code networkCode,s.rest_network_timezone timeZone,e.old_revenue oldRevenue,e.new_revenue newRevenue,(e.new_revenue-e.old_revenue) revenueDelta,CASE WHEN e.old_revenue>0 THEN ROUND((e.new_revenue-e.old_revenue)*100.0/e.old_revenue,4) ELSE 0 END differencePercent,(e.new_requests-e.old_requests) requestsDelta,(e.new_impressions-e.old_impressions) impressionsDelta,(e.new_clicks-e.old_clicks) clicksDelta,e.alert_status alertStatus,e.alert_error alertError,e.notified_at notifiedAt,e.created_at createdAt FROM regression_events e JOIN soap_accounts s ON s.id=e.soap_account_id WHERE "+condition+" ORDER BY e.id DESC LIMIT 100 OFFSET ?", append(args, (page-1)*100)...)
+	rows, err := queryMaps(a.db, "SELECT e.id,e.cadence,e.period_start periodStart,e.period_end periodEnd,e.domain,s.name accountName,s.network_code networkCode,s.rest_network_timezone timeZone,CASE WHEN e.cadence='day' AND e.alert_status<>'not_triggered' THEN e.period_start ELSE e.drop_start_date END dropStartDate,e.old_revenue oldRevenue,e.new_revenue newRevenue,(e.new_revenue-e.old_revenue) revenueDelta,CASE WHEN e.old_revenue>0 THEN ROUND((e.new_revenue-e.old_revenue)*100.0/e.old_revenue,4) ELSE 0 END differencePercent,(e.new_requests-e.old_requests) requestsDelta,(e.new_impressions-e.old_impressions) impressionsDelta,(e.new_clicks-e.old_clicks) clicksDelta,e.alert_status alertStatus,e.alert_error alertError,e.notified_at notifiedAt,e.created_at createdAt FROM regression_events e JOIN soap_accounts s ON s.id=e.soap_account_id WHERE "+condition+" ORDER BY e.id DESC LIMIT 100 OFFSET ?", append(args, (page-1)*100)...)
 	if err != nil {
 		writeError(w, 500, "regression_events_unavailable")
 		return
@@ -303,6 +313,66 @@ func (a *app) regressionFacts(ctx context.Context, account map[string]any, start
 	return result, rows.Err()
 }
 
+func (a *app) regressionDailyFacts(ctx context.Context, account map[string]any, start, end string) (map[regressionDailyKey]regressionMeasure, error) {
+	channelID, key, err := a.gamMapping(account)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := a.db.QueryContext(ctx, "SELECT report_date,domain,SUM(revenue),SUM(requests),SUM(impressions),SUM(clicks) FROM revenue_facts WHERE channel_id=? AND account=? AND report_date BETWEEN ? AND ? AND domain<>'' AND source_file LIKE ? GROUP BY report_date,domain", channelID, key, start, end, "gam-rest:"+importString(account["network_code"])+":%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := map[regressionDailyKey]regressionMeasure{}
+	for rows.Next() {
+		var date, domain string
+		var m regressionMeasure
+		if err := rows.Scan(&date, &domain, &m.Revenue, &m.Requests, &m.Impressions, &m.Clicks); err != nil {
+			return nil, err
+		}
+		result[regressionDailyKey{date, domain}] = m
+	}
+	return result, rows.Err()
+}
+
+func (a *app) priorRegressionDailyFacts(ctx context.Context, accountID int64, start, end string, maxRunID int64) (map[regressionDailyKey]regressionMeasure, error) {
+	rows, err := a.db.QueryContext(ctx, "SELECT report_date,domain,revenue,requests,impressions,clicks FROM regression_daily_snapshots WHERE soap_account_id=? AND report_date BETWEEN ? AND ? AND run_id<=? ORDER BY run_id DESC", accountID, start, end, maxRunID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := map[regressionDailyKey]regressionMeasure{}
+	for rows.Next() {
+		var date, domain string
+		var m regressionMeasure
+		if err := rows.Scan(&date, &domain, &m.Revenue, &m.Requests, &m.Impressions, &m.Clicks); err != nil {
+			return nil, err
+		}
+		key := regressionDailyKey{date, domain}
+		if _, exists := result[key]; !exists {
+			result[key] = m
+		}
+	}
+	return result, rows.Err()
+}
+
+func firstRegressionDropDate(domain string, window regressionWindow, newer, previous map[regressionDailyKey]regressionMeasure) string {
+	first := ""
+	coveredDates := map[string]bool{}
+	for key := range newer {
+		coveredDates[key.Date] = true
+	}
+	for key, before := range previous {
+		if key.Domain != domain || key.Date < window.Start || key.Date > window.End || !coveredDates[key.Date] {
+			continue
+		}
+		if after := newer[key]; before.Revenue-after.Revenue > 0.000001 && (first == "" || key.Date < first) {
+			first = key.Date
+		}
+	}
+	return first
+}
+
 func (a *app) regressionCoveredDays(ctx context.Context, account map[string]any, start, end string) (int, error) {
 	channelID, key, err := a.gamMapping(account)
 	if err != nil {
@@ -348,10 +418,26 @@ func measureChanged(old, newer regressionMeasure) bool {
 	return math.Abs(old.Revenue-newer.Revenue) > 0.000001 || old.Requests != newer.Requests || old.Impressions != newer.Impressions || old.Clicks != newer.Clicks
 }
 
-func (a *app) saveRegressionRun(ctx context.Context, account map[string]any, window regressionWindow, status, detail string, old, newer map[string]regressionMeasure) ([]regressionAlert, error) {
+func (a *app) saveRegressionRun(ctx context.Context, account map[string]any, window regressionWindow, status, detail string, old, newer map[string]regressionMeasure, priorRunCutoff ...int64) ([]regressionAlert, error) {
 	config, err := a.currentRegressionConfig()
 	if err != nil {
 		return nil, err
+	}
+	daily := map[regressionDailyKey]regressionMeasure{}
+	previousDaily := map[regressionDailyKey]regressionMeasure{}
+	if status == "success" && intMap(account, "rest_channel_id") > 0 && intMap(account, "rest_upstream_account_id") > 0 {
+		cutoff := int64(1<<63 - 1)
+		if len(priorRunCutoff) > 0 {
+			cutoff = priorRunCutoff[0]
+		}
+		daily, err = a.regressionDailyFacts(ctx, account, window.Start, window.End)
+		if err != nil {
+			return nil, err
+		}
+		previousDaily, err = a.priorRegressionDailyFacts(ctx, intMap(account, "id"), window.Start, window.End, cutoff)
+		if err != nil {
+			return nil, err
+		}
 	}
 	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -371,6 +457,12 @@ func (a *app) saveRegressionRun(ctx context.Context, account map[string]any, win
 	}
 	for domain, m := range newer {
 		_, err = tx.ExecContext(ctx, "INSERT INTO regression_snapshots(run_id,domain,revenue,requests,impressions,clicks) VALUES(?,?,?,?,?,?)", runID, domain, m.Revenue, m.Requests, m.Impressions, m.Clicks)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for key, m := range daily {
+		_, err = tx.ExecContext(ctx, "INSERT INTO regression_daily_snapshots(run_id,soap_account_id,report_date,domain,revenue,requests,impressions,clicks) VALUES(?,?,?,?,?,?,?,?)", runID, intMap(account, "id"), key.Date, key.Domain, m.Revenue, m.Requests, m.Impressions, m.Clicks)
 		if err != nil {
 			return nil, err
 		}
@@ -402,7 +494,7 @@ func (a *app) saveRegressionRun(ctx context.Context, account map[string]any, win
 				alertStatus = "disabled"
 			} else {
 				var sent int
-				err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM regression_events WHERE soap_account_id=? AND cadence=? AND period_start=? AND period_end=? AND domain=? AND alert_status='sent'", intMap(account, "id"), window.Cadence, window.Start, window.End, domain).Scan(&sent)
+				err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM regression_events WHERE soap_account_id=? AND cadence=? AND period_start=? AND period_end=? AND domain=? AND (alert_status='sent' OR (alert_status IN ('pending','failed') AND send_attempts<5))", intMap(account, "id"), window.Cadence, window.Start, window.End, domain).Scan(&sent)
 				if err != nil {
 					return nil, err
 				}
@@ -413,7 +505,15 @@ func (a *app) saveRegressionRun(ctx context.Context, account map[string]any, win
 				}
 			}
 		}
-		inserted, insertErr := tx.ExecContext(ctx, "INSERT INTO regression_events(run_id,soap_account_id,cadence,period_start,period_end,domain,old_revenue,new_revenue,old_requests,new_requests,old_impressions,new_impressions,old_clicks,new_clicks,alert_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", runID, intMap(account, "id"), window.Cadence, window.Start, window.End, domain, before.Revenue, after.Revenue, before.Requests, after.Requests, before.Impressions, after.Impressions, before.Clicks, after.Clicks, alertStatus)
+		dropStartDate := ""
+		if alertStatus != "not_triggered" {
+			if window.Cadence == "day" {
+				dropStartDate = window.Start
+			} else {
+				dropStartDate = firstRegressionDropDate(domain, window, daily, previousDaily)
+			}
+		}
+		inserted, insertErr := tx.ExecContext(ctx, "INSERT INTO regression_events(run_id,soap_account_id,cadence,period_start,period_end,domain,old_revenue,new_revenue,old_requests,new_requests,old_impressions,new_impressions,old_clicks,new_clicks,alert_status,drop_start_date) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULLIF(?,''))", runID, intMap(account, "id"), window.Cadence, window.Start, window.End, domain, before.Revenue, after.Revenue, before.Requests, after.Requests, before.Impressions, after.Impressions, before.Clicks, after.Clicks, alertStatus, dropStartDate)
 		if insertErr != nil {
 			return nil, insertErr
 		}
@@ -422,7 +522,7 @@ func (a *app) saveRegressionRun(ctx context.Context, account map[string]any, win
 			if idErr != nil {
 				return nil, idErr
 			}
-			alerts = append(alerts, regressionAlert{ID: id, Domain: domain, Old: before, New: after})
+			alerts = append(alerts, regressionAlert{ID: id, Domain: domain, DropStartDate: dropStartDate, Old: before, New: after})
 		}
 	}
 	return alerts, tx.Commit()
@@ -432,6 +532,12 @@ func (a *app) runRegressionForAccount(ctx context.Context, account map[string]an
 	if _, err := a.db.ExecContext(ctx, "DELETE FROM regression_runs WHERE (cadence='day' AND finished_at<datetime('now','-90 days')) OR (cadence<>'day' AND finished_at<datetime('now','-365 days'))"); err != nil {
 		log.Printf("regression_retention_failed: %v", err)
 	}
+	a.retryRegressionAlerts(ctx, account)
+	var priorRunCutoff int64
+	if err := a.db.QueryRowContext(ctx, "SELECT COALESCE(MAX(id),0) FROM regression_runs").Scan(&priorRunCutoff); err != nil {
+		log.Printf("regression_baseline_cutoff_failed account=%d error=%v", intMap(account, "id"), err)
+		return
+	}
 	zone := importString(account["rest_network_timezone"])
 	for _, item := range regressionCadences {
 		window, err := regressionWindowAt(zone, time.Now(), item.Name)
@@ -440,77 +546,143 @@ func (a *app) runRegressionForAccount(ctx context.Context, account map[string]an
 			return
 		}
 		if item.Days == 1 {
-			today, readErr := a.regressionFacts(ctx, account, window.Start, window.End)
-			if readErr != nil {
-				a.recordRegressionFailure(account, window, readErr)
-				continue
-			}
-			if len(today) == 0 {
-				date, _ := time.Parse("2006-01-02", window.Start)
-				window.Start = date.AddDate(0, 0, -1).Format("2006-01-02")
-				window.End = window.Start
-			}
-		}
-		if !a.regressionDue(intMap(account, "id"), window) {
-			continue
-		}
-		var old map[string]regressionMeasure
-		if item.Days == 1 {
-			old, err = a.previousDailySnapshot(intMap(account, "id"), window)
+			yesterday := window
+			date, _ := time.Parse("2006-01-02", window.Start)
+			yesterday.Start = date.AddDate(0, 0, -1).Format("2006-01-02")
+			yesterday.End = yesterday.Start
+			a.runRegressionWindow(ctx, account, item.Days, window, priorRunCutoff)
+			a.runRegressionWindow(ctx, account, item.Days, yesterday, priorRunCutoff)
 		} else {
-			var result map[string]any
-			result, err = a.executeGam(ctx, account, window.BaselineStart, window.BaselineEnd, true)
-			var covered int
-			if err == nil && result["rows"].(int) > 0 {
-				covered, err = a.regressionCoveredDays(ctx, account, window.BaselineStart, window.BaselineEnd)
-			}
-			if err == nil && covered == item.Days {
-				old, err = a.regressionFacts(ctx, account, window.BaselineStart, window.BaselineEnd)
-			}
-			if err == nil && len(old) == 0 {
-				_, err = a.saveRegressionRun(ctx, account, window, "skipped", "基准时间段没有完整的逐日域名数据", nil, nil)
-			}
-			if err == nil && len(old) == 0 {
-				continue
-			}
+			a.runRegressionWindow(ctx, account, item.Days, window, priorRunCutoff)
 		}
+	}
+}
+
+func (a *app) runRegressionWindow(ctx context.Context, account map[string]any, days int, window regressionWindow, priorRunCutoff int64) {
+	if !a.regressionDue(intMap(account, "id"), window) {
+		return
+	}
+	if days == 1 {
+		available, err := a.regressionFacts(ctx, account, window.Start, window.End)
 		if err != nil {
 			a.recordRegressionFailure(account, window, err)
+			return
+		}
+		if len(available) == 0 {
+			return
+		}
+	}
+	var old map[string]regressionMeasure
+	var err error
+	if days == 1 {
+		old, err = a.previousDailySnapshot(intMap(account, "id"), window)
+	} else {
+		var result map[string]any
+		result, err = a.executeGam(ctx, account, window.BaselineStart, window.BaselineEnd, true)
+		var covered int
+		if err == nil && result["rows"].(int) > 0 {
+			covered, err = a.regressionCoveredDays(ctx, account, window.BaselineStart, window.BaselineEnd)
+		}
+		if err == nil && covered == days {
+			old, err = a.regressionFacts(ctx, account, window.BaselineStart, window.BaselineEnd)
+		}
+		if err == nil && len(old) == 0 {
+			_, err = a.saveRegressionRun(ctx, account, window, "skipped", "基准时间段没有完整的逐日域名数据", nil, nil)
+		}
+		if err == nil && len(old) == 0 {
+			return
+		}
+	}
+	if err != nil {
+		a.recordRegressionFailure(account, window, err)
+		return
+	}
+	if days > 1 {
+		result, fetchErr := a.executeGam(ctx, account, window.Start, window.End, true)
+		if fetchErr != nil {
+			a.recordRegressionFailure(account, window, fetchErr)
+			return
+		}
+		covered, coverageErr := a.regressionCoveredDays(ctx, account, window.Start, window.End)
+		if coverageErr != nil {
+			a.recordRegressionFailure(account, window, coverageErr)
+			return
+		}
+		if result["rows"].(int) == 0 || covered != days {
+			_, _ = a.saveRegressionRun(ctx, account, window, "skipped", "当前时间段没有完整的逐日域名数据", nil, nil)
+			return
+		}
+	}
+	newer, err := a.regressionFacts(ctx, account, window.Start, window.End)
+	if err != nil {
+		a.recordRegressionFailure(account, window, err)
+		return
+	}
+	if len(newer) == 0 {
+		_, _ = a.saveRegressionRun(ctx, account, window, "skipped", "当前时间段没有可比较的域名数据", nil, nil)
+		return
+	}
+	alerts, err := a.saveRegressionRun(ctx, account, window, "success", "", old, newer, priorRunCutoff)
+	if err != nil {
+		log.Printf("regression_save_failed account=%d cadence=%s error=%v", intMap(account, "id"), window.Cadence, err)
+		return
+	}
+	if len(alerts) > 0 {
+		a.deliverRegressionAlerts(ctx, account, window, alerts)
+	}
+}
+
+// A persisted pending/failed alert must survive a restart or a temporary webhook outage.
+// Sent alerts and old disabled alerts are never replayed.
+func (a *app) retryRegressionAlerts(ctx context.Context, account map[string]any) {
+	config, err := a.currentRegressionConfig()
+	if err != nil || !config.Enabled || config.Ciphertext == "" {
+		return
+	}
+	rows, err := a.db.QueryContext(ctx, "SELECT e.id,e.cadence,e.period_start,e.period_end,e.domain,e.old_revenue,e.new_revenue,e.old_requests,e.new_requests,e.old_impressions,e.new_impressions,e.old_clicks,e.new_clicks,COALESCE(e.drop_start_date,'') FROM regression_events e WHERE e.soap_account_id=? AND e.alert_status IN ('pending','failed') AND e.send_attempts<5 AND (e.last_attempt_at IS NULL OR e.last_attempt_at<=datetime('now','-15 minutes')) AND NOT EXISTS (SELECT 1 FROM regression_events sent WHERE sent.soap_account_id=e.soap_account_id AND sent.cadence=e.cadence AND sent.period_start=e.period_start AND sent.period_end=e.period_end AND sent.domain=e.domain AND sent.alert_status='sent') ORDER BY e.cadence,e.period_start,e.period_end,e.id DESC LIMIT 100", intMap(account, "id"))
+	if err != nil {
+		log.Printf("regression_retry_query_failed account=%d error=%v", intMap(account, "id"), err)
+		return
+	}
+	type group struct {
+		window regressionWindow
+		alerts []regressionAlert
+	}
+	groups := []group{}
+	seen := map[string]bool{}
+	duplicates := []int64{}
+	for rows.Next() {
+		var alert regressionAlert
+		var window regressionWindow
+		if err = rows.Scan(&alert.ID, &window.Cadence, &window.Start, &window.End, &alert.Domain, &alert.Old.Revenue, &alert.New.Revenue, &alert.Old.Requests, &alert.New.Requests, &alert.Old.Impressions, &alert.New.Impressions, &alert.Old.Clicks, &alert.New.Clicks, &alert.DropStartDate); err != nil {
+			break
+		}
+		key := window.Cadence + "\x00" + window.Start + "\x00" + window.End + "\x00" + alert.Domain
+		if seen[key] {
+			duplicates = append(duplicates, alert.ID)
 			continue
 		}
-		if item.Days > 1 {
-			result, fetchErr := a.executeGam(ctx, account, window.Start, window.End, true)
-			if fetchErr != nil {
-				a.recordRegressionFailure(account, window, fetchErr)
-				continue
-			}
-			covered, coverageErr := a.regressionCoveredDays(ctx, account, window.Start, window.End)
-			if coverageErr != nil {
-				a.recordRegressionFailure(account, window, coverageErr)
-				continue
-			}
-			if result["rows"].(int) == 0 || covered != item.Days {
-				_, _ = a.saveRegressionRun(ctx, account, window, "skipped", "当前时间段没有完整的逐日域名数据", nil, nil)
-				continue
-			}
+		seen[key] = true
+		if len(groups) == 0 || groups[len(groups)-1].window.Cadence != window.Cadence || groups[len(groups)-1].window.Start != window.Start || groups[len(groups)-1].window.End != window.End {
+			groups = append(groups, group{window: window})
 		}
-		newer, err := a.regressionFacts(ctx, account, window.Start, window.End)
-		if err != nil {
-			a.recordRegressionFailure(account, window, err)
-			continue
+		groups[len(groups)-1].alerts = append(groups[len(groups)-1].alerts, alert)
+	}
+	if rowsErr := rows.Err(); err == nil {
+		err = rowsErr
+	}
+	rows.Close()
+	if err != nil {
+		log.Printf("regression_retry_scan_failed account=%d error=%v", intMap(account, "id"), err)
+		return
+	}
+	for _, id := range duplicates {
+		if _, err := a.db.ExecContext(ctx, "UPDATE regression_events SET alert_status='duplicate' WHERE id=? AND alert_status IN ('pending','failed')", id); err != nil {
+			log.Printf("regression_retry_dedup_failed id=%d error=%v", id, err)
 		}
-		if len(newer) == 0 {
-			_, _ = a.saveRegressionRun(ctx, account, window, "skipped", "当前时间段没有可比较的域名数据", nil, nil)
-			continue
-		}
-		alerts, err := a.saveRegressionRun(ctx, account, window, "success", "", old, newer)
-		if err != nil {
-			log.Printf("regression_save_failed account=%d cadence=%s error=%v", intMap(account, "id"), item.Name, err)
-			continue
-		}
-		if len(alerts) > 0 {
-			a.deliverRegressionAlerts(ctx, account, window, alerts)
-		}
+	}
+	for _, item := range groups {
+		a.deliverRegressionAlerts(ctx, account, item.window, item.alerts)
 	}
 }
 
@@ -534,17 +706,25 @@ func (a *app) deliverRegressionAlerts(ctx context.Context, account map[string]an
 		return
 	}
 	webhook, signingSecret := importString(credential["url"]), importString(credential["secret"])
+	channelName := "未关联"
+	if err := a.db.QueryRowContext(ctx, "SELECT name FROM channels WHERE id=?", intMap(account, "rest_channel_id")).Scan(&channelName); err != nil && err != sql.ErrNoRows {
+		log.Printf("regression_channel_lookup_failed account=%d error=%v", intMap(account, "id"), err)
+	}
+	zone := importString(account["rest_network_timezone"])
+	location, zoneErr := time.LoadLocation(zone)
+	if zoneErr != nil {
+		location = time.UTC
+		zone = "UTC"
+	}
+	observedAt := time.Now().In(location).Format("2006-01-02 15:04")
+	cadenceName := map[string]string{"day": "单日快照", "three_days": "近 3 天", "week": "近 7 天", "month": "近 30 天"}[window.Cadence]
 	for begin := 0; begin < len(alerts); begin += 20 {
 		end := begin + 20
 		if end > len(alerts) {
 			end = len(alerts)
 		}
 		batch := alerts[begin:end]
-		lines := []string{fmt.Sprintf("AdX 数据回退监测：%s (%s)，%s 至 %s", importString(account["name"]), window.Cadence, window.Start, window.End)}
-		for _, alert := range batch {
-			lines = append(lines, fmt.Sprintf("%s：$%.2f → $%.2f，下降 %.2f%%；请求 %+d，展示 %+d，点击 %+d", alert.Domain, alert.Old.Revenue, alert.New.Revenue, (alert.Old.Revenue-alert.New.Revenue)*100/alert.Old.Revenue, alert.New.Requests-alert.Old.Requests, alert.New.Impressions-alert.Old.Impressions, alert.New.Clicks-alert.Old.Clicks))
-		}
-		err = postFeishu(ctx, webhook, signingSecret, strings.Join(lines, "\n"))
+		err = postFeishu(ctx, webhook, signingSecret, regressionAlertMessage(account, channelName, zone, observedAt, window, cadenceName, batch))
 		status, detail := "sent", ""
 		if err != nil {
 			status, detail = "failed", err.Error()
@@ -553,7 +733,7 @@ func (a *app) deliverRegressionAlerts(ctx context.Context, account map[string]an
 			}
 		}
 		for _, alert := range batch {
-			_, updateErr := a.db.Exec("UPDATE regression_events SET alert_status=?,alert_error=?,notified_at=CASE WHEN ?='sent' THEN CURRENT_TIMESTAMP ELSE NULL END WHERE id=?", status, detail, status, alert.ID)
+			_, updateErr := a.db.Exec("UPDATE regression_events SET alert_status=?,alert_error=?,notified_at=CASE WHEN ?='sent' THEN CURRENT_TIMESTAMP ELSE NULL END,send_attempts=send_attempts+1,last_attempt_at=CURRENT_TIMESTAMP WHERE id=?", status, detail, status, alert.ID)
 			if updateErr != nil {
 				log.Printf("regression_alert_status_failed id=%d error=%v", alert.ID, updateErr)
 			}
@@ -562,6 +742,18 @@ func (a *app) deliverRegressionAlerts(ctx context.Context, account map[string]an
 			log.Printf("regression_feishu_failed account=%d cadence=%s error=%v", intMap(account, "id"), window.Cadence, err)
 		}
 	}
+}
+
+func regressionAlertMessage(account map[string]any, channelName, zone, observedAt string, window regressionWindow, cadenceName string, alerts []regressionAlert) string {
+	lines := []string{"【AdX 数据回退告警】", fmt.Sprintf("GAM 账号：%s（Network %s）", importString(account["name"]), importString(account["network_code"])), "渠道：" + channelName, fmt.Sprintf("检测时间：%s（%s）", observedAt, zone), fmt.Sprintf("监测区间：%s 至 %s（%s）", window.Start, window.End, cadenceName)}
+	for _, alert := range alerts {
+		date := alert.DropStartDate
+		if date == "" {
+			date = "无法确定（缺少同日历史快照）"
+		}
+		lines = append(lines, fmt.Sprintf("域名：%s\n倒扣起始数据日：%s\n收入：$%.2f → $%.2f；回退 $%.2f（%.2f%%）\n请求 %+d，展示 %+d，点击 %+d", alert.Domain, date, alert.Old.Revenue, alert.New.Revenue, alert.Old.Revenue-alert.New.Revenue, (alert.Old.Revenue-alert.New.Revenue)*100/alert.Old.Revenue, alert.New.Requests-alert.Old.Requests, alert.New.Impressions-alert.Old.Impressions, alert.New.Clicks-alert.Old.Clicks))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func postFeishu(ctx context.Context, webhook, secret, content string) error {
