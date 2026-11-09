@@ -706,7 +706,7 @@ func (a *app) deliverRegressionAlerts(ctx context.Context, account map[string]an
 		return
 	}
 	webhook, signingSecret := importString(credential["url"]), importString(credential["secret"])
-	channelName := "未关联"
+	channelName := "未关联渠道"
 	if err := a.db.QueryRowContext(ctx, "SELECT name FROM channels WHERE id=?", intMap(account, "rest_channel_id")).Scan(&channelName); err != nil && err != sql.ErrNoRows {
 		log.Printf("regression_channel_lookup_failed account=%d error=%v", intMap(account, "id"), err)
 	}
@@ -749,9 +749,9 @@ func regressionAlertMessage(account map[string]any, channelName, zone, observedA
 	for _, alert := range alerts {
 		date := alert.DropStartDate
 		if date == "" {
-			date = "无法确定（缺少同日历史快照）"
+			date = "区间内未定位（缺少同日历史快照）"
 		}
-		lines = append(lines, fmt.Sprintf("域名：%s\n倒扣起始数据日：%s\n收入：$%.2f → $%.2f；回退 $%.2f（%.2f%%）\n请求 %+d，展示 %+d，点击 %+d", alert.Domain, date, alert.Old.Revenue, alert.New.Revenue, alert.Old.Revenue-alert.New.Revenue, (alert.Old.Revenue-alert.New.Revenue)*100/alert.Old.Revenue, alert.New.Requests-alert.Old.Requests, alert.New.Impressions-alert.Old.Impressions, alert.New.Clicks-alert.Old.Clicks))
+		lines = append(lines, fmt.Sprintf("域名：%s\n最早已确认下修数据日：%s\n收入：$%.2f → $%.2f；回退 $%.2f（%.2f%%）\n请求 %+d，展示 %+d，点击 %+d", alert.Domain, date, alert.Old.Revenue, alert.New.Revenue, alert.Old.Revenue-alert.New.Revenue, (alert.Old.Revenue-alert.New.Revenue)*100/alert.Old.Revenue, alert.New.Requests-alert.Old.Requests, alert.New.Impressions-alert.Old.Impressions, alert.New.Clicks-alert.Old.Clicks))
 	}
 	return strings.Join(lines, "\n")
 }

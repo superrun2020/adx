@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { regressionWindow, alertQualified, firstDropDate, registerRegressionMonitor } from '../server/regression-monitor.mjs';
+import { regressionWindow, alertQualified, firstDropDate, regressionAlertMessage, registerRegressionMonitor } from '../server/regression-monitor.mjs';
 
 test('regression windows use each GAM account timezone and equal-length periods', () => {
   const instant = new Date('2026-11-04T01:30:00Z');
@@ -19,6 +19,25 @@ test('Feishu threshold requires both original revenue and drop percentage', () =
   assert.equal(alertQualified({ revenue: 100 }, { revenue: 98 }, settings), true);
   assert.equal(alertQualified({ revenue: 50 }, { revenue: 30 }, settings), false);
   assert.equal(alertQualified({ revenue: 100 }, { revenue: 98.01 }, settings), false);
+});
+
+test('Feishu alert text identifies confirmed and unlocated data dates', () => {
+  const account = { name: 'GAM Test', network_code: '123456' };
+  const window = { cadence: 'day', start: '2026-11-09', end: '2026-11-09' };
+  const alert = { domain: 'news.example.com', dropStartDate: '2026-11-09',
+    before: { revenue: 100, requests: 100, impressions: 80, clicks: 10 },
+    after: { revenue: 90, requests: 95, impressions: 85, clicks: 10 } };
+  const message = regressionAlertMessage(account, '赵飞', 'Asia/Shanghai', '2026-11-09 16:30', window, [alert]);
+  assert.equal(message, [
+    '【AdX 数据回退告警】', 'GAM 账号：GAM Test（Network 123456）', '渠道：赵飞',
+    '检测时间：2026-11-09 16:30（Asia/Shanghai）', '监测区间：2026-11-09 至 2026-11-09（单日快照）',
+    '域名：news.example.com', '最早已确认下修数据日：2026-11-09',
+    '收入：$100.00 → $90.00；回退 $10.00（10.00%）', '请求 -5，展示 +5，点击 +0'
+  ].join('\n'));
+  const unknown = regressionAlertMessage(account, '赵飞', 'Asia/Shanghai', '2026-11-09 16:30', window,
+    [{ ...alert, dropStartDate: null }]);
+  assert.match(unknown, /最早已确认下修数据日：区间内未定位（缺少同日历史快照）/);
+  assert.doesNotMatch(unknown, /倒扣起始数据日/);
 });
 
 test('drop start is the earliest confirmed same-date decrease only', () => {
@@ -83,9 +102,10 @@ test('later multi-day run records the earliest revised data day without inventin
   try {
     await retryMonitor.runForAccount(account);
     assert.equal(sent, 1);
-    assert.match(message, /GAM 账户：GAM/);
-    assert.match(message, /关联渠道：Publisher/);
-    assert.match(message, new RegExp('倒扣起始数据日：' + window.end));
+    assert.match(message, /【AdX 数据回退告警】/);
+    assert.match(message, /GAM 账号：GAM（Network 123）/);
+    assert.match(message, /渠道：Publisher/);
+    assert.match(message, new RegExp('最早已确认下修数据日：' + window.end));
     const delivered = db.prepare('SELECT alert_status,send_attempts FROM regression_events WHERE id=?').get(latest.id);
     assert.equal(delivered.alert_status, 'sent');
     assert.equal(delivered.send_attempts, 2);

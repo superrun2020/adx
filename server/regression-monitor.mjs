@@ -61,6 +61,19 @@ function accountTimestamp(timeZone, instant = new Date()) {
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
 }
 
+export function regressionAlertMessage(account, channelName, timeZone, detectedAt, window, alerts) {
+  const cadenceName = { day: '单日快照', three_days: '近 3 天', week: '近 7 天', month: '近 30 天' }[window.cadence] || window.cadence;
+  const signed = value => (value >= 0 ? '+' : '') + value;
+  const lines = ['【AdX 数据回退告警】', 'GAM 账号：' + account.name + '（Network ' + account.network_code + '）',
+    '渠道：' + channelName, '检测时间：' + detectedAt + '（' + timeZone + '）',
+    '监测区间：' + window.start + ' 至 ' + window.end + '（' + cadenceName + '）'];
+  for (const row of alerts) lines.push('域名：' + row.domain + '\n最早已确认下修数据日：' + (row.dropStartDate || '区间内未定位（缺少同日历史快照）') +
+    '\n收入：$' + row.before.revenue.toFixed(2) + ' → $' + row.after.revenue.toFixed(2) +
+    '；回退 $' + (row.before.revenue - row.after.revenue).toFixed(2) + '（' + ((row.before.revenue - row.after.revenue) * 100 / row.before.revenue).toFixed(2) + '%）' +
+    '\n请求 ' + signed(row.after.requests - row.before.requests) + '，展示 ' + signed(row.after.impressions - row.before.impressions) + '，点击 ' + signed(row.after.clicks - row.before.clicks));
+  return lines.join('\n');
+}
+
 export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, encryptCredential, decryptCredential, transaction, gamSync, audit }) {
   db.exec("CREATE TABLE IF NOT EXISTS regression_settings (id INTEGER PRIMARY KEY CHECK(id=1), feishu_enabled INTEGER NOT NULL DEFAULT 0, min_revenue REAL NOT NULL DEFAULT 50, min_drop_percent REAL NOT NULL DEFAULT 2, webhook_ciphertext TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
   db.exec("CREATE TABLE IF NOT EXISTS regression_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, soap_account_id INTEGER NOT NULL, cadence TEXT NOT NULL, period_start TEXT NOT NULL, period_end TEXT NOT NULL, baseline_start TEXT NOT NULL DEFAULT '', baseline_end TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(soap_account_id) REFERENCES soap_accounts(id) ON DELETE CASCADE)");
@@ -204,15 +217,7 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
     const detectedAt = accountTimestamp(timeZone);
     for (let offset = 0; offset < alerts.length; offset += 20) {
       const batch = alerts.slice(offset, offset + 20);
-      const lines = ['AdX 数据回退监测（正式触发）', 'GAM 账户：' + account.name + '（' + account.network_code + '）',
-        '关联渠道：' + channelName, '监测时间：' + detectedAt + '（' + timeZone + '）',
-        '监测周期：' + ({day:'单日快照',three_days:'近 3 天',week:'近 7 天',month:'近 30 天'}[window.cadence] || window.cadence),
-        '数据日期：' + window.start + (window.start === window.end ? '' : ' 至 ' + window.end)];
-      for (const row of batch) lines.push('域名：' + row.domain + '\n倒扣起始数据日：' + (row.dropStartDate || '无法确定（尚无同日历史快照）') +
-        '\n收入：$' + row.before.revenue.toFixed(2) + ' → $' + row.after.revenue.toFixed(2) +
-        '；减少 $' + (row.before.revenue-row.after.revenue).toFixed(2) + '（' + ((row.before.revenue-row.after.revenue)*100/row.before.revenue).toFixed(2) + '%）' +
-        '；请求 ' + (row.after.requests-row.before.requests) + '，展示 ' + (row.after.impressions-row.before.impressions) + '，点击 ' + (row.after.clicks-row.before.clicks));
-      const payload = { msg_type: 'text', content: { text: lines.join('\n') } };
+      const payload = { msg_type: 'text', content: { text: regressionAlertMessage(account, channelName, timeZone, detectedAt, window, batch) } };
       if (secret) {
         const timestamp = String(Math.floor(Date.now()/1000));
         payload.timestamp = timestamp;

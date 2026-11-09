@@ -34,12 +34,21 @@ func TestRegressionWindowsAndThresholds(t *testing.T) {
 func TestRegressionAlertMessageIdentifiesSourceAndTime(t *testing.T) {
 	account := map[string]any{"name": "GAM Test", "network_code": "123456"}
 	window := regressionWindow{Cadence: "day", Start: "2026-11-09", End: "2026-11-09"}
-	alert := regressionAlert{Domain: "news.example.com", DropStartDate: "2026-11-09", Old: regressionMeasure{Revenue: 100}, New: regressionMeasure{Revenue: 90}}
+	alert := regressionAlert{Domain: "news.example.com", DropStartDate: "2026-11-09", Old: regressionMeasure{Revenue: 100, Requests: 100, Impressions: 80, Clicks: 10}, New: regressionMeasure{Revenue: 90, Requests: 95, Impressions: 85, Clicks: 10}}
 	message := regressionAlertMessage(account, "赵飞", "Asia/Shanghai", "2026-11-09 16:30", window, "单日快照", []regressionAlert{alert})
-	for _, expected := range []string{"GAM Test", "Network 123456", "渠道：赵飞", "2026-11-09 16:30（Asia/Shanghai）", "news.example.com", "倒扣起始数据日：2026-11-09", "回退 $10.00"} {
-		if !strings.Contains(message, expected) {
-			t.Fatalf("missing %q in %q", expected, message)
-		}
+	expected := strings.Join([]string{
+		"【AdX 数据回退告警】", "GAM 账号：GAM Test（Network 123456）", "渠道：赵飞",
+		"检测时间：2026-11-09 16:30（Asia/Shanghai）", "监测区间：2026-11-09 至 2026-11-09（单日快照）",
+		"域名：news.example.com", "最早已确认下修数据日：2026-11-09",
+		"收入：$100.00 → $90.00；回退 $10.00（10.00%）", "请求 -5，展示 +5，点击 +0",
+	}, "\n")
+	if message != expected {
+		t.Fatalf("unexpected alert message:\n%s", message)
+	}
+	alert.DropStartDate = ""
+	unknown := regressionAlertMessage(account, "赵飞", "Asia/Shanghai", "2026-11-09 16:30", window, "单日快照", []regressionAlert{alert})
+	if !strings.Contains(unknown, "最早已确认下修数据日：区间内未定位（缺少同日历史快照）") || strings.Contains(unknown, "倒扣起始数据日") {
+		t.Fatalf("unknown date should be explicit: %s", unknown)
 	}
 }
 
