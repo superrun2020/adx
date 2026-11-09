@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Card, Col, Empty, Form, Input, Modal, Row, Select, Space, Statistic, Table, Tag, Typography, message } from 'antd';
 import { EditOutlined, LinkOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import { catalogLinksWithManual, hostname } from './link-catalog.mjs';
+import { resolveChannelAssignment } from './channel-domain-catalog.mjs';
 
 const { Title, Text } = Typography;
 let lastSnapshot = null;
@@ -35,17 +36,18 @@ function monitors(value) {
   catch { return []; }
 }
 
-function buildRows(accounts, sitesByAccount, reportedByAccount, metadata, assignments) {
+function buildRows(accounts, sitesByAccount, reportedByAccount, metadata, assignments, channels = []) {
   const byKey = new Map(metadata.map(item => [item.networkCode + ':' + item.domain, item]));
   const assigned = new Map(assignments.map(item => [item.domain, item]));
+  const channelNames = new Map(channels.map(item => [Number(item.id), item.name]));
   return accounts.flatMap(account => {
     const local = metadata.filter(item => item.networkCode === account.networkCode && Number(item.isManual) === 1);
     return catalogLinksWithManual(account, sitesByAccount[account.id] || [], local.map(item => item.domain),
       reportedByAccount[account.id] || []).map(row => {
       const meta = byKey.get(row.networkCode + ':' + row.domain), fallback = assigned.get(row.domain);
+      const channel = resolveChannelAssignment(account, meta, fallback, channelNames);
       return { ...row, isSaved: Boolean(meta), monitorDomains: monitors(meta?.monitorDomainsJson),
-        channelId: meta ? meta.channelId : fallback?.channelId ?? null,
-        channelName: meta ? meta.channelName : fallback?.channelName || '', notes: meta?.notes || '' };
+        ...channel, notes: meta?.notes || '' };
     });
   }).sort((a, b) => a.domain.localeCompare(b.domain) || a.accountId - b.accountId);
 }
@@ -94,7 +96,7 @@ export default function LinkManager() {
       const publish = () => {
         if (current.signal.aborted) return;
         setProgress([done, allAccounts.length]);
-        setRows(buildRows(allAccounts, sitesByAccount, reportedByAccount, metadata, assignments));
+        setRows(buildRows(allAccounts, sitesByAccount, reportedByAccount, metadata, assignments, channelOptions));
         setIssues([...failures]);
       };
       publish();
@@ -119,7 +121,7 @@ export default function LinkManager() {
       await Promise.all(Array.from({ length: Math.min(3, allAccounts.length) }, worker));
       if (!current.signal.aborted) {
         const stamp = new Date().toLocaleString('zh-CN');
-        lastSnapshot = { accounts: allAccounts, rows: buildRows(allAccounts, sitesByAccount, reportedByAccount, metadata, assignments),
+        lastSnapshot = { accounts: allAccounts, rows: buildRows(allAccounts, sitesByAccount, reportedByAccount, metadata, assignments, channelOptions),
           channels: channelOptions, issues: [...failures], lastLoaded: stamp };
         setLastLoaded(stamp);
       }
@@ -135,7 +137,7 @@ export default function LinkManager() {
     types.includes(row.type) && (accountId == null || row.accountId === accountId) &&
     (channelId == null || row.channelId === channelId) &&
     (!keyword.trim() || [row.domain, row.parentDomain, row.accountName, row.networkCode,
-      row.channelName, row.notes, ...row.monitorDomains]
+      row.channelName, row.assignmentSource, row.notes, ...row.monitorDomains]
       .some(value => String(value || '').toLowerCase().includes(keyword.trim().toLowerCase())))),
   [rows, types, accountId, channelId, keyword]);
   useEffect(() => { setPage(1); }, [keyword, types, accountId, channelId]);
@@ -181,7 +183,7 @@ export default function LinkManager() {
     { title: '类型', dataIndex: 'type', width: 90, render: value => <Tag color={value === 'main' ? 'blue' : 'cyan'}>{value === 'main' ? '主域名' : '子域名'}</Tag> },
     { title: '所属账号', dataIndex: 'accountName', width: 190, render: (_, row) => <div className="link-account"><strong>{row.accountName}</strong><small>{row.networkCode}</small></div> },
     { title: '广告监测域名', dataIndex: 'monitorDomains', width: 210, render: values => values.length ? values.join('、') : '—' },
-    { title: '渠道', dataIndex: 'channelName', width: 120, render: value => value || '—' },
+    { title: '渠道', width: 160, render: (_, row) => row.channelName ? <Space direction="vertical" size={0}><strong>{row.channelName}</strong><Text type="secondary" style={{fontSize:11}}>{row.assignmentSource}</Text></Space> : '—' },
     { title: '备注', dataIndex: 'notes', width: 210, ellipsis: true, render: value => value || '—' },
     { title: '来源', dataIndex: 'source', width: 100 },
     { title: '操作', key: 'actions', width: 90, fixed: 'right', render: (_, row) => <Button type="link" icon={<EditOutlined/>} onClick={() => openEdit(row)}>{row.source === 'GAM 报表' && !row.isSaved ? '登记' : '编辑'}</Button> }

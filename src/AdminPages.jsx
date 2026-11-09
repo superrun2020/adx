@@ -94,7 +94,10 @@ function AdUnitBuilder() {
   </Space>;
 }
 
-async function allChannelGamSites(accountId, signal) {
+const channelDomainCache = new Map();
+const channelRowsCache = new Map();
+
+async function allChannelGamSites(accountId, signal, onFirstPage) {
   const items = [], seen = new Set();
   let pageToken = '';
   do {
@@ -103,17 +106,39 @@ async function allChannelGamSites(accountId, signal) {
     const query = pageToken ? '?pageToken=' + encodeURIComponent(pageToken) : '';
     const result = await api('/api/admin/gam-accounts/' + accountId + '/sites' + query, { signal });
     items.push(...(result.items || []));
+    if (seen.size === 1 && result.nextPageToken) onFirstPage?.([...items]);
     pageToken = result.nextPageToken || '';
   } while (pageToken);
   return items;
 }
 
-function Channels() {
-  const [items,setItems]=useState([]); const [open,setOpen]=useState(false); const [editing,setEditing]=useState(null); const [form]=Form.useForm();
-  const [domainsByChannel,setDomainsByChannel]=useState(new Map());
-  const [domainIssues,setDomainIssues]=useState([]),[domainBusy,setDomainBusy]=useState(false);
+function ChannelDomainModal({ channel, domains, issues, busy, onClose }) {
+  const rows = channel ? domains.get(channel.id) || [] : [];
+  return <Modal title={channel ? channel.name + ' · 真实 GAM 域名' : '真实 GAM 域名'} open={Boolean(channel)} width={820}
+    onCancel={onClose} footer={<Button onClick={onClose}>关闭</Button>}>
+    <Space direction="vertical" style={{width:'100%'}}>
+      <Text type="secondary">来自对应 Network 的 GAM Sites 或其 REST 报表子域名；渠道归属依据另列。{busy ? '正在后台更新。' : ''}</Text>
+      {issues.length>0&&<Alert type="warning" showIcon message="部分 GAM 账号读取失败，结果可能不完整"/>}
+      <Table size="small" rowKey="key" dataSource={rows} pagination={{pageSize:10}} scroll={{x:680}} columns={[
+        {title:'域名',dataIndex:'domain',width:230},
+        {title:'GAM 账号',dataIndex:'accountName',width:130},
+        {title:'Network',dataIndex:'networkCode',width:100},
+        {title:'GAM 来源',dataIndex:'source',width:110},
+        {title:'渠道归属',dataIndex:'assignmentSource',width:110}
+      ]}/>
+    </Space>
+  </Modal>;
+}
+
+function Channels({ user }) {
+  const cacheKey = user?.id || user?.email;
+  const initialDomainCache = cacheKey ? channelDomainCache.get(cacheKey) : null;
+  const [items,setItems]=useState(()=>channelRowsCache.get(cacheKey) || []); const [open,setOpen]=useState(false); const [editing,setEditing]=useState(null); const [form]=Form.useForm();
+  const [domainsByChannel,setDomainsByChannel]=useState(()=>initialDomainCache?.domains || new Map());
+  const [domainIssues,setDomainIssues]=useState([]),[domainBusy,setDomainBusy]=useState(true);
+  const [domainModalChannel,setDomainModalChannel]=useState(null);
   const domainRequest=useRef(null);
-  const load=()=>api('/api/admin/channels').then(r=>setItems(r.items)).catch(e=>message.error(e.message));
+  const load=()=>api('/api/admin/channels').then(r=>{const rows=r.items || [];setItems(rows);setDomainModalChannel(current=>current&&rows.some(row=>row.id===current.id)?current:null);if(cacheKey)channelRowsCache.set(cacheKey,rows);}).catch(e=>message.error(e.message));
   const loadDomains=async()=>{
     domainRequest.current?.abort();
     const controller=new AbortController(); domainRequest.current=controller;
@@ -124,61 +149,55 @@ function Channels() {
         api('/api/admin/link-metadata',{signal:controller.signal})
       ]);
       const accounts=gam.items || [], metadata=links.items || [], assignments=links.assignments || [];
+      const previous=cacheKey ? channelDomainCache.get(cacheKey) : null;
+      const previousAccounts=new Map((previous?.accounts || []).map(account=>[account.id,account]));
       const sites={},reported={},issues=[];
+      for(const account of accounts){
+        if(previousAccounts.get(account.id)?.networkCode!==account.networkCode)continue;
+        if(Array.isArray(previous?.sites?.[account.id]))sites[account.id]=previous.sites[account.id];
+        if(Array.isArray(previous?.reported?.[account.id]))reported[account.id]=previous.reported[account.id];
+      }
       let next=0;
       const publish=()=>{
         if(controller.signal.aborted)return;
         const domains=channelGAMDomains(accounts,sites,reported,metadata,assignments);
         setDomainsByChannel(domains); setDomainIssues([...issues]);
+        if(cacheKey)channelDomainCache.set(cacheKey,{accounts,sites:{...sites},reported:{...reported},metadata,assignments,domains});
       };
+      publish();
+      const activeAccounts=accounts.filter(account=>account.status==='active');
       const worker=async()=>{
-        while(next<accounts.length && !controller.signal.aborted){
-          const account=accounts[next++];
-          if(account.status==='active'){
-            const results=await Promise.allSettled([
-              allChannelGamSites(account.id,controller.signal),
-              api('/api/admin/gam-accounts/'+account.id+'/site-domains',{signal:controller.signal})
-            ]);
-            if(results[0].status==='fulfilled')sites[account.id]=results[0].value;
-            else if(!controller.signal.aborted)issues.push(account.name+'：GAM Sites 读取失败');
-            if(results[1].status==='fulfilled')reported[account.id]=results[1].value.items || [];
-            else if(!controller.signal.aborted)issues.push(account.name+'：REST 报表子域名读取失败');
-          }
-          publish();
+        while(next<activeAccounts.length && !controller.signal.aborted){
+          const account=activeAccounts[next++];
+          await Promise.all([
+            allChannelGamSites(account.id,controller.signal,firstPage=>{
+              if(!controller.signal.aborted && !sites[account.id]){sites[account.id]=firstPage;publish();}
+            }).then(allSites=>{if(!controller.signal.aborted){sites[account.id]=allSites;publish();}})
+              .catch(()=>{if(!controller.signal.aborted){issues.push(account.name+'：GAM Sites 读取失败');publish();}}),
+            api('/api/admin/gam-accounts/'+account.id+'/site-domains',{signal:controller.signal})
+              .then(result=>{if(!controller.signal.aborted){reported[account.id]=result.items || [];publish();}})
+              .catch(()=>{if(!controller.signal.aborted){issues.push(account.name+'：REST 报表子域名读取失败');publish();}})
+          ]);
         }
       };
-      await Promise.all(Array.from({length:Math.min(3,accounts.length)},worker));
-      if(!accounts.length)publish();
+      await Promise.all(Array.from({length:Math.min(4,activeAccounts.length)},worker));
     }catch(error){if(!controller.signal.aborted)setDomainIssues([error.message]);}
     finally{if(!controller.signal.aborted)setDomainBusy(false);}
   };
-  useEffect(()=>{void load();void loadDomains();return()=>domainRequest.current?.abort()},[]);
+  useEffect(()=>{let active=true;const channelLoad=load();if(cacheKey&&channelRowsCache.has(cacheKey))void loadDomains();else void channelLoad.finally(()=>{if(active)void loadDomains();});return()=>{active=false;domainRequest.current?.abort();}},[]);
   const save=async values=>{try{const payload={...values,effectiveFrom:values.effectiveFrom?.format('YYYY-MM-DD')};await api(editing?`/api/admin/channels/${editing.id}`:'/api/admin/channels',{method:editing?'PUT':'POST',body:JSON.stringify(payload)});message.success('已保存并读回');setOpen(false);load()}catch(e){message.error(e.message)}};
   const show=item=>{setEditing(item||null);form.setFieldsValue(item?{...item,effectiveFrom:dayjs() }:{sharePercent:80,status:'active',effectiveFrom:dayjs()});setOpen(true)};
   const resetPassword=r=>Modal.confirm({title:`重置 ${r.name} 的登录密码`,content:<Input.Password id="channel-new-password" placeholder="至少10位"/>,onOk:async()=>{const password=document.getElementById('channel-new-password')?.value||'';await api(`/api/admin/channels/${r.id}/password`,{method:'POST',body:JSON.stringify({password})});message.success('密码已更新，旧会话已退出')}});
   const rotateSecret=async r=>{const {secret}=await api(`/api/admin/channels/${r.id}/api-secret`,{method:'POST'});Modal.info({title:'新的渠道 API 密钥',width:620,content:<><Alert type="warning" showIcon message="密钥只显示这一次，请立即交付给渠道并妥善保存"/><Input.TextArea value={secret} readOnly autoSize style={{marginTop:16}}/></>});load()};
-  const showDomainList=r=>{
-    const rows=domainsByChannel.get(r.id)||[];
-    Modal.info({title:r.name+' · 真实 GAM 域名',width:820,okText:'关闭',content:<Space direction="vertical" style={{width:'100%'}}>
-      <Text type="secondary">来自该 Network 的 GAM Sites 或其 REST 报表子域名；渠道归属依据另列。</Text>
-      {domainIssues.length>0&&<Alert type="warning" showIcon message="部分 GAM 账号读取失败，结果可能不完整"/>}
-      <Table size="small" rowKey="key" dataSource={rows} pagination={{pageSize:10}} scroll={{x:680}} columns={[
-        {title:'域名',dataIndex:'domain',width:230},
-        {title:'GAM 账号',dataIndex:'accountName',width:130},
-        {title:'Network',dataIndex:'networkCode',width:100},
-        {title:'GAM 来源',dataIndex:'source',width:110},
-        {title:'渠道归属',dataIndex:'assignmentSource',width:110}
-      ]}/>
-    </Space>});
-  };
+  const showDomainList=row=>setDomainModalChannel(row);
   const domainColumn={title:<Space size={4}>真实 GAM 域名<Button type="text" size="small" icon={<ReloadOutlined/>} loading={domainBusy} onClick={()=>void loadDomains()}/></Space>,width:290,
     render:(_,row)=>{const domains=domainsByChannel.get(row.id)||[];
       if(!domains.length)return <Text type="secondary">{domainBusy?'读取 GAM 域名中…':domainIssues.length?'读取不完整，请刷新':'暂无对应 GAM 域名'}</Text>;
       const names=[...new Set(domains.map(item=>item.domain))];
-      return <Space wrap size={4}>{names.slice(0,2).map(name=><Tag key={name}>{name}</Tag>)}<Button type="link" size="small" onClick={()=>showDomainList(row)}>查看全部（{domains.length}）</Button></Space>;
+      return <Space wrap size={4}>{names.slice(0,2).map(name=><Tag key={name}>{name}</Tag>)}<Button type="link" size="small" onClick={()=>showDomainList(row)}>查看全部（{domains.length}）</Button>{domainBusy&&<Text type="secondary">更新中…</Text>}{domainIssues.length>0&&<Text type="warning">部分未更新</Text>}</Space>;
     }};
   const columns=[{title:'渠道',dataIndex:'name'},domainColumn,{title:'登录邮箱',dataIndex:'email'},{title:'分成比例',dataIndex:'sharePercent',render:v=>`${v}%`},{title:'API',dataIndex:'apiConfigured',render:v=><Tag color={v?'green':'orange'}>{v?'已配置':'未生成'}</Tag>},{title:'状态',dataIndex:'status',render:v=><Tag color={v==='active'?'green':'default'}>{v==='active'?'启用':'停用'}</Tag>},{title:'操作',render:(_,r)=><Space><Button type="link" onClick={()=>show(r)}>编辑</Button><Button type="link" icon={<KeyOutlined/>} onClick={()=>resetPassword(r)}>密码</Button><Button type="link" onClick={()=>rotateSecret(r)}>API密钥</Button></Space>}];
-  return <Space direction="vertical" size={16} className="page-stack"><div className="page-heading"><div><Title level={2}>渠道管理</Title><Text type="secondary">渠道资料与真实 GAM 域名统一查看；域名来源和渠道归属可在列表中核对</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={()=>show(null)}>新建渠道</Button></div><Card><Table rowKey="id" dataSource={items} columns={columns} scroll={{x:1200}}/></Card><Drawer title={editing?'编辑渠道':'新建渠道'} open={open} onClose={()=>setOpen(false)} width={520} destroyOnClose><Form form={form} layout="vertical" onFinish={save}><Form.Item name="name" label="渠道名称" rules={[{required:true}]}><Input/></Form.Item><Form.Item name="email" label="登录邮箱" rules={[{required:true,type:'email'}]}><Input disabled={Boolean(editing)}/></Form.Item>{!editing&&<Form.Item name="password" label="初始密码" rules={[{required:true,min:10}]}><Input.Password/></Form.Item>}<Form.Item name="sharePercent" label="渠道分成比例（%）" rules={[{required:true}]}><InputNumber min={0} max={100} precision={2} style={{width:'100%'}}/></Form.Item><Form.Item name="effectiveFrom" label="分成生效日期" rules={[{required:true,message:'请选择生效日期'}]} extra="历史数据按该日期起使用新比例；修改同一日期会更新该日期的规则"><DatePicker format="YYYY-MM-DD" style={{width:'100%'}}/></Form.Item><Form.Item name="status" label="状态"><Select options={[{value:'active',label:'启用'},{value:'disabled',label:'停用'}]}/></Form.Item><Button type="primary" htmlType="submit">保存并读回</Button></Form></Drawer></Space>;
+  return <Space direction="vertical" size={16} className="page-stack"><div className="page-heading"><div><Title level={2}>渠道管理</Title><Text type="secondary">渠道资料与真实 GAM 域名统一查看；域名来源和渠道归属可在列表中核对</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={()=>show(null)}>新建渠道</Button></div><Card><Table rowKey="id" dataSource={items} columns={columns} scroll={{x:1200}}/></Card><ChannelDomainModal channel={items.find(item=>item.id===domainModalChannel?.id)||domainModalChannel} domains={domainsByChannel} issues={domainIssues} busy={domainBusy} onClose={()=>setDomainModalChannel(null)}/><Drawer title={editing?'编辑渠道':'新建渠道'} open={open} onClose={()=>setOpen(false)} width={520} destroyOnClose><Form form={form} layout="vertical" onFinish={save}><Form.Item name="name" label="渠道名称" rules={[{required:true}]}><Input/></Form.Item><Form.Item name="email" label="登录邮箱" rules={[{required:true,type:'email'}]}><Input disabled={Boolean(editing)}/></Form.Item>{!editing&&<Form.Item name="password" label="初始密码" rules={[{required:true,min:10}]}><Input.Password/></Form.Item>}<Form.Item name="sharePercent" label="渠道分成比例（%）" rules={[{required:true}]}><InputNumber min={0} max={100} precision={2} style={{width:'100%'}}/></Form.Item><Form.Item name="effectiveFrom" label="分成生效日期" rules={[{required:true,message:'请选择生效日期'}]} extra="历史数据按该日期起使用新比例；修改同一日期会更新该日期的规则"><DatePicker format="YYYY-MM-DD" style={{width:'100%'}}/></Form.Item><Form.Item name="status" label="状态"><Select options={[{value:'active',label:'启用'},{value:'disabled',label:'停用'}]}/></Form.Item><Button type="primary" htmlType="submit">保存并读回</Button></Form></Drawer></Space>;
 }
 
 function DataImport() {
@@ -441,7 +460,7 @@ function SettlementConfigEditor() {
 
 
 export default function AdminPages({ view, user }) {
-  if (view === 'channels') return <Channels/>;
+  if (view === 'channels') return <Channels key={user?.id || user?.email} user={user}/>;
   if (view === 'imports') return <DataImport/>;
   if (view === 'gam') return <GamAccounts/>;
   if (view === 'settlement') return <SettlementConfigEditor/>;

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { channelGAMDomains } from '../src/channel-domain-catalog.mjs';
+import { channelGAMDomains, resolveChannelAssignment } from '../src/channel-domain-catalog.mjs';
 import { allowedAdminRequest } from '../server/admin-permissions.mjs';
 
 const account = { id: 1, name: 'GAM A', networkCode: '123456', status: 'active', channelId: 7 };
@@ -33,6 +33,29 @@ test('explicit link and domain assignments override account channel', () => {
   assert.equal(grouped.get(7), undefined);
   assert.equal(grouped.get(9)[0].assignmentSource, '链接管理');
   assert.equal(grouped.get(10)[0].assignmentSource, '域名归属');
+});
+
+test('link channel resolution matches channel management when metadata has no channel', () => {
+  const names = new Map([[7, 'Account channel'], [10, 'Domain channel']]);
+  assert.deepEqual(resolveChannelAssignment(account, { channelId: null, notes: 'saved' },
+    { channelId: 10, channelName: 'Domain channel' }, names),
+    { channelId: 10, channelName: 'Domain channel', assignmentSource: '域名归属' });
+  assert.deepEqual(resolveChannelAssignment(account, { channelId: null }, null, names),
+    { channelId: 7, channelName: 'Account channel', assignmentSource: '账号同步映射' });
+  const grouped = channelGAMDomains([account], { 1: [site('example.com')] }, {},
+    [{ networkCode: '123456', domain: 'example.com', channelId: null }],
+    [{ domain: 'example.com', channelId: 10, channelName: 'Domain channel' }]);
+  assert.equal(grouped.get(10)[0].assignmentSource, '域名归属');
+});
+
+test('link assignment is scoped by GAM Network before domain fallback', () => {
+  const other = { ...account, id: 2, networkCode: '999999', channelId: 7 };
+  const grouped = channelGAMDomains([account, other],
+    { 1: [site('example.com')], 2: [{ ...site('example.com'), name: 'networks/999999/sites/1' }] }, {},
+    [{ networkCode: '123456', domain: 'example.com', channelId: 9 }],
+    [{ domain: 'example.com', channelId: 10 }]);
+  assert.equal(grouped.get(9)[0].networkCode, '123456');
+  assert.equal(grouped.get(10)[0].networkCode, '999999');
 });
 
 test('report-only domains without a GAM parent and disconnected accounts are omitted', () => {
