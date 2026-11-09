@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import dayjs from 'dayjs';
 import { reportPresetRange, selectedReportPreset } from '../src/reportDatePresets.js';
 
-test('report shortcuts cover complete days through yesterday', () => {
+test('report shortcuts include today and keep rolling ranges through yesterday', () => {
   const now = dayjs('2026-11-05T16:00:00');
   const expected = {
+    today: ['2026-11-05', '2026-11-05'],
     monthToDate: ['2026-11-01', '2026-11-05'],
     yesterday: ['2026-11-04', '2026-11-04'],
     last7: ['2026-10-29', '2026-11-04'],

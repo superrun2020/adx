@@ -12,6 +12,7 @@ import {
 import dayjs from 'dayjs';
 import GamAdUnitCreator from './GamAdUnitCreator.jsx';
 import { adminPermissionOptions } from './navigation.js';
+import { reportPresetRange } from './reportDatePresets.js';
 
 const { Title, Text } = Typography;
 const money = value => '$' + Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -216,7 +217,7 @@ function GamAccounts() {
       {title:'操作',width:150,render:(_,item)=><Space size={4}><Button type="link" onClick={()=>openEdit(item)}>编辑</Button><Dropdown menu={{items:accountActions(item),onClick:({key})=>accountAction(item,key)}} trigger={['click']}><Button size="small">更多</Button></Dropdown></Space>}
     ]}/></Card>
     <Alert type="warning" showIcon message="先核对新旧报表的财务口径" description="REST 的 AD_EXCHANGE_REVENUE 与旧报表的行项目级收入不可直接视为相同。请先选择渠道、上游账户和金额单位，预览核对后再启用自动入库。"/>
-    <Card title="日期范围（预览或手动同步）"><Space wrap><DatePicker.RangePicker value={dates} onChange={setDates} placeholder={['账号时区：昨日','账号时区：今日']}/><Text type="secondary">留空时按每个 Ad Manager 账号自身时区读取昨日到今日；手选日期则按指定日期。</Text></Space></Card>
+    <Card title="日期范围（预览或手动同步）"><Space wrap><DatePicker.RangePicker value={dates} onChange={setDates} presets={[{label:'今天',value:() => reportPresetRange('today')},{label:'昨天',value:() => reportPresetRange('yesterday')}]} placeholder={['账号时区：昨日','账号时区：今日']}/><Text type="secondary">留空时按每个 Ad Manager 账号自身时区读取昨日到今日；快捷或手选日期则按指定日期。</Text></Space></Card>
     {preview&&<Card title={'预览：'+preview.account?.name+' / '+preview.start+' 至 '+preview.end}><Descriptions items={[
       {key:'rows',label:'行数',children:preview.rows},{key:'revenue',label:'收入（USD）',children:Number(preview.revenue).toFixed(2)},
       {key:'divisor',label:'金额除数',children:preview.moneyDivisor}

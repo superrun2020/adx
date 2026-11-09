@@ -1,6 +1,7 @@
 import dayjs from 'dayjs';
 
 export const reportDateOptions = [
+  { value: 'today', label: '今天' },
   { value: 'monthToDate', label: '本月至今' },
   { value: 'yesterday', label: '昨天' },
   { value: 'last7', label: '过去 7 天' },
@@ -13,6 +14,7 @@ export const reportDateOptions = [
 // Rolling comparisons use complete days; the existing default keeps today's live data.
 export function reportPresetRange(preset, now = dayjs()) {
   const today = dayjs(now).startOf('day');
+  if (preset === 'today') return [today, today];
   if (preset === 'monthToDate') return [today.startOf('month'), today];
   const end = today.subtract(1, 'day');
   const start = preset === 'yesterday' ? end
