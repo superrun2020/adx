@@ -273,6 +273,17 @@ test('reports keep distinct ad unit IDs, page safely, and drill into exact rows'
   const second = await request('/api/reports?' + query);
   assert.equal(second.body.items.length, 1);
   assert.notEqual(second.body.items[0].adUnitId, first.body.items[0].adUnitId);
+  query.set('sortBy', 'requests'); query.set('sortDir', 'asc'); query.set('page', '1');
+  assert.equal((await request('/api/reports?' + query)).body.items[0].requests, 100);
+  query.set('page', '2');
+  assert.equal((await request('/api/reports?' + query)).body.items[0].requests, 200);
+  query.set('sortDir', 'desc'); query.set('page', '1');
+  assert.equal((await request('/api/reports?' + query)).body.items[0].requests, 200);
+  query.set('page', '2');
+  assert.equal((await request('/api/reports?' + query)).body.items[0].requests, 100);
+  query.set('sortBy', 'requests;DROP TABLE revenue_facts');
+  assert.equal((await request('/api/reports?' + query)).response.status, 400);
+  query.delete('sortBy'); query.delete('sortDir');
   const drill = new URLSearchParams({ start:'2026-10-12', end:'2026-10-12',
     dimensions:'date,hour,adUnit,adUnitId,country', drill:JSON.stringify({ adUnitId:'unit-1' }) });
   const detail = await request('/api/reports?' + drill);
@@ -304,6 +315,8 @@ test('reports keep distinct ad unit IDs, page safely, and drill into exact rows'
     { headers:{ 'X-Forwarded-Host':'adxpub.geekforest.ai' } });
   assert.equal(channelReport.body.items.length, 2);
   assert.equal(channelReport.body.items[0].upstreamRevenue, undefined);
+  assert.equal((await request('/api/reports?dimensions=adUnitId&sortBy=upstreamRevenue&sortDir=asc',
+    { headers:{ 'X-Forwarded-Host':'adxpub.geekforest.ai' } })).response.status, 403);
   assert.equal((await request('/api/reports?dimensions=advertiser',
     { headers:{ 'X-Forwarded-Host':'adxpub.geekforest.ai' } })).response.status, 403);
 });

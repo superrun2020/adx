@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-var adminSidebarViews = []string{"dashboard", "gam", "links", "ad-units", "reports", "regression", "channels", "settlement", "report-keys", "api"}
+var adminSidebarViews = []string{"dashboard", "gam", "links", "ad-units", "reports", "regression", "bot-report", "channels", "settlement", "report-keys", "api"}
 
 func validSidebarPermissions(value any) ([]string, error) {
 	items, ok := value.([]any)
@@ -80,6 +80,8 @@ func (u user) allowedRequest(r *http.Request) bool {
 		views = []string{"report-keys"}
 	case strings.HasPrefix(path, "/api/admin/regression/"):
 		views = []string{"regression"}
+	case strings.HasPrefix(path, "/api/admin/bot-report/"):
+		views = []string{"bot-report"}
 	case path == "/api/admin/link-metadata" && method == http.MethodGet:
 		views = []string{"links", "channels"}
 	case path == "/api/admin/link-metadata":

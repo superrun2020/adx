@@ -124,6 +124,17 @@ func (a *app) serveReports(w http.ResponseWriter, r *http.Request, export bool) 
 		writeError(w, 403, "report_filter_forbidden")
 		return
 	}
+	sortBy, sortDir := q.Get("sortBy"), q.Get("sortDir")
+	if sortBy != "" || sortDir != "" {
+		if !reportMetrics[sortBy] || (sortDir != "asc" && sortDir != "desc") {
+			writeError(w, 400, "invalid_report_sort")
+			return
+		}
+		if !isAdmin && (sortBy == "upstreamRevenue" || sortBy == "grossProfit" || sortBy == "upstreamSharePercent" || sortBy == "channelSharePercent") {
+			writeError(w, 403, "report_sort_forbidden")
+			return
+		}
+	}
 	start, end := reportRange(r)
 	if start > end {
 		writeError(w, 400, "invalid_report_range")
@@ -295,7 +306,14 @@ func (a *app) serveReports(w http.ResponseWriter, r *http.Request, export bool) 
 	} else {
 		grouped += "SELECT grouped.*,COUNT(*) OVER() totalRows FROM grouped"
 	}
-	grouped += " ORDER BY sortDate DESC," + visible + " DESC LIMIT ? OFFSET ?"
+	order := "sortDate DESC," + visible + " DESC"
+	if sortBy != "" {
+		order = rateSQL[sortBy] + " " + strings.ToUpper(sortDir) + "," + order
+	}
+	for _, key := range dimensions {
+		order += "," + key + " ASC"
+	}
+	grouped += " ORDER BY " + order + " LIMIT ? OFFSET ?"
 	args = append(args, metricArgs...)
 	offset := (page - 1) * pageSize
 	if export {

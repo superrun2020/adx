@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from 'antd';
 import { ReloadOutlined, SettingOutlined } from '@ant-design/icons';
 import ReportDateFilter from './ReportDateFilter.jsx';
+import NumericSortHeader from './NumericSortHeader.jsx';
 
 const { Title, Text } = Typography;
 const cadenceNames = { day: '单日 · 同日上次快照', three_days: '近 3 天 · 前 3 天', week: '近 7 天 · 前 7 天', month: '近 30 天 · 前 30 天' };
@@ -32,6 +33,7 @@ export default function RegressionMonitor() {
   const [domain, setDomain] = useState('');
   const [alertsOnly, setAlertsOnly] = useState(false);
   const [page, setPage] = useState(1);
+  const [sort, setSort] = useState(null);
   const [form] = Form.useForm();
   const requestId = useRef(0);
 
@@ -45,6 +47,7 @@ export default function RegressionMonitor() {
       if (cadence) q.set('cadence', cadence);
       if (domain.trim()) q.set('domain', domain.trim());
       if (alertsOnly) q.set('alertsOnly', '1');
+      if (sort) { q.set('sortBy', sort.key); q.set('sortDir', sort.direction); }
       const result = await api('/api/admin/regression/events?' + q);
       if (id === requestId.current) { setRows(result.items || []); setTotal(result.total || 0); }
     } catch (error) { if (id === requestId.current) message.error('监测记录读取失败：' + error.message); }
@@ -60,7 +63,7 @@ export default function RegressionMonitor() {
     if (results.some(result => result.status === 'rejected')) message.error('部分监测信息读取失败，请刷新重试');
   };
   useEffect(() => { loadMeta(); }, []);
-  useEffect(() => { const timer = window.setTimeout(loadEvents, domain ? 250 : 0); return () => { window.clearTimeout(timer); requestId.current += 1; }; }, [page, range?.[0]?.valueOf(), range?.[1]?.valueOf(), accountId, cadence, domain, alertsOnly]);
+  useEffect(() => { const timer = window.setTimeout(loadEvents, domain ? 250 : 0); return () => { window.clearTimeout(timer); requestId.current += 1; }; }, [page, range?.[0]?.valueOf(), range?.[1]?.valueOf(), accountId, cadence, domain, alertsOnly, sort]);
   const updateFilter = setter => value => { setPage(1); setter(value); };
   const openSettings = () => {
     form.setFieldsValue({ feishuEnabled: Boolean(settings?.feishuEnabled), minRevenue: settings?.minRevenue ?? 50,
@@ -78,19 +81,22 @@ export default function RegressionMonitor() {
     finally { setSaving(false); }
   };
 
+  const numericTitle = (label, key) => <NumericSortHeader label={label}
+    direction={sort?.key === key ? sort.direction : ''}
+    onSort={direction => { setPage(1); setSort({ key, direction }); }}/>;
   const columns = [
     { title: '监测时间', dataIndex: 'createdAt', width: 190, render: (value, row) => <Tooltip title={row.timeZone || '浏览器时区'}>{stamp(value, row.timeZone)}{row.timeZone ? ' (' + row.timeZone + ')' : ''}</Tooltip> },
     { title: '数据及对比区间', width: 265, render: (_, row) => <Space direction="vertical" size={0}><Text strong>{row.periodStart === row.periodEnd ? row.periodEnd : row.periodStart + ' ~ ' + row.periodEnd}</Text><Text type="secondary" style={{fontSize:11}}>{row.baselineStart && row.baselineEnd ? '对比 ' + row.baselineStart + ' ~ ' + row.baselineEnd : '对比同日上次快照'}</Text><Text type="secondary" style={{fontSize:11}}>{cadenceNames[row.cadence]}</Text></Space> },
     { title: '最早已确认下修数据日', dataIndex: 'dropStartDate', width: 175, render: (value, row) => value ? <Tooltip title="现有同日快照可证实的最早下修日；如历史快照不完整，实际起始日可能更早。"><strong>{value}</strong></Tooltip> : row.alertStatus !== 'not_triggered' ? <Tooltip title="本次多日监测比较的是相邻时段的区间总额；缺少可证实同日下修的历史快照，不能据此确定具体数据日。"><Text type="secondary">区间内未定位</Text></Tooltip> : '—' },
     { title: '账号', dataIndex: 'accountName', width: 160, ellipsis: true },
     { title: '域名', dataIndex: 'domain', width: 230, ellipsis: true },
-    { title: '原收入', dataIndex: 'oldRevenue', width: 105, align: 'right', render: money },
-    { title: '新收入', dataIndex: 'newRevenue', width: 105, align: 'right', render: money },
-    { title: '收入变化', dataIndex: 'revenueDelta', width: 110, align: 'right', render: value => <span style={{color: value < 0 ? '#cf1322' : '#389e0d'}}>{signedMoney(value)}</span> },
-    { title: '差异率', dataIndex: 'differencePercent', width: 100, align: 'right', render: value => <strong style={{color: value < 0 ? '#cf1322' : '#389e0d'}}>{signed(value, '%')}</strong> },
-    { title: '请求数变化', dataIndex: 'requestsDelta', width: 120, align: 'right', render: value => signed(value) },
-    { title: '展示数变化', dataIndex: 'impressionsDelta', width: 120, align: 'right', render: value => signed(value) },
-    { title: '点击数变化', dataIndex: 'clicksDelta', width: 110, align: 'right', render: value => signed(value) },
+    { title: numericTitle('原收入','oldRevenue'), dataIndex: 'oldRevenue', width: 105, align: 'right', render: money },
+    { title: numericTitle('新收入','newRevenue'), dataIndex: 'newRevenue', width: 105, align: 'right', render: money },
+    { title: numericTitle('收入变化','revenueDelta'), dataIndex: 'revenueDelta', width: 110, align: 'right', render: value => <span style={{color: value < 0 ? '#cf1322' : '#389e0d'}}>{signedMoney(value)}</span> },
+    { title: numericTitle('差异率','differencePercent'), dataIndex: 'differencePercent', width: 100, align: 'right', render: value => <strong style={{color: value < 0 ? '#cf1322' : '#389e0d'}}>{signed(value, '%')}</strong> },
+    { title: numericTitle('请求数变化','requestsDelta'), dataIndex: 'requestsDelta', width: 120, align: 'right', render: value => signed(value) },
+    { title: numericTitle('展示数变化','impressionsDelta'), dataIndex: 'impressionsDelta', width: 120, align: 'right', render: value => signed(value) },
+    { title: numericTitle('点击数变化','clicksDelta'), dataIndex: 'clicksDelta', width: 110, align: 'right', render: value => signed(value) },
     { title: '来源', width: 90, render: () => <Tag color="purple">GAM REST</Tag> },
     { title: '飞书通知', dataIndex: 'alertStatus', width: 110, render: (value, row) => <Tag title={row.alertError || ''} color={value === 'sent' ? 'green' : value === 'failed' ? 'red' : value === 'pending' ? 'blue' : 'default'}>{({sent:'已发送',failed:'发送失败',pending:'待发送',disabled:'未启用',duplicate:'已去重',not_triggered:'未触发'})[value] || value}</Tag> }
   ];
@@ -111,7 +117,7 @@ export default function RegressionMonitor() {
       <Input allowClear placeholder="域名筛选" style={{width:205}} value={domain} onChange={event => {setPage(1); setDomain(event.target.value);}} onPressEnter={loadEvents}/>
       <Button onClick={() => {setPage(1); loadEvents();}}>搜索</Button>
       <Space><Switch checked={alertsOnly} onChange={updateFilter(setAlertsOnly)}/><Tooltip title="达到收入回退阈值，包含已发送、待发送、发送失败及通知未启用的记录"><Text>仅看已触发</Text></Tooltip></Space>
-      <Button onClick={() => {setRange(null);setAccountId(null);setCadence(null);setDomain('');setAlertsOnly(false);setPage(1);}}>重置</Button>
+      <Button onClick={() => {setRange(null);setAccountId(null);setCadence(null);setDomain('');setAlertsOnly(false);setSort(null);setPage(1);}}>重置</Button>
     </Space></Card>
     <Card className="regression-table" title={'监测记录（' + total + '）'}><Table rowKey="id" loading={loading} dataSource={rows} columns={columns} size="middle" scroll={{x:1850}}
       pagination={{current:page,pageSize:100,total,showSizeChanger:false,onChange:setPage}} locale={{emptyText:'暂无可比较的变化记录；首次同步会先建立基准快照'}}/></Card>

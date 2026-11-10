@@ -34,6 +34,14 @@ func TestLinksOnlyAdminReceivesRestrictedGamAccountFields(t *testing.T) {
 	}
 }
 
+func TestBotReportPermissionIsSeparateFromRegression(t *testing.T) {
+	u := user{Role: "admin", SidebarPermissions: sql.NullString{String: adminPermissionsJSON([]string{"bot-report"}), Valid: true}}
+	if !u.allowedRequest(httptest.NewRequest(http.MethodGet, "/api/admin/bot-report/settings", nil)) ||
+		u.allowedRequest(httptest.NewRequest(http.MethodGet, "/api/admin/regression/settings", nil)) {
+		t.Fatal("bot report permission must be scoped to its own module")
+	}
+}
+
 func TestChannelsOnlyAdminReadsGamDomainsWithoutLinkWriteAccess(t *testing.T) {
 	a := testApp(t)
 	if _, err := a.db.Exec("INSERT INTO channels(id,name,email) VALUES(7,'Channel','channel@example.test')"); err != nil {

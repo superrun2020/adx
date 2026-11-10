@@ -15,6 +15,7 @@ import { clearCachedUser, readCached, rememberRead } from './readCache.js';
 import { canVisit, viewForPath, viewPaths } from './navigation.js';
 import ReportDateFilter from './ReportDateFilter.jsx';
 import RevenueChart from './RevenueChart.jsx';
+import NumericSortHeader from './NumericSortHeader.jsx';
 import './styles.css';
 
 
@@ -24,6 +25,7 @@ const Reports = React.lazy(() => import('./ReportExplorer.jsx'));
 const AdminPages = React.lazy(() => import('./AdminPages.jsx'));
 const LinkManager = React.lazy(() => import('./LinkManager.jsx'));
 const RegressionMonitor = React.lazy(() => import('./RegressionMonitor.jsx'));
+const BotReport = React.lazy(() => import('./BotReport.jsx'));
 async function api(path, options = {}) {
   const response = await fetch(path, {
     credentials: 'include',
@@ -92,6 +94,7 @@ function MetricCards({ summary, admin }) {
 function DashboardTopLinks({ user, refreshKey }) {
   const path = '/api/dashboard/highlights';
   const [data, setData] = useState(() => readCached(user, path)?.data || null);
+  const [sorts, setSorts] = useState({});
   useEffect(() => {
     let active = true;
     const load = () => {
@@ -107,17 +110,29 @@ function DashboardTopLinks({ user, refreshKey }) {
     const timer = window.setInterval(load, 15 * 60 * 1000);
     return () => { active = false; window.clearInterval(timer); };
   }, [user.id, refreshKey]);
-  const columns = [
-    { title:'排名', width:64, render:(_, row, index) => <span className={'rank-badge rank-' + (index + 1)}>{index + 1}</span> },
+  const columnsFor = period => [
+    { title:'排名', width:64, render:(_, row) => <span className={'rank-badge rank-' + row.rank}>{row.rank}</span> },
     { title:'链接', dataIndex:'url', ellipsis:true, render:value => <strong className="rank-url" title={value}>{value || '—'}</strong> },
-    { title:'展示', dataIndex:'impressions', align:'right', width:110, render:number },
-    { title:'收益', dataIndex:'revenue', align:'right', width:120, render:value => <strong>{money(value)}</strong> }
+    { title:<NumericSortHeader label="展示" direction={sorts[period]?.key === 'impressions' ? sorts[period].direction : ''}
+      onSort={direction => setSorts(previous => ({ ...previous, [period]: { key:'impressions', direction } }))}/>,
+      dataIndex:'impressions', align:'right', width:110, render:number },
+    { title:<NumericSortHeader label="收益" direction={sorts[period]?.key === 'revenue' ? sorts[period].direction : ''}
+      onSort={direction => setSorts(previous => ({ ...previous, [period]: { key:'revenue', direction } }))}/>,
+      dataIndex:'revenue', align:'right', width:120, render:value => <strong>{money(value)}</strong> }
   ];
+  const sortedRows = (period, rows) => {
+    const ranked = (rows || []).map((row, index) => ({ ...row, rank:index + 1 }));
+    const sort = sorts[period];
+    return sort ? ranked.sort((a,b) => {
+      const delta = (Number(a[sort.key]) || 0) - (Number(b[sort.key]) || 0);
+      return (sort.direction === 'asc' ? delta : -delta) || a.rank - b.rank;
+    }) : ranked;
+  };
   return <Space direction="vertical" size={8} style={{width:'100%'}}>
     <Text type="secondary">当日、当月按各 Ad Manager 账号时区计算，仅统计 REST 同步数据。</Text>
     {data?.timeZoneWarnings?.length > 0 && <Alert type="warning" showIcon message={'以下账号未配置有效时区，暂按 UTC 计算：' + data.timeZoneWarnings.join('、')}/>}
     <Row gutter={[16,16]}>
-      {[['当日链接收益 Top 10', data?.daily], ['当月链接收益 Top 10', data?.monthly]].map(([title, rows]) => <Col xs={24} xl={12} key={title}><Card className="highlight-ranking" title={title} extra="USD"><Table size="small" rowKey="url" pagination={false} columns={columns} dataSource={rows || []} scroll={{x:520}} locale={{emptyText:<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无已同步数据"/>}}/></Card></Col>)}
+      {[['当日链接收益 Top 10', 'daily', data?.daily], ['当月链接收益 Top 10', 'monthly', data?.monthly]].map(([title, period, rows]) => <Col xs={24} xl={12} key={title}><Card className="highlight-ranking" title={title} extra="USD"><Table size="small" rowKey="url" pagination={false} columns={columnsFor(period)} dataSource={sortedRows(period, rows)} scroll={{x:520}} locale={{emptyText:<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无已同步数据"/>}}/></Card></Col>)}
     </Row>
   </Space>;
 }
@@ -198,12 +213,13 @@ function Shell({ user, onLogout, initialView = 'dashboard', initialDashboard, on
       {key:'dashboard',icon:<DashboardOutlined/>,label:'经营总览'},
       ...(admin?[{key:'gam',icon:<SafetyOutlined/>,label:'账号管理'},{key:'links',icon:<LinkOutlined/>,label:'链接管理'},{key:'ad-units',icon:<PlusOutlined/>,label:'广告单元创建'}]:[]),
       {key:'reports',icon:<BarChartOutlined/>,label:'数据报告'},
-      ...(admin?[{key:'regression',icon:<ReloadOutlined/>,label:'数据回退监测'}]:[])
+      ...(admin?[{key:'regression',icon:<ReloadOutlined/>,label:'数据回退监测'},
+        {key:'bot-report',icon:<ApiOutlined/>,label:'机器人汇报'}]:[])
     ]},
     ...(admin?[{type:'group',label:'平台管理',children:[{key:'channels',icon:<TeamOutlined/>,label:'渠道管理'},{key:'settlement',icon:<DollarOutlined/>,label:'结算配置'},{key:'admins',icon:<UserSwitchOutlined/>,label:'管理员账户'},{key:'report-keys',icon:<KeyOutlined/>,label:'账户日报 API Key'}]}]:[]),
     {type:'group',label:'开发能力',children:[{key:'api',icon:<ApiOutlined/>,label:'渠道 API'}]}
   ].map(group=>({...group,children:group.children.filter(item=>canVisit(user,item.key))})).filter(group=>group.children.length),[user]);
-  const body=view==='dashboard'?<Dashboard range={range} setRange={setRange} admin={admin} user={user} initialDashboard={initialDashboard}/>:view==='reports'?<Reports range={range} setRange={setRange} admin={admin} user={user}/>:view==='links'?<LinkManager/>:view==='regression'?<RegressionMonitor/>:<AdminPages view={view} user={user}/>;
+  const body=view==='dashboard'?<Dashboard range={range} setRange={setRange} admin={admin} user={user} initialDashboard={initialDashboard}/>:view==='reports'?<Reports range={range} setRange={setRange} admin={admin} user={user}/>:view==='links'?<LinkManager/>:view==='regression'?<RegressionMonitor/>:view==='bot-report'?<BotReport/>:<AdminPages view={view} user={user}/>;
   return <Layout className="app-shell"><Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={238}><div className="side-brand"><span>AX</span>{!collapsed&&<div><b>{admin?'AdX Control':'AdX Publisher'}</b><small>{admin?'平台管理端':'渠道工作台'}</small></div>}</div><Menu theme="dark" mode="inline" selectedKeys={[view]} items={menu} onClick={({key})=>navigate(key)}/></Sider><Layout><Header><div><Text strong>{user.name||user.email}</Text><Tag color={admin?'blue':'cyan'}>{user.isSuperAdmin?'最高管理员':admin?'平台管理员':'渠道账号'}</Tag></div><Popconfirm title="确认退出登录？" onConfirm={onLogout}><Button icon={<LogoutOutlined/>}>退出</Button></Popconfirm></Header><Content><PageErrorBoundary key={view}><React.Suspense fallback={<Card className="route-loading">正在加载页面…</Card>}>{body}</React.Suspense></PageErrorBoundary></Content></Layout></Layout>;
 }
 

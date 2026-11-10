@@ -4,6 +4,7 @@ import { BarChartOutlined, DownloadOutlined, FilterOutlined, ReloadOutlined } fr
 import { readCached, rememberRead } from './readCache.js';
 import ReportDateFilter from './ReportDateFilter.jsx';
 import DiagnosticReport from './DiagnosticReport.jsx';
+import NumericSortHeader from './NumericSortHeader.jsx';
 
 const { Title, Text } = Typography;
 const dimensions = [
@@ -41,12 +42,13 @@ async function getJson(path) {
   if (!response.ok || data.ok === false) throw new Error(data.error || 'http_' + response.status);
   return data;
 }
-function metricColumns(selected, admin) {
+function metricColumns(selected, admin, sort, onSort) {
   return selected.map(key => {
     const label = [...coreMetrics, ...(admin ? adminMetrics : [])].find(([id]) => id === key)?.[1] || key;
     const render = key.toLowerCase().includes('rate') || key.endsWith('Percent') ? pct
       : ['revenue','ecpm','grossProfit'].some(part => key.toLowerCase().includes(part.toLowerCase())) ? money : number;
-    return { title:label, dataIndex:key, width:125, align:'right', render };
+    return { title:<NumericSortHeader label={label} direction={sort?.key === key ? sort.direction : ''}
+      onSort={direction => onSort({ key, direction })}/>, dataIndex:key, width:125, align:'right', render };
   });
 }
 
@@ -59,6 +61,7 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
   const [total, setTotal] = useState(() => readCached(user, defaultReportPath(range))?.data?.total || 0);
   const [cachedRows, setCachedRows] = useState(() => Boolean(readCached(user, defaultReportPath(range))));
   const [page, setPage] = useState(1), [pageSize, setPageSize] = useState(50);
+  const [sort, setSort] = useState(null), [dailySort, setDailySort] = useState(null);
   const [dailyRows, setDailyRows] = useState([]), [dailyTotal, setDailyTotal] = useState(0);
   const [dailyBreakdown, setDailyBreakdown] = useState('');
   const [dailyPage, setDailyPage] = useState(1), [dailyPageSize, setDailyPageSize] = useState(10);
@@ -90,7 +93,8 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
     let active = true; setLoading(true); setError('');
     const extra = selectedDate && selectedDimensions.includes('date')
       ? { drill:JSON.stringify({ date:selectedDate }) } : {};
-    const path = '/api/reports?' + params(selectedDimensions,page,pageSize,extra);
+    const path = '/api/reports?' + params(selectedDimensions,page,pageSize,{ ...extra,
+      ...(sort ? { sortBy:sort.key, sortDir:sort.direction } : {}) });
     const saved = readCached(user, path);
     setRows(saved?.data?.items || []); setTotal(saved?.data?.total || 0); setCachedRows(Boolean(saved));
     getJson(path)
@@ -98,11 +102,12 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
       .catch(cause => { if (active) setError(cause.message); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [range[0].valueOf(),range[1].valueOf(),selectedDimensions.join(','),applied,page,pageSize,selectedDate]);
+  }, [range[0].valueOf(),range[1].valueOf(),selectedDimensions.join(','),applied,page,pageSize,selectedDate,sort]);
   useEffect(() => {
     if (!selectedDimensions.includes('date')) { setDailyRows([]); setDailyTotal(0); setDailyCached(false); return; }
     let active = true; setDailyLoading(true);
-    const path = '/api/reports?' + params(['date', ...(dailyBreakdown ? [dailyBreakdown] : [])],dailyPage,dailyPageSize);
+    const path = '/api/reports?' + params(['date', ...(dailyBreakdown ? [dailyBreakdown] : [])],dailyPage,dailyPageSize,
+      dailySort ? { sortBy:dailySort.key, sortDir:dailySort.direction } : {});
     const saved = readCached(user, path);
     setDailyRows(saved?.data?.items || []); setDailyTotal(saved?.data?.total || 0); setDailyCached(Boolean(saved));
     getJson(path)
@@ -114,16 +119,17 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
       .catch(cause => { if (active) message.error('每日汇总加载失败：' + cause.message); })
       .finally(() => { if (active) setDailyLoading(false); });
     return () => { active = false; };
-  }, [range[0].valueOf(),range[1].valueOf(),applied,dailyBreakdown,dailyPage,dailyPageSize,selectedDimensions.includes('date')]);
+  }, [range[0].valueOf(),range[1].valueOf(),applied,dailyBreakdown,dailyPage,dailyPageSize,selectedDimensions.includes('date'),dailySort]);
   const search = () => { setPage(1); setDailyPage(1); setSelectedDate(null); setApplied({ ...filters }); setFilterOpen(false); };
   const reset = () => { setFilters(defaultFilters); setApplied(defaultFilters); setPage(1); setDailyPage(1); setSelectedDate(null);
-    setSelectedDimensions(defaultDimensions); setSelectedMetrics(coreMetrics.map(([key]) => key)); };
+    setSelectedDimensions(defaultDimensions); setSelectedMetrics(coreMetrics.map(([key]) => key)); setSort(null); setDailySort(null); };
   const exportCsv = async () => {
     setExporting(true);
     try {
       const query = params(selectedDimensions,1,50000,{
         metrics:selectedMetrics.join(','),
-        ...(selectedDate && selectedDimensions.includes('date') ? {drill:JSON.stringify({date:selectedDate})} : {})
+        ...(selectedDate && selectedDimensions.includes('date') ? {drill:JSON.stringify({date:selectedDate})} : {}),
+        ...(sort ? { sortBy:sort.key, sortDir:sort.direction } : {})
       });
       const response = await fetch('/api/reports/export?' + query, { credentials:'include' });
       if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.error || 'http_' + response.status); }
@@ -136,10 +142,10 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
     title:dimensions.find(([id]) => id === key)?.[1] || key, dataIndex:key, width:width[key],
     render:value => value === null || value === undefined || value === '' ? '—' : String(value)
   }));
-  const columns = [...dimensionColumns(selectedDimensions),...metricColumns(selectedMetrics,admin)];
+  const columns = [...dimensionColumns(selectedDimensions),...metricColumns(selectedMetrics,admin,sort,value => { setPage(1); setSort(value); })];
   const dailyColumns = [{title:'日期',dataIndex:'date',width:130,fixed:'left'},
     ...dimensionColumns(dailyBreakdown ? [dailyBreakdown] : []),
-    ...metricColumns(selectedMetrics,admin)];
+    ...metricColumns(selectedMetrics,admin,dailySort,value => { setDailyPage(1); setDailySort(value); })];
   return <Space direction="vertical" size={16} className="page-stack report-explorer">
     <div className="page-heading"><div><Title level={2}>数据报告</Title>
       <Text type="secondary">按多维度查询、分析 Ad Manager 原始收益数据</Text>{cachedRows && <Text type="secondary" style={{marginLeft:10}}>已显示缓存数据{loading ? '，正在更新' : ''}</Text>}</div>
@@ -174,7 +180,10 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
           } }}/></div>
       <div className="report-choice-row"><span className="report-choice-label">指标</span>
         <Checkbox.Group value={selectedMetrics} options={shownMetrics.map(([value,label]) => ({value,label}))}
-          onChange={value => value.length && setSelectedMetrics(value)}/></div>
+          onChange={value => { if (!value.length) return; setSelectedMetrics(value);
+            if (sort && !value.includes(sort.key)) setSort(null);
+            if (dailySort && !value.includes(dailySort.key)) setDailySort(null);
+          }}/></div>
       <div className="report-query-actions"><Button icon={<FilterOutlined/>} onClick={() => setFilterOpen(true)}>更多筛选</Button>
         <span className="report-actions-spacer"/><Button onClick={reset}>重置</Button>
         <Button icon={<DownloadOutlined/>} loading={exporting} onClick={exportCsv}>导出 CSV</Button>
@@ -190,7 +199,7 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
       extra={<Space wrap><Text type="secondary">{range[0].format('YYYY-MM-DD')} 至 {range[1].format('YYYY-MM-DD')} · 共 {number(dailyTotal)} {dailyBreakdown ? '组' : '个有数据日期'}</Text>
         <Select aria-label="每日汇总分组维度" value={dailyBreakdown} options={dailyBreakdownOptions} style={{width:190}}
           onChange={value => { setDailyPage(1); setPage(1); setSelectedDate(null); setDailyBreakdown(value); }}/></Space>}>
-      <Text type="secondary">按最新日期排序；汇总列随上方“显示指标”变化。{dailyBreakdown ? '可在上方调整分组维度查看不同汇总。' : '点击日期可筛选下方表格，再点一次或选择“全部日期”恢复整个区间。'}</Text>
+      <Text type="secondary">默认按最新日期排序，数值列可点上下箭头排序；汇总列随上方“显示指标”变化。{dailyBreakdown ? '可在上方调整分组维度查看不同汇总。' : '点击日期可筛选下方表格，再点一次或选择“全部日期”恢复整个区间。'}</Text>
       <Table style={{marginTop:12}} size="small" rowKey={row => dailyBreakdown
         ? row.date + ':' + String(dailyBreakdown === 'channel' ? row.channelId : row[dailyBreakdown]) : row.date}
         loading={dailyLoading && !dailyCached} dataSource={dailyRows}

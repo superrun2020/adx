@@ -36,6 +36,11 @@
 .report-explorer .ant-table-thead>tr>th{background:#f3f4f6;color:#374151}
 .report-explorer .ant-table-tbody>tr:hover>td{background:#f9fafb}
 .report-explorer .ant-table-tbody>tr.ant-table-row:hover>td{background:#f9fafb}
+.numeric-sort-header{display:inline-flex;align-items:center;justify-content:flex-end;gap:5px;white-space:nowrap}
+.numeric-sort-actions{display:inline-flex;flex-direction:column;vertical-align:middle}
+.numeric-sort-actions button{display:flex;align-items:center;justify-content:center;width:16px;height:11px;padding:0;border:0;background:none;color:#9ca3af;cursor:pointer;font-size:10px;line-height:1}
+.numeric-sort-actions button:hover,.numeric-sort-actions button:focus-visible,.numeric-sort-actions button.active{color:#1677ff}
+.numeric-sort-actions button:focus-visible{outline:1px solid #1677ff;outline-offset:1px}
 .report-explorer .ant-btn-primary{background:var(--report-accent)}
 .report-explorer .ant-btn-primary:hover{background:#374151}
 .report-explorer .ant-select-focused .ant-select-selector,.report-explorer .ant-input:focus{border-color:var(--report-accent)}

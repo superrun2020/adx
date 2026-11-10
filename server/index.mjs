@@ -8,6 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { registerGamRoutes } from './gam-routes.mjs';
 import { createGamSync } from './gam-sync.mjs';
 import { registerRegressionMonitor } from './regression-monitor.mjs';
+import { registerBotReport } from './bot-report.mjs';
 import { ensureAdUnitIdDimension } from './revenue-schema.mjs';
 import { adminSidebarViews, allowedAdminRequest, parseSidebarPermissions, sidebarPermissionsFor } from './admin-permissions.mjs';
 
@@ -461,6 +462,8 @@ app.post('/api/admin/ad-units/create', requireAuth, requireAdmin, (req,res) => {
 app.get('/api/admin/ad-units', requireAuth, requireAdmin, (_req,res) => res.json({ok:true,items:db.prepare('SELECT id,code,name,subdomain,inventory_type inventoryType,size,description,adsense_enabled adsenseEnabled,placement,target_window targetWindow,label,status,provider_id providerId,gam_network_code gamNetworkCode,gam_parent_ad_unit gamParentAdUnit,publish_error publishError,published_at publishedAt,created_at createdAt FROM managed_ad_units ORDER BY id DESC LIMIT 1000').all()}));
 
 const regression = registerRegressionMonitor(app, { db, requireAuth, requireAdmin, encryptCredential, decryptCredential, transaction, gamSync, audit });
+const botReport = registerBotReport(app, { db, requireAuth, requireAdmin, encryptCredential, decryptCredential,
+  upstreamShareSql, settledRevenueSql, audit });
 const { runHourlyGamSync } = registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptCredential, tokenFor: gamTokenFor, gamSync, audit, onScheduledSync: regression.runForAccount });
 
 let dashboardDailyReady = true;
@@ -578,6 +581,13 @@ function serveReports(req, res, exportCsv = false) {
     return res.status(403).json({ ok:false, error:'report_dimension_forbidden' });
   if (!isAdmin && (req.query.advertiser || req.query.bd))
     return res.status(403).json({ ok:false, error:'report_filter_forbidden' });
+  const sortBy = String(req.query.sortBy || ''), sortDir = String(req.query.sortDir || '');
+  if (sortBy || sortDir) {
+    if (!Object.hasOwn(reportMetricMap, sortBy) || !['asc','desc'].includes(sortDir))
+      return res.status(400).json({ ok:false, error:'invalid_report_sort' });
+    if (!isAdmin && ['upstreamRevenue','grossProfit','upstreamSharePercent','channelSharePercent'].includes(sortBy))
+      return res.status(403).json({ ok:false, error:'report_sort_forbidden' });
+  }
   const { start, end } = range(req);
   if (start > end) return res.status(400).json({ ok:false, error:'invalid_report_range' });
   const page = Number(req.query.page || 1), requestedSize = Number(req.query.pageSize || 50);
@@ -660,6 +670,10 @@ function serveReports(req, res, exportCsv = false) {
     }
   }
   const metricWhere = metricFilters.length ? 'WHERE ' + metricFilters.join(' AND ') : '';
+  const orderBy = [
+    ...(sortBy ? [rateSql[sortBy] + ' ' + sortDir.toUpperCase()] : []),
+    'sortDate DESC', visible + ' DESC', ...dimensions.map(key => key + ' ASC')
+  ].join(',');
   const sql = `WITH grouped AS (
     SELECT ${select}, MAX(rf.report_date) sortDate,
       SUM(rf.requests) requests, SUM(rf.matched_requests) matchedRequests,
@@ -675,7 +689,7 @@ function serveReports(req, res, exportCsv = false) {
     LEFT JOIN soap_accounts sa ON sa.id=ua.soap_account_id
     WHERE ${where.join(' AND ')} GROUP BY ${group}
   ) SELECT grouped.*, COUNT(*) OVER() totalRows FROM grouped ${metricWhere}
-    ORDER BY sortDate DESC, ${visible} DESC LIMIT ? OFFSET ?`;
+    ORDER BY ${orderBy} LIMIT ? OFFSET ?`;
   const rows = db.prepare(sql).all(...params, ...metricParams, pageSize, exportCsv ? 0 : (page-1)*pageSize);
   const items = rows.map(row => {
     const { grossRevenue, sortDate, totalRows, ...base } = row;
@@ -1070,4 +1084,12 @@ app.use(express.static(dist, { index:false, maxAge:'1h', setHeaders(res, file) {
 app.all('/api/{*path}',(_req,res)=>res.status(404).json({ok:false,error:'not_found'}));
 app.get('/{*splat}',(_req,res)=>res.sendFile(path.join(dist,'index.html')));
 app.use((error,_req,res,_next)=>{console.error('request_failed',error.message);res.status(500).json({ok:false,error:'internal_error'})});
-app.listen(port,process.env.HOST||'127.0.0.1',()=>{ console.log(`adx-channel-platform listening on ${port}`); setInterval(runHourlyGamSync,15*60*1000); if(process.env.ADX_SYNC_ON_START==='true')runHourlyGamSync(); });
+app.listen(port,process.env.HOST||'127.0.0.1',()=>{
+  console.log('adx-channel-platform listening on ' + port);
+  if (process.env.ADX_GAM_WORKER_DISABLED !== 'true') {
+    setInterval(runHourlyGamSync,15*60*1000);
+    if (process.env.ADX_SYNC_ON_START === 'true') runHourlyGamSync();
+    const runBotReport = () => botReport.runAt().catch(error => console.error('bot_report_delivery_failed', error.message));
+    runBotReport(); setInterval(runBotReport,60*1000);
+  }
+});

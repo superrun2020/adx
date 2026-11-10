@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -168,6 +169,9 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("PUT /api/admin/regression/settings", a.auth("admin", gamRoute(a.updateRegressionSettings)))
 	mux.HandleFunc("GET /api/admin/regression/events", a.auth("admin", a.regressionEvents))
 	mux.HandleFunc("GET /api/admin/regression/runs", a.auth("admin", a.regressionRuns))
+	mux.HandleFunc("GET /api/admin/bot-report/settings", a.auth("admin", a.botReportSettings))
+	mux.HandleFunc("PUT /api/admin/bot-report/settings", a.auth("admin", gamRoute(a.updateBotReportSettings)))
+	mux.HandleFunc("POST /api/admin/bot-report/test", a.auth("admin", a.testBotReport))
 	mux.HandleFunc("GET /api/admin/gam-accounts/{id}/ad-units", a.auth("admin", gamRoute(a.listGamAccountAdUnits)))
 	mux.HandleFunc("GET /api/admin/gam-accounts/{id}/ad-unit-sizes", a.auth("admin", gamRoute(a.listGamAccountAdUnitSizes)))
 	mux.HandleFunc("GET /api/admin/gam-accounts/{id}/sites", a.auth("admin", gamRoute(a.listGamAccountSites)))
@@ -223,6 +227,21 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
 	log.Printf("adx-go listening on %s", srv.Addr)
 	if os.Getenv("ADX_GAM_WORKER_DISABLED") != "true" {
+		go func() {
+			run := func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+				defer cancel()
+				if err := a.runBotReportAt(ctx, time.Now(), postFeishu); err != nil {
+					log.Printf("bot_report_delivery_failed: %v", err)
+				}
+			}
+			run()
+			ticker := time.NewTicker(time.Minute)
+			defer ticker.Stop()
+			for range ticker.C {
+				run()
+			}
+		}()
 		go func() {
 			a.warmDefaultReports()
 			go a.runScheduledDiagnostics()

@@ -212,6 +212,21 @@ func (a *app) regressionEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_regression_cadence")
 		return
 	}
+	sortFields := map[string]string{
+		"oldRevenue": "e.old_revenue", "newRevenue": "e.new_revenue",
+		"revenueDelta": "e.new_revenue-e.old_revenue",
+		"differencePercent": "CASE WHEN e.old_revenue>0 THEN (e.new_revenue-e.old_revenue)*100.0/e.old_revenue ELSE 0 END",
+		"requestsDelta": "e.new_requests-e.old_requests",
+		"impressionsDelta": "e.new_impressions-e.old_impressions",
+		"clicksDelta": "e.new_clicks-e.old_clicks",
+	}
+	sortBy, sortDir := q.Get("sortBy"), q.Get("sortDir")
+	if sortBy != "" || sortDir != "" {
+		if sortFields[sortBy] == "" || (sortDir != "asc" && sortDir != "desc") {
+			writeError(w, 400, "invalid_regression_sort")
+			return
+		}
+	}
 	where, args := []string{"1=1"}, []any{}
 	if start != "" {
 		where = append(where, "e.period_end>=?")
@@ -258,7 +273,11 @@ func (a *app) regressionEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "regression_events_unavailable")
 		return
 	}
-	rows, err := queryMaps(a.db, "SELECT e.id,e.cadence,e.period_start periodStart,e.period_end periodEnd,r.baseline_start baselineStart,r.baseline_end baselineEnd,e.domain,s.name accountName,s.network_code networkCode,s.rest_network_timezone timeZone,CASE WHEN e.cadence='day' AND e.alert_status<>'not_triggered' THEN e.period_start ELSE e.drop_start_date END dropStartDate,e.old_revenue oldRevenue,e.new_revenue newRevenue,(e.new_revenue-e.old_revenue) revenueDelta,CASE WHEN e.old_revenue>0 THEN ROUND((e.new_revenue-e.old_revenue)*100.0/e.old_revenue,4) ELSE 0 END differencePercent,(e.new_requests-e.old_requests) requestsDelta,(e.new_impressions-e.old_impressions) impressionsDelta,(e.new_clicks-e.old_clicks) clicksDelta,e.alert_status alertStatus,e.alert_error alertError,e.notified_at notifiedAt,e.created_at createdAt FROM regression_events e JOIN regression_runs r ON r.id=e.run_id JOIN soap_accounts s ON s.id=e.soap_account_id WHERE "+condition+" ORDER BY e.id DESC LIMIT 100 OFFSET ?", append(args, (page-1)*100)...)
+	order := "e.id DESC"
+	if sortBy != "" {
+		order = "(" + sortFields[sortBy] + ") " + strings.ToUpper(sortDir) + "," + order
+	}
+	rows, err := queryMaps(a.db, "SELECT e.id,e.cadence,e.period_start periodStart,e.period_end periodEnd,r.baseline_start baselineStart,r.baseline_end baselineEnd,e.domain,s.name accountName,s.network_code networkCode,s.rest_network_timezone timeZone,CASE WHEN e.cadence='day' AND e.alert_status<>'not_triggered' THEN e.period_start ELSE e.drop_start_date END dropStartDate,e.old_revenue oldRevenue,e.new_revenue newRevenue,(e.new_revenue-e.old_revenue) revenueDelta,CASE WHEN e.old_revenue>0 THEN ROUND((e.new_revenue-e.old_revenue)*100.0/e.old_revenue,4) ELSE 0 END differencePercent,(e.new_requests-e.old_requests) requestsDelta,(e.new_impressions-e.old_impressions) impressionsDelta,(e.new_clicks-e.old_clicks) clicksDelta,e.alert_status alertStatus,e.alert_error alertError,e.notified_at notifiedAt,e.created_at createdAt FROM regression_events e JOIN regression_runs r ON r.id=e.run_id JOIN soap_accounts s ON s.id=e.soap_account_id WHERE "+condition+" ORDER BY "+order+" LIMIT 100 OFFSET ?", append(args, (page-1)*100)...)
 	if err != nil {
 		writeError(w, 500, "regression_events_unavailable")
 		return
@@ -776,7 +795,8 @@ func postFeishu(ctx context.Context, webhook, secret, content string) error {
 	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	res, err := client.Do(req)
 	if err != nil {
-		return err
+		// url.Error includes the webhook URL; never persist or log that secret.
+		return errors.New("feishu_transport_failed")
 	}
 	defer res.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(res.Body, 8192))

@@ -1,4 +1,4 @@
-export const adminSidebarViews = ['dashboard', 'gam', 'links', 'ad-units', 'reports', 'regression', 'channels', 'settlement', 'report-keys', 'api'];
+export const adminSidebarViews = ['dashboard', 'gam', 'links', 'ad-units', 'reports', 'regression', 'bot-report', 'channels', 'settlement', 'report-keys', 'api'];
 
 export function parseSidebarPermissions(value) {
   if (!Array.isArray(value) || !value.length || value.length > adminSidebarViews.length ||
@@ -28,6 +28,7 @@ export function allowedAdminRequest(user, path, method) {
   else if (path.startsWith('/api/admin/users') || path === '/api/admin/audit') return false;
   else if (path.startsWith('/api/admin/report-api-keys')) views = ['report-keys'];
   else if (path.startsWith('/api/admin/regression/')) views = ['regression'];
+  else if (path.startsWith('/api/admin/bot-report/')) views = ['bot-report'];
   else if (path === '/api/admin/link-metadata' && method === 'GET') views = ['links','channels'];
   else if (path === '/api/admin/link-metadata') views = ['links'];
   else if (path === '/api/admin/gam-accounts' && method === 'GET') views = ['gam','links','ad-units','regression','channels'];

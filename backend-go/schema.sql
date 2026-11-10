@@ -114,6 +114,16 @@ CREATE TABLE IF NOT EXISTS regression_settings (
   min_revenue REAL NOT NULL DEFAULT 50, min_drop_percent REAL NOT NULL DEFAULT 2,
   webhook_ciphertext TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS bot_report_settings (
+  id INTEGER PRIMARY KEY CHECK(id=1), enabled INTEGER NOT NULL DEFAULT 0,
+  webhook_ciphertext TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS bot_report_deliveries (
+  report_date TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0, last_attempt_at TEXT,
+  sent_at TEXT, error TEXT NOT NULL DEFAULT ''
+);
+INSERT OR IGNORE INTO bot_report_settings(id) VALUES(1);
 CREATE TABLE IF NOT EXISTS regression_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, soap_account_id INTEGER NOT NULL,
   cadence TEXT NOT NULL, period_start TEXT NOT NULL, period_end TEXT NOT NULL,

@@ -4,6 +4,7 @@ export const viewPaths = Object.freeze({
   gam: '/gam-accounts',
   links: '/links',
   regression: '/regression',
+  'bot-report': '/bot-report',
   channels: '/channels',
   settlement: '/settlement',
   'ad-units': '/ad-units',
@@ -13,12 +14,13 @@ export const viewPaths = Object.freeze({
 });
 
 const pathViews = new Map(Object.entries(viewPaths).map(([view, path]) => [path, view]));
-const adminOnlyViews = new Set(['gam', 'links', 'regression', 'channels', 'settlement', 'ad-units', 'admins', 'report-keys']);
+const adminOnlyViews = new Set(['gam', 'links', 'regression', 'bot-report', 'channels', 'settlement', 'ad-units', 'admins', 'report-keys']);
 
 export const adminPermissionOptions = Object.freeze([
   { value: 'dashboard', label: '经营总览' }, { value: 'gam', label: '账号管理' },
   { value: 'links', label: '链接管理' }, { value: 'ad-units', label: '广告单元创建' },
   { value: 'reports', label: '数据报告' }, { value: 'regression', label: '数据回退监测' },
+  { value: 'bot-report', label: '机器人汇报' },
   { value: 'channels', label: '渠道管理' }, { value: 'settlement', label: '结算配置' },
   { value: 'report-keys', label: '账户日报 API Key' }, { value: 'api', label: '渠道 API' }
 ]);
