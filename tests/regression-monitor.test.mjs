@@ -24,20 +24,26 @@ test('Feishu threshold requires both original revenue and drop percentage', () =
 test('Feishu alert text identifies confirmed and unlocated data dates', () => {
   const account = { name: 'GAM Test', network_code: '123456' };
   const window = { cadence: 'day', start: '2026-11-09', end: '2026-11-09' };
-  const alert = { domain: 'news.example.com', dropStartDate: '2026-11-09',
+  const alert = { domain: 'news.example.com', dropStartDate: '2026-11-09', detectedAtUtc: '2026-11-09 08:29:00',
     before: { revenue: 100, requests: 100, impressions: 80, clicks: 10 },
     after: { revenue: 90, requests: 95, impressions: 85, clicks: 10 } };
   const message = regressionAlertMessage(account, '赵飞', 'Asia/Shanghai', '2026-11-09 16:30', window, [alert]);
   assert.equal(message, [
     '【AdX 数据回退告警】', 'GAM 账号：GAM Test（Network 123456）', '渠道：赵飞',
-    '检测时间：2026-11-09 16:30（Asia/Shanghai）', '监测区间：2026-11-09 至 2026-11-09（单日快照）',
-    '域名：news.example.com', '最早已确认下修数据日：2026-11-09',
+    '推送时间：2026-11-09 16:30（Asia/Shanghai）', '监测区间：2026-11-09 至 2026-11-09（单日快照）', '对比基准：同一数据日的上次快照',
+    '首次检测时间：2026-11-09 16:29（Asia/Shanghai）', '域名：news.example.com', '最早已确认下修数据日：2026-11-09',
     '收入：$100.00 → $90.00；回退 $10.00（10.00%）', '请求 -5，展示 +5，点击 +0'
   ].join('\n'));
   const unknown = regressionAlertMessage(account, '赵飞', 'Asia/Shanghai', '2026-11-09 16:30', window,
     [{ ...alert, dropStartDate: null }]);
   assert.match(unknown, /最早已确认下修数据日：区间内未定位（缺少同日历史快照）/);
   assert.doesNotMatch(unknown, /倒扣起始数据日/);
+  const multi = regressionAlertMessage(account, '赵飞', 'Asia/Singapore', '2026-11-10 00:43',
+    { cadence:'three_days', start:'2026-11-07', end:'2026-11-09', baselineStart:'2026-11-04', baselineEnd:'2026-11-06' }, [alert]);
+  assert.match(multi, /对比区间：2026-11-04 至 2026-11-06/);
+  assert.match(multi, /首次检测时间：2026-11-09 16:29（Asia\/Singapore）/);
+  assert.match(multi, /区间下降 \$10\.00/);
+  assert.match(multi, /不等于已确认同一数据日被倒扣/);
 });
 
 test('drop start is the earliest confirmed same-date decrease only', () => {
@@ -105,6 +111,8 @@ test('later multi-day run records the earliest revised data day without inventin
     assert.match(message, /【AdX 数据回退告警】/);
     assert.match(message, /GAM 账号：GAM（Network 123）/);
     assert.match(message, /渠道：Publisher/);
+    assert.match(message, /对比区间：/);
+    assert.match(message, /首次检测时间：/);
     assert.match(message, new RegExp('最早已确认下修数据日：' + window.end));
     const delivered = db.prepare('SELECT alert_status,send_attempts FROM regression_events WHERE id=?').get(latest.id);
     assert.equal(delivered.alert_status, 'sent');

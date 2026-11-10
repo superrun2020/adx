@@ -47,6 +47,7 @@ type regressionAlert struct {
 	ID            int64
 	Domain        string
 	DropStartDate string
+	DetectedAtUTC string
 	Old, New      regressionMeasure
 }
 
@@ -214,11 +215,11 @@ func (a *app) regressionEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	sortFields := map[string]string{
 		"oldRevenue": "e.old_revenue", "newRevenue": "e.new_revenue",
-		"revenueDelta": "e.new_revenue-e.old_revenue",
+		"revenueDelta":      "e.new_revenue-e.old_revenue",
 		"differencePercent": "CASE WHEN e.old_revenue>0 THEN (e.new_revenue-e.old_revenue)*100.0/e.old_revenue ELSE 0 END",
-		"requestsDelta": "e.new_requests-e.old_requests",
-		"impressionsDelta": "e.new_impressions-e.old_impressions",
-		"clicksDelta": "e.new_clicks-e.old_clicks",
+		"requestsDelta":     "e.new_requests-e.old_requests",
+		"impressionsDelta":  "e.new_impressions-e.old_impressions",
+		"clicksDelta":       "e.new_clicks-e.old_clicks",
 	}
 	sortBy, sortDir := q.Get("sortBy"), q.Get("sortDir")
 	if sortBy != "" || sortDir != "" {
@@ -541,7 +542,11 @@ func (a *app) saveRegressionRun(ctx context.Context, account map[string]any, win
 			if idErr != nil {
 				return nil, idErr
 			}
-			alerts = append(alerts, regressionAlert{ID: id, Domain: domain, DropStartDate: dropStartDate, Old: before, New: after})
+			var detectedAt string
+			if err = tx.QueryRowContext(ctx, "SELECT created_at FROM regression_events WHERE id=?", id).Scan(&detectedAt); err != nil {
+				return nil, err
+			}
+			alerts = append(alerts, regressionAlert{ID: id, Domain: domain, DropStartDate: dropStartDate, DetectedAtUTC: detectedAt, Old: before, New: after})
 		}
 	}
 	return alerts, tx.Commit()
@@ -658,7 +663,7 @@ func (a *app) retryRegressionAlerts(ctx context.Context, account map[string]any)
 	if err != nil || !config.Enabled || config.Ciphertext == "" {
 		return
 	}
-	rows, err := a.db.QueryContext(ctx, "SELECT e.id,e.cadence,e.period_start,e.period_end,e.domain,e.old_revenue,e.new_revenue,e.old_requests,e.new_requests,e.old_impressions,e.new_impressions,e.old_clicks,e.new_clicks,COALESCE(e.drop_start_date,'') FROM regression_events e WHERE e.soap_account_id=? AND e.alert_status IN ('pending','failed') AND e.send_attempts<5 AND (e.last_attempt_at IS NULL OR e.last_attempt_at<=datetime('now','-15 minutes')) AND NOT EXISTS (SELECT 1 FROM regression_events sent WHERE sent.soap_account_id=e.soap_account_id AND sent.cadence=e.cadence AND sent.period_start=e.period_start AND sent.period_end=e.period_end AND sent.domain=e.domain AND sent.alert_status='sent') ORDER BY e.cadence,e.period_start,e.period_end,e.id DESC LIMIT 100", intMap(account, "id"))
+	rows, err := a.db.QueryContext(ctx, "SELECT e.id,e.cadence,e.period_start,e.period_end,r.baseline_start,r.baseline_end,e.domain,e.old_revenue,e.new_revenue,e.old_requests,e.new_requests,e.old_impressions,e.new_impressions,e.old_clicks,e.new_clicks,COALESCE(e.drop_start_date,''),e.created_at FROM regression_events e JOIN regression_runs r ON r.id=e.run_id WHERE e.soap_account_id=? AND e.alert_status IN ('pending','failed') AND e.send_attempts<5 AND (e.last_attempt_at IS NULL OR e.last_attempt_at<=datetime('now','-15 minutes')) AND NOT EXISTS (SELECT 1 FROM regression_events sent WHERE sent.soap_account_id=e.soap_account_id AND sent.cadence=e.cadence AND sent.period_start=e.period_start AND sent.period_end=e.period_end AND sent.domain=e.domain AND sent.alert_status='sent') ORDER BY e.cadence,e.period_start,e.period_end,e.id DESC LIMIT 100", intMap(account, "id"))
 	if err != nil {
 		log.Printf("regression_retry_query_failed account=%d error=%v", intMap(account, "id"), err)
 		return
@@ -673,7 +678,7 @@ func (a *app) retryRegressionAlerts(ctx context.Context, account map[string]any)
 	for rows.Next() {
 		var alert regressionAlert
 		var window regressionWindow
-		if err = rows.Scan(&alert.ID, &window.Cadence, &window.Start, &window.End, &alert.Domain, &alert.Old.Revenue, &alert.New.Revenue, &alert.Old.Requests, &alert.New.Requests, &alert.Old.Impressions, &alert.New.Impressions, &alert.Old.Clicks, &alert.New.Clicks, &alert.DropStartDate); err != nil {
+		if err = rows.Scan(&alert.ID, &window.Cadence, &window.Start, &window.End, &window.BaselineStart, &window.BaselineEnd, &alert.Domain, &alert.Old.Revenue, &alert.New.Revenue, &alert.Old.Requests, &alert.New.Requests, &alert.Old.Impressions, &alert.New.Impressions, &alert.Old.Clicks, &alert.New.Clicks, &alert.DropStartDate, &alert.DetectedAtUTC); err != nil {
 			break
 		}
 		key := window.Cadence + "\x00" + window.Start + "\x00" + window.End + "\x00" + alert.Domain
@@ -735,7 +740,7 @@ func (a *app) deliverRegressionAlerts(ctx context.Context, account map[string]an
 		location = time.UTC
 		zone = "UTC"
 	}
-	observedAt := time.Now().In(location).Format("2006-01-02 15:04")
+	sentAt := time.Now().In(location).Format("2006-01-02 15:04")
 	cadenceName := map[string]string{"day": "单日快照", "three_days": "近 3 天", "week": "近 7 天", "month": "近 30 天"}[window.Cadence]
 	for begin := 0; begin < len(alerts); begin += 20 {
 		end := begin + 20
@@ -743,7 +748,7 @@ func (a *app) deliverRegressionAlerts(ctx context.Context, account map[string]an
 			end = len(alerts)
 		}
 		batch := alerts[begin:end]
-		err = postFeishu(ctx, webhook, signingSecret, regressionAlertMessage(account, channelName, zone, observedAt, window, cadenceName, batch))
+		err = postFeishu(ctx, webhook, signingSecret, regressionAlertMessage(account, channelName, zone, sentAt, window, cadenceName, batch))
 		status, detail := "sent", ""
 		if err != nil {
 			status, detail = "failed", err.Error()
@@ -763,14 +768,39 @@ func (a *app) deliverRegressionAlerts(ctx context.Context, account map[string]an
 	}
 }
 
-func regressionAlertMessage(account map[string]any, channelName, zone, observedAt string, window regressionWindow, cadenceName string, alerts []regressionAlert) string {
-	lines := []string{"【AdX 数据回退告警】", fmt.Sprintf("GAM 账号：%s（Network %s）", importString(account["name"]), importString(account["network_code"])), "渠道：" + channelName, fmt.Sprintf("检测时间：%s（%s）", observedAt, zone), fmt.Sprintf("监测区间：%s 至 %s（%s）", window.Start, window.End, cadenceName)}
+func regressionDetectionTime(value, zone string) string {
+	instant, err := time.Parse("2006-01-02 15:04:05", value)
+	if err != nil {
+		return "未记录"
+	}
+	location, err := time.LoadLocation(zone)
+	if err != nil {
+		location = time.UTC
+	}
+	return instant.In(location).Format("2006-01-02 15:04")
+}
+
+func regressionAlertMessage(account map[string]any, channelName, zone, sentAt string, window regressionWindow, cadenceName string, alerts []regressionAlert) string {
+	lines := []string{"【AdX 数据回退告警】", fmt.Sprintf("GAM 账号：%s（Network %s）", importString(account["name"]), importString(account["network_code"])), "渠道：" + channelName, fmt.Sprintf("推送时间：%s（%s）", sentAt, zone), fmt.Sprintf("监测区间：%s 至 %s（%s）", window.Start, window.End, cadenceName)}
+	changeLabel := "回退"
+	if window.Cadence == "day" {
+		lines = append(lines, "对比基准：同一数据日的上次快照")
+	} else {
+		lines = append(lines, fmt.Sprintf("对比区间：%s 至 %s", window.BaselineStart, window.BaselineEnd), "口径说明：相邻等长时段收入下降，不等于已确认同一数据日被倒扣。")
+		changeLabel = "区间下降"
+	}
 	for _, alert := range alerts {
 		date := alert.DropStartDate
 		if date == "" {
 			date = "区间内未定位（缺少同日历史快照）"
 		}
-		lines = append(lines, fmt.Sprintf("域名：%s\n最早已确认下修数据日：%s\n收入：$%.2f → $%.2f；回退 $%.2f（%.2f%%）\n请求 %+d，展示 %+d，点击 %+d", alert.Domain, date, alert.Old.Revenue, alert.New.Revenue, alert.Old.Revenue-alert.New.Revenue, (alert.Old.Revenue-alert.New.Revenue)*100/alert.Old.Revenue, alert.New.Requests-alert.Old.Requests, alert.New.Impressions-alert.Old.Impressions, alert.New.Clicks-alert.Old.Clicks))
+		lines = append(lines, strings.Join([]string{
+			fmt.Sprintf("首次检测时间：%s（%s）", regressionDetectionTime(alert.DetectedAtUTC, zone), zone),
+			"域名：" + alert.Domain,
+			"最早已确认下修数据日：" + date,
+			fmt.Sprintf("收入：$%.2f → $%.2f；%s $%.2f（%.2f%%）", alert.Old.Revenue, alert.New.Revenue, changeLabel, alert.Old.Revenue-alert.New.Revenue, (alert.Old.Revenue-alert.New.Revenue)*100/alert.Old.Revenue),
+			fmt.Sprintf("请求 %+d，展示 %+d，点击 %+d", alert.New.Requests-alert.Old.Requests, alert.New.Impressions-alert.Old.Impressions, alert.New.Clicks-alert.Old.Clicks),
+		}, "\n"))
 	}
 	return strings.Join(lines, "\n")
 }

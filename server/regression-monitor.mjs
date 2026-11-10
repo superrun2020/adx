@@ -61,15 +61,26 @@ function accountTimestamp(timeZone, instant = new Date()) {
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
 }
 
-export function regressionAlertMessage(account, channelName, timeZone, detectedAt, window, alerts) {
+function storedDetectionTime(value, timeZone) {
+  if (!value) return '未记录';
+  const instant = new Date(value.replace(' ', 'T') + 'Z');
+  return Number.isNaN(instant.valueOf()) ? '未记录' : accountTimestamp(timeZone, instant);
+}
+
+export function regressionAlertMessage(account, channelName, timeZone, sentAt, window, alerts) {
   const cadenceName = { day: '单日快照', three_days: '近 3 天', week: '近 7 天', month: '近 30 天' }[window.cadence] || window.cadence;
   const signed = value => (value >= 0 ? '+' : '') + value;
   const lines = ['【AdX 数据回退告警】', 'GAM 账号：' + account.name + '（Network ' + account.network_code + '）',
-    '渠道：' + channelName, '检测时间：' + detectedAt + '（' + timeZone + '）',
+    '渠道：' + channelName, '推送时间：' + sentAt + '（' + timeZone + '）',
     '监测区间：' + window.start + ' 至 ' + window.end + '（' + cadenceName + '）'];
-  for (const row of alerts) lines.push('域名：' + row.domain + '\n最早已确认下修数据日：' + (row.dropStartDate || '区间内未定位（缺少同日历史快照）') +
+  if (window.cadence === 'day') lines.push('对比基准：同一数据日的上次快照');
+  else lines.push('对比区间：' + window.baselineStart + ' 至 ' + window.baselineEnd,
+    '口径说明：相邻等长时段收入下降，不等于已确认同一数据日被倒扣。');
+  const changeLabel = window.cadence === 'day' ? '回退' : '区间下降';
+  for (const row of alerts) lines.push('首次检测时间：' + storedDetectionTime(row.detectedAtUtc, timeZone) + '（' + timeZone + '）' +
+    '\n域名：' + row.domain + '\n最早已确认下修数据日：' + (row.dropStartDate || '区间内未定位（缺少同日历史快照）') +
     '\n收入：$' + row.before.revenue.toFixed(2) + ' → $' + row.after.revenue.toFixed(2) +
-    '；回退 $' + (row.before.revenue - row.after.revenue).toFixed(2) + '（' + ((row.before.revenue - row.after.revenue) * 100 / row.before.revenue).toFixed(2) + '%）' +
+    '；' + changeLabel + ' $' + (row.before.revenue - row.after.revenue).toFixed(2) + '（' + ((row.before.revenue - row.after.revenue) * 100 / row.before.revenue).toFixed(2) + '%）' +
     '\n请求 ' + signed(row.after.requests - row.before.requests) + '，展示 ' + signed(row.after.impressions - row.before.impressions) + '，点击 ' + signed(row.after.clicks - row.before.clicks));
   return lines.join('\n');
 }
@@ -212,7 +223,8 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
       const dropStartDate = alertStatus === 'not_triggered' ? null : window.cadence === 'day' ? window.start : firstDropDate(domain, dailyRows, priorDaily);
       const id = Number(db.prepare('INSERT INTO regression_events(run_id,soap_account_id,cadence,period_start,period_end,domain,old_revenue,new_revenue,old_requests,new_requests,old_impressions,new_impressions,old_clicks,new_clicks,alert_status,drop_start_date) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
         .run(runId, account.id, window.cadence, window.start, window.end, domain, before.revenue, after.revenue, before.requests, after.requests, before.impressions, after.impressions, before.clicks, after.clicks, alertStatus, dropStartDate).lastInsertRowid);
-      if (alertStatus === 'pending') alerts.push({ id, domain, before, after, dropStartDate });
+      if (alertStatus === 'pending') alerts.push({ id, domain, before, after, dropStartDate,
+        detectedAtUtc: db.prepare('SELECT created_at FROM regression_events WHERE id=?').get(id).created_at });
     }
     return alerts;
   });
@@ -223,10 +235,10 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
     const { url, secret } = decryptCredential(config.webhook_ciphertext);
     const channelName = db.prepare('SELECT name FROM channels WHERE id=?').get(account.rest_channel_id)?.name || '未关联渠道';
     const timeZone = account.rest_network_timezone || 'UTC';
-    const detectedAt = accountTimestamp(timeZone);
+    const sentAt = accountTimestamp(timeZone);
     for (let offset = 0; offset < alerts.length; offset += 20) {
       const batch = alerts.slice(offset, offset + 20);
-      const payload = { msg_type: 'text', content: { text: regressionAlertMessage(account, channelName, timeZone, detectedAt, window, batch) } };
+      const payload = { msg_type: 'text', content: { text: regressionAlertMessage(account, channelName, timeZone, sentAt, window, batch) } };
       if (secret) {
         const timestamp = String(Math.floor(Date.now()/1000));
         payload.timestamp = timestamp;
@@ -249,10 +261,10 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
   const retryPendingAlerts = async account => {
     const config = settings();
     if (!config.feishu_enabled || !config.webhook_ciphertext) return;
-    const rows = db.prepare(`SELECT id,cadence,period_start,period_end,domain,old_revenue,new_revenue,old_requests,new_requests,old_impressions,new_impressions,old_clicks,new_clicks,drop_start_date
-      FROM regression_events WHERE soap_account_id=? AND alert_status IN ('pending','failed') AND send_attempts<5
-      AND (last_attempt_at IS NULL OR last_attempt_at<=datetime('now','-15 minutes'))
-      ORDER BY id DESC LIMIT 100`).all(account.id);
+    const rows = db.prepare(`SELECT e.id,e.cadence,e.period_start,e.period_end,e.domain,e.old_revenue,e.new_revenue,e.old_requests,e.new_requests,e.old_impressions,e.new_impressions,e.old_clicks,e.new_clicks,e.drop_start_date,e.created_at,r.baseline_start,r.baseline_end
+      FROM regression_events e JOIN regression_runs r ON r.id=e.run_id WHERE e.soap_account_id=? AND e.alert_status IN ('pending','failed') AND e.send_attempts<5
+      AND (e.last_attempt_at IS NULL OR e.last_attempt_at<=datetime('now','-15 minutes'))
+      ORDER BY e.id DESC LIMIT 100`).all(account.id);
     const groups = new Map();
     const seen = new Set();
     for (const row of rows) {
@@ -268,11 +280,11 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
         continue;
       }
       seen.add(alertKey);
-      const alert = { id: row.id, domain: row.domain, dropStartDate: row.drop_start_date || (row.cadence === 'day' ? row.period_start : null),
+      const alert = { id: row.id, domain: row.domain, dropStartDate: row.drop_start_date || (row.cadence === 'day' ? row.period_start : null), detectedAtUtc: row.created_at,
         before: { revenue: row.old_revenue, requests: row.old_requests, impressions: row.old_impressions, clicks: row.old_clicks },
         after: { revenue: row.new_revenue, requests: row.new_requests, impressions: row.new_impressions, clicks: row.new_clicks } };
       const key = [row.cadence, row.period_start, row.period_end].join('|');
-      if (!groups.has(key)) groups.set(key, { window: { cadence: row.cadence, start: row.period_start, end: row.period_end }, alerts: [] });
+      if (!groups.has(key)) groups.set(key, { window: { cadence: row.cadence, start: row.period_start, end: row.period_end, baselineStart: row.baseline_start, baselineEnd: row.baseline_end }, alerts: [] });
       groups.get(key).alerts.push(alert);
     }
     for (const group of groups.values()) {
