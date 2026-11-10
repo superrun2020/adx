@@ -3,11 +3,53 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestRegressionEventsDateFilterIncludesOverlappingWindow(t *testing.T) {
+	t.Setenv("ADX_DB_PATH", filepath.Join(t.TempDir(), "adx.sqlite"))
+	a, err := newApp(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.db.Close()
+	defer a.reportCache.close()
+	for _, statement := range []string{
+		"INSERT INTO soap_accounts(id,name,network_code,credential_ciphertext,created_by) VALUES(1,'GAM','123456','test','admin')",
+		"INSERT INTO regression_runs(id,soap_account_id,cadence,period_start,period_end,baseline_start,baseline_end,status) VALUES(1,1,'week','2026-11-01','2026-11-07','2026-10-25','2026-10-31','success')",
+		"INSERT INTO regression_events(run_id,soap_account_id,cadence,period_start,period_end,domain,old_revenue,new_revenue,old_requests,new_requests,old_impressions,new_impressions,old_clicks,new_clicks) VALUES(1,1,'week','2026-11-01','2026-11-07','example.com',100,80,1000,800,700,600,10,8)",
+	} {
+		if _, err := a.db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(date string, expected int) {
+		w := httptest.NewRecorder()
+		a.regressionEvents(w, httptest.NewRequest("GET", "/api/admin/regression/events?start="+date+"&end="+date, nil))
+		var body struct {
+			Total int `json:"total"`
+			Items []struct {
+				BaselineStart string `json:"baselineStart"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if w.Code != 200 || body.Total != expected || len(body.Items) != expected {
+			t.Fatalf("date=%s status=%d body=%s", date, w.Code, w.Body.String())
+		}
+		if expected > 0 && body.Items[0].BaselineStart != "2026-10-25" {
+			t.Fatalf("missing comparison window: %s", w.Body.String())
+		}
+	}
+	check("2026-11-02", 1)
+	check("2026-11-08", 0)
+}
 
 func TestRegressionWindowsAndThresholds(t *testing.T) {
 	instant := time.Date(2026, 11, 4, 1, 30, 0, 0, time.UTC)

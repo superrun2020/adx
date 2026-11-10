@@ -218,7 +218,7 @@ func (a *app) regressionEvents(w http.ResponseWriter, r *http.Request) {
 		args = append(args, start)
 	}
 	if end != "" {
-		where = append(where, "e.period_end<=?")
+		where = append(where, "e.period_start<=?")
 		args = append(args, end)
 	}
 	if cadence != "" {
@@ -258,7 +258,7 @@ func (a *app) regressionEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "regression_events_unavailable")
 		return
 	}
-	rows, err := queryMaps(a.db, "SELECT e.id,e.cadence,e.period_start periodStart,e.period_end periodEnd,e.domain,s.name accountName,s.network_code networkCode,s.rest_network_timezone timeZone,CASE WHEN e.cadence='day' AND e.alert_status<>'not_triggered' THEN e.period_start ELSE e.drop_start_date END dropStartDate,e.old_revenue oldRevenue,e.new_revenue newRevenue,(e.new_revenue-e.old_revenue) revenueDelta,CASE WHEN e.old_revenue>0 THEN ROUND((e.new_revenue-e.old_revenue)*100.0/e.old_revenue,4) ELSE 0 END differencePercent,(e.new_requests-e.old_requests) requestsDelta,(e.new_impressions-e.old_impressions) impressionsDelta,(e.new_clicks-e.old_clicks) clicksDelta,e.alert_status alertStatus,e.alert_error alertError,e.notified_at notifiedAt,e.created_at createdAt FROM regression_events e JOIN soap_accounts s ON s.id=e.soap_account_id WHERE "+condition+" ORDER BY e.id DESC LIMIT 100 OFFSET ?", append(args, (page-1)*100)...)
+	rows, err := queryMaps(a.db, "SELECT e.id,e.cadence,e.period_start periodStart,e.period_end periodEnd,r.baseline_start baselineStart,r.baseline_end baselineEnd,e.domain,s.name accountName,s.network_code networkCode,s.rest_network_timezone timeZone,CASE WHEN e.cadence='day' AND e.alert_status<>'not_triggered' THEN e.period_start ELSE e.drop_start_date END dropStartDate,e.old_revenue oldRevenue,e.new_revenue newRevenue,(e.new_revenue-e.old_revenue) revenueDelta,CASE WHEN e.old_revenue>0 THEN ROUND((e.new_revenue-e.old_revenue)*100.0/e.old_revenue,4) ELSE 0 END differencePercent,(e.new_requests-e.old_requests) requestsDelta,(e.new_impressions-e.old_impressions) impressionsDelta,(e.new_clicks-e.old_clicks) clicksDelta,e.alert_status alertStatus,e.alert_error alertError,e.notified_at notifiedAt,e.created_at createdAt FROM regression_events e JOIN regression_runs r ON r.id=e.run_id JOIN soap_accounts s ON s.id=e.soap_account_id WHERE "+condition+" ORDER BY e.id DESC LIMIT 100 OFFSET ?", append(args, (page-1)*100)...)
 	if err != nil {
 		writeError(w, 500, "regression_events_unavailable")
 		return

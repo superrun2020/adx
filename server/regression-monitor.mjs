@@ -134,7 +134,7 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
     if (String(domain).length > 200) return res.status(400).json({ ok: false, error: 'invalid_domain_filter' });
     const where = ['1=1'], args = [];
     if (start) { where.push('e.period_end>=?'); args.push(start); }
-    if (end) { where.push('e.period_end<=?'); args.push(end); }
+    if (end) { where.push('e.period_start<=?'); args.push(end); }
     if (cadence) { where.push('e.cadence=?'); args.push(cadence); }
     if (accountId) { where.push('e.soap_account_id=?'); args.push(Number(accountId)); }
     if (String(domain).trim()) { where.push('e.domain LIKE ?'); args.push('%' + String(domain).trim() + '%'); }
@@ -142,7 +142,7 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
     const clause = where.join(' AND ');
     const page = Math.max(1, Math.min(10000, Number(req.query.page) || 1));
     const total = db.prepare('SELECT COUNT(*) total FROM regression_events e WHERE ' + clause).get(...args).total;
-    const items = db.prepare(`SELECT e.id,e.cadence,e.period_start periodStart,e.period_end periodEnd,e.domain,s.name accountName,s.network_code networkCode,s.rest_network_timezone timeZone,e.old_revenue oldRevenue,e.new_revenue newRevenue,(e.new_revenue-e.old_revenue) revenueDelta,CASE WHEN e.old_revenue>0 THEN ROUND((e.new_revenue-e.old_revenue)*100.0/e.old_revenue,4) ELSE 0 END differencePercent,(e.new_requests-e.old_requests) requestsDelta,(e.new_impressions-e.old_impressions) impressionsDelta,(e.new_clicks-e.old_clicks) clicksDelta,COALESCE(e.drop_start_date,CASE WHEN e.cadence='day' AND e.alert_status<>'not_triggered' THEN e.period_start END) dropStartDate,e.alert_status alertStatus,e.alert_error alertError,e.notified_at notifiedAt,e.created_at createdAt FROM regression_events e JOIN soap_accounts s ON s.id=e.soap_account_id WHERE ` + clause + ' ORDER BY e.id DESC LIMIT 100 OFFSET ?').all(...args, (page-1)*100);
+    const items = db.prepare(`SELECT e.id,e.cadence,e.period_start periodStart,e.period_end periodEnd,r.baseline_start baselineStart,r.baseline_end baselineEnd,e.domain,s.name accountName,s.network_code networkCode,s.rest_network_timezone timeZone,e.old_revenue oldRevenue,e.new_revenue newRevenue,(e.new_revenue-e.old_revenue) revenueDelta,CASE WHEN e.old_revenue>0 THEN ROUND((e.new_revenue-e.old_revenue)*100.0/e.old_revenue,4) ELSE 0 END differencePercent,(e.new_requests-e.old_requests) requestsDelta,(e.new_impressions-e.old_impressions) impressionsDelta,(e.new_clicks-e.old_clicks) clicksDelta,COALESCE(e.drop_start_date,CASE WHEN e.cadence='day' AND e.alert_status<>'not_triggered' THEN e.period_start END) dropStartDate,e.alert_status alertStatus,e.alert_error alertError,e.notified_at notifiedAt,e.created_at createdAt FROM regression_events e JOIN regression_runs r ON r.id=e.run_id JOIN soap_accounts s ON s.id=e.soap_account_id WHERE ` + clause + ' ORDER BY e.id DESC LIMIT 100 OFFSET ?').all(...args, (page-1)*100);
     res.json({ ok: true, items, total, page, pageSize: 100 });
   });
   app.get('/api/admin/regression/runs', requireAuth, requireAdmin, (_req, res) => {
