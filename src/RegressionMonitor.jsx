@@ -98,7 +98,7 @@ export default function RegressionMonitor() {
     { title: numericTitle('展示数变化','impressionsDelta'), dataIndex: 'impressionsDelta', width: 120, align: 'right', render: value => signed(value) },
     { title: numericTitle('点击数变化','clicksDelta'), dataIndex: 'clicksDelta', width: 110, align: 'right', render: value => signed(value) },
     { title: '来源', width: 90, render: () => <Tag color="purple">GAM REST</Tag> },
-    { title: '飞书通知', dataIndex: 'alertStatus', width: 110, render: (value, row) => <Tag title={row.alertError || ''} color={value === 'sent' ? 'green' : value === 'failed' ? 'red' : value === 'pending' ? 'blue' : 'default'}>{({sent:'已发送',failed:'发送失败',pending:'待发送',disabled:'未启用',duplicate:'已去重',not_triggered:'未触发'})[value] || value}</Tag> }
+    { title: '飞书通知', dataIndex: 'alertStatus', width: 145, render: (value, row) => <Tag title={row.alertError || ''} color={value === 'sent' ? 'green' : value === 'failed' ? 'red' : value === 'pending' ? 'blue' : 'default'}>{({sent:'已发送',failed:'发送失败',pending:'待发送',disabled:'未启用',duplicate:'已去重',paused_suppressed:'停投影响，未推送',not_triggered:'未触发'})[value] || value}</Tag> }
   ];
   const latest = runs.find(run => run.status === 'success');
   return <Space direction="vertical" size={16} className="page-stack regression-monitor">
@@ -106,7 +106,7 @@ export default function RegressionMonitor() {
       <Space><Button icon={<ReloadOutlined/>} loading={loading} onClick={() => { loadMeta(); loadEvents(); }}>刷新记录</Button><Button type="primary" icon={<SettingOutlined/>} onClick={openSettings}>通知条件设置</Button></Space></div>
     <Alert showIcon type="info" message={
       '飞书条件：原收入 > ' + money(settings?.minRevenue ?? 50) + ' 且收入下降 ≥ ' + Number(settings?.minDropPercent ?? 2).toFixed(2) + '%；' + (settings?.feishuEnabled ? '通知已启用' : '通知未启用')
-    } description="今天和昨天有数据时，分别每 15 分钟与各自的同日上次快照比较；近 3 天每 24 小时、近 7 天每 3 天、近 30 天每 7 天重新拉取，与前一等长时段比较。多日区间下降不等于同一数据日倒扣；最早已确认下修数据日只有同日历史快照能证实时才显示。仅看已触发也包含通知关闭期间的历史记录，请以每行的飞书通知状态判断是否送达。"/>
+    } description="今天和昨天有数据时，分别每 15 分钟与各自的同日上次快照比较；近 3 天每 24 小时、近 7 天每 3 天、近 30 天每 7 天重新拉取，与前一等长时段比较。已记录的广告单元停投影响会从区间收入中扣除；扣除后仍达到下降阈值，继续推送。仅看已触发也包含通知关闭期间的历史记录，请以每行的飞书通知状态判断是否送达。"/>
     {latest && <Text type="secondary">最近完成：{latest.accountName} · {cadenceNames[latest.cadence]} · {stamp(latest.finishedAt, latest.timeZone)}（{latest.timeZone}）</Text>}
     {runs[0]?.status === 'failed' && <Alert type="warning" showIcon message={'最近一次监测失败：' + runs[0].accountName + ' · ' + cadenceNames[runs[0].cadence]} description={runs[0].detail || '请检查 GAM 账号同步状态'} />}
     {runs[0]?.status === 'skipped' && <Alert type="info" showIcon message={'最近一次监测暂未比较：' + runs[0].accountName + ' · ' + cadenceNames[runs[0].cadence]} description={runs[0].detail || '等待 GAM 返回可比较的完整数据'} />}

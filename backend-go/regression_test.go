@@ -73,28 +73,102 @@ func TestRegressionWindowsAndThresholds(t *testing.T) {
 	}
 }
 
+func TestRegressionPauseExclusionKeepsOtherRevenueDrops(t *testing.T) {
+	t.Setenv("ADX_DB_PATH", filepath.Join(t.TempDir(), "adx.sqlite"))
+	a, err := newApp(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.db.Close()
+	defer a.reportCache.close()
+	for _, statement := range []string{
+		"INSERT INTO channels(id,name,email) VALUES(1,'channel','channel@example.test')",
+		"INSERT INTO soap_accounts(id,name,network_code,credential_ciphertext,created_by,rest_report_name,rest_money_divisor,rest_network_timezone,rest_channel_id,rest_upstream_account_id) VALUES(1,'GAM A','123456','test','admin','networks/123456/reports/1',1,'Asia/Shanghai',1,1)",
+		"INSERT INTO soap_accounts(id,name,network_code,credential_ciphertext,created_by,rest_report_name,rest_money_divisor,rest_network_timezone,rest_channel_id,rest_upstream_account_id) VALUES(2,'GAM B','654321','test','admin','networks/654321/reports/1',1,'America/Los_Angeles',1,2)",
+		"INSERT INTO upstream_accounts(id,account_key,name,soap_account_id) VALUES(1,'upstream-a','A',1)",
+		"INSERT INTO upstream_accounts(id,account_key,name,soap_account_id) VALUES(2,'upstream-b','B',2)",
+		"INSERT INTO audit_logs(actor_email,action,target_type,target_id,detail,created_at) VALUES('admin','gam.ad_unit_archive','gam_ad_unit','123456','{\"names\":[\"networks/123456/adUnits/11\"]}','2026-11-05 02:00:00')",
+		"INSERT INTO revenue_facts(channel_id,report_date,domain,account,ad_unit_id,source_file,revenue) VALUES(1,'2026-11-01','pause.example','upstream-a','11','gam-rest:123456:test',60),(1,'2026-11-01','pause.example','upstream-a','12','gam-rest:123456:test',100),(1,'2026-11-04','pause.example','upstream-a','12','gam-rest:123456:test',100)",
+		"INSERT INTO revenue_facts(channel_id,report_date,domain,account,ad_unit_id,source_file,revenue) VALUES(1,'2026-11-01','mixed.example','upstream-a','11','gam-rest:123456:test',50),(1,'2026-11-01','mixed.example','upstream-a','12','gam-rest:123456:test',100),(1,'2026-11-04','mixed.example','upstream-a','12','gam-rest:123456:test',70)",
+		"INSERT INTO revenue_facts(channel_id,report_date,domain,account,ad_unit_id,source_file,revenue) VALUES(1,'2026-11-01','other.example','upstream-b','11','gam-rest:654321:test',80)",
+		"UPDATE regression_settings SET feishu_enabled=1,webhook_ciphertext='configured' WHERE id=1",
+	} {
+		if _, err := a.db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	window := regressionWindow{Cadence: "three_days", Start: "2026-11-04", End: "2026-11-06", BaselineStart: "2026-11-01", BaselineEnd: "2026-11-03"}
+	account, err := a.gamAccount(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paused, err := a.pausedAdUnitRevenue(context.Background(), account, window)
+	if err != nil || paused["pause.example"].Before != 60 || paused["mixed.example"].Before != 50 || paused["other.example"].Before != 0 {
+		t.Fatalf("paused=%+v error=%v", paused, err)
+	}
+	old := map[string]regressionMeasure{"pause.example": {Revenue: 160}, "mixed.example": {Revenue: 150}}
+	newer := map[string]regressionMeasure{"pause.example": {Revenue: 100}, "mixed.example": {Revenue: 70}}
+	alerts, err := a.saveRegressionRun(context.Background(), account, window, "success", "", old, newer)
+	if err != nil || len(alerts) != 1 || alerts[0].Domain != "mixed.example" || !alerts[0].PauseExcluded || alerts[0].Old.Revenue != 100 || alerts[0].New.Revenue != 70 {
+		t.Fatalf("alerts=%+v error=%v", alerts, err)
+	}
+	if !a.exists("SELECT id FROM regression_events WHERE domain='pause.example' AND alert_status='paused_suppressed'") {
+		t.Fatal("pure ad-unit pause should not alert")
+	}
+	if _, err := a.db.Exec("UPDATE regression_events SET alert_status='sent' WHERE domain='mixed.example' AND alert_status='pending'"); err != nil {
+		t.Fatal(err)
+	}
+	var runID int64
+	if err := a.db.QueryRow("SELECT MAX(id) FROM regression_runs").Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = a.db.Exec("INSERT INTO regression_events(run_id,soap_account_id,cadence,period_start,period_end,domain,old_revenue,new_revenue,old_requests,new_requests,old_impressions,new_impressions,old_clicks,new_clicks,alert_status) VALUES(?,?,?,?,?,?,160,100,0,0,0,0,0,0,'failed')", runID, 1, window.Cadence, window.Start, window.End, "pause.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.retryRegressionAlerts(context.Background(), account)
+	if !a.exists("SELECT id FROM regression_events WHERE domain='pause.example' AND alert_old_revenue IS NULL AND alert_status='paused_suppressed'") {
+		t.Fatal("old failed alert must be rechecked before sending")
+	}
+	other, err := a.gamAccount(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherPaused, err := a.pausedAdUnitRevenue(context.Background(), other, window)
+	if err != nil || len(otherPaused) != 0 {
+		t.Fatalf("another account must not inherit pause: %+v error=%v", otherPaused, err)
+	}
+	_, err = a.db.Exec("INSERT INTO audit_logs(actor_email,action,target_type,target_id,detail,created_at) VALUES('admin','gam.ad_unit_activate','gam_ad_unit','123456','{\"names\":[\"networks/123456/adUnits/11\"]}','2026-11-06 02:00:00')")
+	if err != nil {
+		t.Fatal(err)
+	}
+	paused, err = a.pausedAdUnitRevenue(context.Background(), account, window)
+	if err != nil || len(paused) != 0 {
+		t.Fatalf("reactivated unit must not stay excluded: %+v error=%v", paused, err)
+	}
+}
+
 func TestRegressionAlertMessageIdentifiesSourceAndTime(t *testing.T) {
 	account := map[string]any{"name": "GAM Test", "network_code": "123456"}
 	window := regressionWindow{Cadence: "day", Start: "2026-11-09", End: "2026-11-09"}
 	alert := regressionAlert{Domain: "news.example.com", DropStartDate: "2026-11-09", DetectedAtUTC: "2026-11-09 08:29:00", Old: regressionMeasure{Revenue: 100, Requests: 100, Impressions: 80, Clicks: 10}, New: regressionMeasure{Revenue: 90, Requests: 95, Impressions: 85, Clicks: 10}}
 	message := regressionAlertMessage(account, "赵飞", "Asia/Shanghai", "2026-11-09 16:30", window, "单日快照", []regressionAlert{alert})
 	expected := strings.Join([]string{
-		"【AdX 数据回退告警】", "GAM 账号：GAM Test（Network 123456）", "渠道：赵飞",
-		"推送时间：2026-11-09 16:30（Asia/Shanghai）", "监测区间：2026-11-09 至 2026-11-09（单日快照）", "对比基准：同一数据日的上次快照",
-		"首次检测时间：2026-11-09 16:29（Asia/Shanghai）", "域名：news.example.com", "最早已确认下修数据日：2026-11-09",
-		"收入：$100.00 → $90.00；回退 $10.00（10.00%）", "请求 -5，展示 +5，点击 +0",
+		"【AdX 收入下降】", "账号：GAM Test（123456）", "渠道：赵飞", "域名：news.example.com",
+		"数据日：2026-11-09", "收入：$100.00 → $90.00，少 $10.00（10.00%）", "发现：2026-11-09 16:29（Asia/Shanghai）",
 	}, "\n")
 	if message != expected {
 		t.Fatalf("unexpected alert message:\n%s", message)
 	}
 	alert.DropStartDate = ""
 	unknown := regressionAlertMessage(account, "赵飞", "Asia/Shanghai", "2026-11-09 16:30", window, "单日快照", []regressionAlert{alert})
-	if !strings.Contains(unknown, "最早已确认下修数据日：区间内未定位（缺少同日历史快照）") || strings.Contains(unknown, "倒扣起始数据日") {
-		t.Fatalf("unknown date should be explicit: %s", unknown)
+	if !strings.Contains(unknown, "数据日：2026-11-09") || strings.Contains(unknown, "已确认下修日") {
+		t.Fatalf("day alert should show only the data date: %s", unknown)
 	}
 	multi := regressionWindow{Cadence: "three_days", Start: "2026-11-07", End: "2026-11-09", BaselineStart: "2026-11-04", BaselineEnd: "2026-11-06"}
+	alert.PauseExcluded = true
 	multiText := regressionAlertMessage(account, "赵飞", "Asia/Singapore", "2026-11-10 00:43", multi, "近 3 天", []regressionAlert{alert})
-	for _, part := range []string{"推送时间：2026-11-10 00:43（Asia/Singapore）", "首次检测时间：2026-11-09 16:29（Asia/Singapore）", "对比区间：2026-11-04 至 2026-11-06", "区间下降 $10.00", "不等于已确认同一数据日被倒扣"} {
+	for _, part := range []string{"区间：2026-11-07 至 2026-11-09（对比 2026-11-04 至 2026-11-06）", "收入：$100.00 → $90.00，少 $10.00（10.00%），已排除停投广告", "发现：2026-11-09 16:29（Asia/Singapore）"} {
 		if !strings.Contains(multiText, part) {
 			t.Fatalf("multi-day alert missing %q: %s", part, multiText)
 		}

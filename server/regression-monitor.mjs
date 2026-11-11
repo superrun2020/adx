@@ -40,6 +40,33 @@ export function firstDropDate(domain, dailyRows, previous) {
   return first;
 }
 
+export function pausedAdUnitIds(audits, network, timeZone, window) {
+  const states = new Map(), prefix = 'networks/' + network + '/adUnits/';
+  for (const row of audits) {
+    const instant = new Date(String(row.created_at).replace(' ', 'T') + 'Z');
+    if (Number.isNaN(instant.valueOf())) continue;
+    const day = accountTimestamp(timeZone, instant).slice(0, 10);
+    if (day < window.baselineStart || day > window.end) continue;
+    let detail;
+    try { detail = JSON.parse(row.detail); } catch { continue; }
+    if (!Array.isArray(detail.names)) continue;
+    for (const name of detail.names) {
+      if (typeof name !== 'string' || !name.startsWith(prefix)) continue;
+      const id = name.slice(prefix.length);
+      if (/^\d+$/.test(id)) states.set(id, row.action === 'gam.ad_unit_archive');
+    }
+  }
+  return new Set([...states].filter(([, archived]) => archived).map(([id]) => id));
+}
+
+export function excludePausedRevenue(before, after, paused = { before: 0, after: 0 }) {
+  if (paused.before <= paused.after || paused.before < 0 || paused.after < 0 ||
+      paused.before > before.revenue + 1e-6 || paused.after > after.revenue + 1e-6)
+    return { before, after, excluded: false };
+  return { before: { ...before, revenue: before.revenue - paused.before },
+    after: { ...after, revenue: after.revenue - paused.after }, excluded: true };
+}
+
 function validWebhook(value) {
   try {
     const url = new URL(value);
@@ -68,20 +95,17 @@ function storedDetectionTime(value, timeZone) {
 }
 
 export function regressionAlertMessage(account, channelName, timeZone, sentAt, window, alerts) {
-  const cadenceName = { day: '单日快照', three_days: '近 3 天', week: '近 7 天', month: '近 30 天' }[window.cadence] || window.cadence;
-  const signed = value => (value >= 0 ? '+' : '') + value;
-  const lines = ['【AdX 数据回退告警】', 'GAM 账号：' + account.name + '（Network ' + account.network_code + '）',
-    '渠道：' + channelName, '推送时间：' + sentAt + '（' + timeZone + '）',
-    '监测区间：' + window.start + ' 至 ' + window.end + '（' + cadenceName + '）'];
-  if (window.cadence === 'day') lines.push('对比基准：同一数据日的上次快照');
-  else lines.push('对比区间：' + window.baselineStart + ' 至 ' + window.baselineEnd,
-    '口径说明：相邻等长时段收入下降，不等于已确认同一数据日被倒扣。');
-  const changeLabel = window.cadence === 'day' ? '回退' : '区间下降';
-  for (const row of alerts) lines.push('首次检测时间：' + storedDetectionTime(row.detectedAtUtc, timeZone) + '（' + timeZone + '）' +
-    '\n域名：' + row.domain + '\n最早已确认下修数据日：' + (row.dropStartDate || '区间内未定位（缺少同日历史快照）') +
-    '\n收入：$' + row.before.revenue.toFixed(2) + ' → $' + row.after.revenue.toFixed(2) +
-    '；' + changeLabel + ' $' + (row.before.revenue - row.after.revenue).toFixed(2) + '（' + ((row.before.revenue - row.after.revenue) * 100 / row.before.revenue).toFixed(2) + '%）' +
-    '\n请求 ' + signed(row.after.requests - row.before.requests) + '，展示 ' + signed(row.after.impressions - row.before.impressions) + '，点击 ' + signed(row.after.clicks - row.before.clicks));
+  const lines = ['【AdX 收入下降】', '账号：' + account.name + '（' + account.network_code + '）', '渠道：' + channelName];
+  for (const row of alerts) {
+    if (lines.length > 3) lines.push('');
+    lines.push('域名：' + row.domain,
+      window.cadence === 'day' ? '数据日：' + window.start : '区间：' + window.start + ' 至 ' + window.end + '（对比 ' + window.baselineStart + ' 至 ' + window.baselineEnd + '）',
+      '收入：$' + row.before.revenue.toFixed(2) + ' → $' + row.after.revenue.toFixed(2) +
+      '，少 $' + (row.before.revenue - row.after.revenue).toFixed(2) + '（' + ((row.before.revenue - row.after.revenue) * 100 / row.before.revenue).toFixed(2) + '%）' +
+      (row.pauseExcluded ? '，已排除停投广告' : ''));
+    if (window.cadence !== 'day' && row.dropStartDate) lines.push('已确认下修日：' + row.dropStartDate);
+    lines.push('发现：' + storedDetectionTime(row.detectedAtUtc, timeZone) + '（' + timeZone + '）');
+  }
   return lines.join('\n');
 }
 
@@ -97,6 +121,10 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
     db.exec('ALTER TABLE regression_events ADD COLUMN send_attempts INTEGER NOT NULL DEFAULT 0');
   if (!db.prepare("SELECT 1 FROM pragma_table_info('regression_events') WHERE name='last_attempt_at'").get())
     db.exec('ALTER TABLE regression_events ADD COLUMN last_attempt_at TEXT');
+  for (const column of ['alert_old_revenue', 'alert_new_revenue']) {
+    if (!db.prepare("SELECT 1 FROM pragma_table_info('regression_events') WHERE name=?").get(column))
+      db.exec('ALTER TABLE regression_events ADD COLUMN ' + column + ' REAL');
+  }
   db.exec('INSERT OR IGNORE INTO regression_settings(id) VALUES(1)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_regression_runs_due ON regression_runs(soap_account_id,cadence,finished_at)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_regression_runs_retention ON regression_runs(cadence,finished_at)');
@@ -178,6 +206,24 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
       .all(account.rest_channel_id, upstream.account_key, start, end, 'gam-rest:' + account.network_code + ':%');
     return new Map(rows.map(({ domain, ...row }) => [domain, row]));
   };
+  const pausedRevenue = (account, window) => {
+    const totals = new Map();
+    if (window.cadence === 'day' || !window.baselineStart) return totals;
+    const audits = db.prepare("SELECT action,detail,created_at FROM audit_logs WHERE target_id=? AND action IN ('gam.ad_unit_archive','gam.ad_unit_activate') ORDER BY id").all(account.network_code);
+    const ids = pausedAdUnitIds(audits, account.network_code, account.rest_network_timezone, window);
+    if (!ids.size) return totals;
+    const upstream = db.prepare("SELECT account_key FROM upstream_accounts WHERE id=? AND soap_account_id=? AND status='active'").get(account.rest_upstream_account_id, account.id);
+    if (!upstream) throw new Error('rest_report_mapping_inactive');
+    const rows = db.prepare("SELECT domain,ad_unit_id,SUM(CASE WHEN report_date BETWEEN ? AND ? THEN revenue ELSE 0 END) before,SUM(CASE WHEN report_date BETWEEN ? AND ? THEN revenue ELSE 0 END) after FROM revenue_facts WHERE channel_id=? AND account=? AND report_date BETWEEN ? AND ? AND domain<>'' AND ad_unit_id<>'' AND source_file LIKE ? GROUP BY domain,ad_unit_id")
+      .all(window.baselineStart, window.baselineEnd, window.start, window.end, account.rest_channel_id, upstream.account_key, window.baselineStart, window.end, 'gam-rest:' + account.network_code + ':%');
+    for (const row of rows) {
+      if (!ids.has(row.ad_unit_id)) continue;
+      const item = totals.get(row.domain) || { before: 0, after: 0 };
+      item.before += row.before; item.after += row.after;
+      totals.set(row.domain, item);
+    }
+    return totals;
+  };
   const dailyFacts = (account, start, end) => {
     const upstream = db.prepare("SELECT account_key FROM upstream_accounts WHERE id=? AND soap_account_id=? AND status='active'").get(account.rest_upstream_account_id, account.id);
     if (!upstream) throw new Error('rest_report_mapping_inactive');
@@ -205,6 +251,7 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
       .run(account.id, window.cadence, window.start, window.end, window.baselineStart, window.baselineEnd, status, detail).lastInsertRowid);
     const alerts = [];
     if (status !== 'success') return alerts;
+    const pausedByDomain = old ? pausedRevenue(account, window) : new Map();
     for (const [domain, row] of newer) db.prepare('INSERT INTO regression_snapshots(run_id,domain,revenue,requests,impressions,clicks) VALUES(?,?,?,?,?,?)')
       .run(runId, domain, row.revenue, row.requests, row.impressions, row.clicks);
     const insertDaily = db.prepare('INSERT INTO regression_daily_snapshots(run_id,soap_account_id,report_date,domain,revenue,requests,impressions,clicks) VALUES(?,?,?,?,?,?,?,?)');
@@ -215,15 +262,17 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
       const before = old.get(domain) || empty(), after = newer.get(domain) || empty();
       if (Math.abs(before.revenue-after.revenue) < 1e-6 && before.requests === after.requests && before.impressions === after.impressions && before.clicks === after.clicks) continue;
       let alertStatus = 'not_triggered';
+      const adjustment = excludePausedRevenue(before, after, pausedByDomain.get(domain));
       if (alertQualified(before, after, config)) {
-        if (!config.feishu_enabled || !config.webhook_ciphertext) alertStatus = 'disabled';
+        if (adjustment.excluded && !alertQualified(adjustment.before, adjustment.after, config)) alertStatus = 'paused_suppressed';
+        else if (!config.feishu_enabled || !config.webhook_ciphertext) alertStatus = 'disabled';
         else if (db.prepare("SELECT 1 FROM regression_events WHERE soap_account_id=? AND cadence=? AND period_start=? AND period_end=? AND domain=? AND (alert_status='sent' OR (alert_status IN ('pending','failed') AND send_attempts<5)) LIMIT 1").get(account.id, window.cadence, window.start, window.end, domain)) alertStatus = 'duplicate';
         else alertStatus = 'pending';
       }
       const dropStartDate = alertStatus === 'not_triggered' ? null : window.cadence === 'day' ? window.start : firstDropDate(domain, dailyRows, priorDaily);
-      const id = Number(db.prepare('INSERT INTO regression_events(run_id,soap_account_id,cadence,period_start,period_end,domain,old_revenue,new_revenue,old_requests,new_requests,old_impressions,new_impressions,old_clicks,new_clicks,alert_status,drop_start_date) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-        .run(runId, account.id, window.cadence, window.start, window.end, domain, before.revenue, after.revenue, before.requests, after.requests, before.impressions, after.impressions, before.clicks, after.clicks, alertStatus, dropStartDate).lastInsertRowid);
-      if (alertStatus === 'pending') alerts.push({ id, domain, before, after, dropStartDate,
+      const id = Number(db.prepare('INSERT INTO regression_events(run_id,soap_account_id,cadence,period_start,period_end,domain,old_revenue,new_revenue,old_requests,new_requests,old_impressions,new_impressions,old_clicks,new_clicks,alert_status,drop_start_date,alert_old_revenue,alert_new_revenue) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+        .run(runId, account.id, window.cadence, window.start, window.end, domain, before.revenue, after.revenue, before.requests, after.requests, before.impressions, after.impressions, before.clicks, after.clicks, alertStatus, dropStartDate, adjustment.before.revenue, adjustment.after.revenue).lastInsertRowid);
+      if (alertStatus === 'pending') alerts.push({ id, domain, before: adjustment.before, after: adjustment.after, pauseExcluded: adjustment.excluded, dropStartDate,
         detectedAtUtc: db.prepare('SELECT created_at FROM regression_events WHERE id=?').get(id).created_at });
     }
     return alerts;
@@ -261,12 +310,13 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
   const retryPendingAlerts = async account => {
     const config = settings();
     if (!config.feishu_enabled || !config.webhook_ciphertext) return;
-    const rows = db.prepare(`SELECT e.id,e.cadence,e.period_start,e.period_end,e.domain,e.old_revenue,e.new_revenue,e.old_requests,e.new_requests,e.old_impressions,e.new_impressions,e.old_clicks,e.new_clicks,e.drop_start_date,e.created_at,r.baseline_start,r.baseline_end
+    const rows = db.prepare(`SELECT e.id,e.cadence,e.period_start,e.period_end,e.domain,e.old_revenue,e.new_revenue,e.old_requests,e.new_requests,e.old_impressions,e.new_impressions,e.old_clicks,e.new_clicks,e.drop_start_date,e.created_at,r.baseline_start,r.baseline_end,e.alert_old_revenue,e.alert_new_revenue
       FROM regression_events e JOIN regression_runs r ON r.id=e.run_id WHERE e.soap_account_id=? AND e.alert_status IN ('pending','failed') AND e.send_attempts<5
       AND (e.last_attempt_at IS NULL OR e.last_attempt_at<=datetime('now','-15 minutes'))
       ORDER BY e.id DESC LIMIT 100`).all(account.id);
     const groups = new Map();
     const seen = new Set();
+    const pausedCache = new Map();
     for (const row of rows) {
       const sent = db.prepare("SELECT 1 FROM regression_events WHERE soap_account_id=? AND cadence=? AND period_start=? AND period_end=? AND domain=? AND alert_status='sent' AND id<>? LIMIT 1")
         .get(account.id, row.cadence, row.period_start, row.period_end, row.domain, row.id);
@@ -279,12 +329,28 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
         db.prepare("UPDATE regression_events SET alert_status='duplicate' WHERE id=?").run(row.id);
         continue;
       }
-      seen.add(alertKey);
       const alert = { id: row.id, domain: row.domain, dropStartDate: row.drop_start_date || (row.cadence === 'day' ? row.period_start : null), detectedAtUtc: row.created_at,
         before: { revenue: row.old_revenue, requests: row.old_requests, impressions: row.old_impressions, clicks: row.old_clicks },
         after: { revenue: row.new_revenue, requests: row.new_requests, impressions: row.new_impressions, clicks: row.new_clicks } };
       const key = [row.cadence, row.period_start, row.period_end].join('|');
-      if (!groups.has(key)) groups.set(key, { window: { cadence: row.cadence, start: row.period_start, end: row.period_end, baselineStart: row.baseline_start, baselineEnd: row.baseline_end }, alerts: [] });
+      const window = { cadence: row.cadence, start: row.period_start, end: row.period_end, baselineStart: row.baseline_start, baselineEnd: row.baseline_end };
+      if (row.alert_old_revenue != null && row.alert_new_revenue != null) {
+        alert.pauseExcluded = row.alert_old_revenue < row.old_revenue - 1e-6;
+        alert.before.revenue = row.alert_old_revenue;
+        alert.after.revenue = row.alert_new_revenue;
+      } else if (row.cadence !== 'day') {
+        if (!pausedCache.has(key)) pausedCache.set(key, pausedRevenue(account, window));
+        const adjustment = excludePausedRevenue(alert.before, alert.after, pausedCache.get(key).get(row.domain));
+        alert.before = adjustment.before;
+        alert.after = adjustment.after;
+        alert.pauseExcluded = adjustment.excluded;
+      }
+      if (alert.pauseExcluded && !alertQualified(alert.before, alert.after, config)) {
+        db.prepare("UPDATE regression_events SET alert_status='paused_suppressed',alert_error='' WHERE id=?").run(row.id);
+        continue;
+      }
+      seen.add(alertKey);
+      if (!groups.has(key)) groups.set(key, { window, alerts: [] });
       groups.get(key).alerts.push(alert);
     }
     for (const group of groups.values()) {
@@ -296,7 +362,8 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
   async function runForAccount(account) {
     db.exec("DELETE FROM regression_runs WHERE (cadence='day' AND finished_at<datetime('now','-90 days')) OR (cadence<>'day' AND finished_at<datetime('now','-365 days'))");
     const priorRunCutoff = db.prepare('SELECT COALESCE(MAX(id),0) id FROM regression_runs').get().id;
-    await retryPendingAlerts(account);
+    try { await retryPendingAlerts(account); }
+    catch (error) { console.error('regression_retry_failed', account.id, error.message); }
     for (const cadence of cadences) {
       let networkWindow;
       const instant = new Date();

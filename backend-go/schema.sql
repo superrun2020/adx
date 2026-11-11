@@ -154,6 +154,7 @@ CREATE TABLE IF NOT EXISTS regression_events (
   old_clicks INTEGER NOT NULL, new_clicks INTEGER NOT NULL,
   alert_status TEXT NOT NULL DEFAULT 'not_triggered', alert_error TEXT NOT NULL DEFAULT '',
   drop_start_date TEXT, send_attempts INTEGER NOT NULL DEFAULT 0, last_attempt_at TEXT,
+  alert_old_revenue REAL, alert_new_revenue REAL,
   notified_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(run_id) REFERENCES regression_runs(id) ON DELETE CASCADE,
   FOREIGN KEY(soap_account_id) REFERENCES soap_accounts(id) ON DELETE CASCADE

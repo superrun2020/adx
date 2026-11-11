@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { regressionWindow, alertQualified, firstDropDate, regressionAlertMessage, registerRegressionMonitor } from '../server/regression-monitor.mjs';
+import { regressionWindow, alertQualified, firstDropDate, regressionAlertMessage, pausedAdUnitIds, excludePausedRevenue, registerRegressionMonitor } from '../server/regression-monitor.mjs';
 
 test('regression windows use each GAM account timezone and equal-length periods', () => {
   const instant = new Date('2026-11-04T01:30:00Z');
@@ -21,6 +21,21 @@ test('Feishu threshold requires both original revenue and drop percentage', () =
   assert.equal(alertQualified({ revenue: 100 }, { revenue: 98.01 }, settings), false);
 });
 
+test('paused ad units suppress only their own loss, respecting account and timezone', () => {
+  const window = { baselineStart: '2026-11-01', end: '2026-11-06' };
+  const archive = (id, date, network = '123') => ({ action: 'gam.ad_unit_archive', created_at: date, detail: JSON.stringify({ names: ['networks/' + network + '/adUnits/' + id] }) });
+  const activate = (id, date) => ({ action: 'gam.ad_unit_activate', created_at: date, detail: JSON.stringify({ names: ['networks/123/adUnits/' + id] }) });
+  const audits = [archive('11','2026-11-05 02:00:00'), archive('12','2026-11-05 02:00:00'), activate('12','2026-11-06 02:00:00'), archive('13','2026-11-06 17:00:00'), archive('14','2026-11-05 02:00:00','456')];
+  assert.deepEqual([...pausedAdUnitIds(audits, '123', 'Asia/Shanghai', window)], ['11']);
+  assert.deepEqual([...pausedAdUnitIds(audits, '456', 'Asia/Shanghai', window)], ['14']);
+  const pure = excludePausedRevenue({ revenue: 160 }, { revenue: 100 }, { before: 60, after: 0 });
+  assert.equal(pure.excluded, true);
+  assert.equal(alertQualified(pure.before, pure.after, { min_revenue: 50, min_drop_percent: 2 }), false);
+  const mixed = excludePausedRevenue({ revenue: 150 }, { revenue: 70 }, { before: 50, after: 0 });
+  assert.equal(mixed.excluded, true);
+  assert.equal(alertQualified(mixed.before, mixed.after, { min_revenue: 50, min_drop_percent: 2 }), true);
+});
+
 test('Feishu alert text identifies confirmed and unlocated data dates', () => {
   const account = { name: 'GAM Test', network_code: '123456' };
   const window = { cadence: 'day', start: '2026-11-09', end: '2026-11-09' };
@@ -29,21 +44,18 @@ test('Feishu alert text identifies confirmed and unlocated data dates', () => {
     after: { revenue: 90, requests: 95, impressions: 85, clicks: 10 } };
   const message = regressionAlertMessage(account, '赵飞', 'Asia/Shanghai', '2026-11-09 16:30', window, [alert]);
   assert.equal(message, [
-    '【AdX 数据回退告警】', 'GAM 账号：GAM Test（Network 123456）', '渠道：赵飞',
-    '推送时间：2026-11-09 16:30（Asia/Shanghai）', '监测区间：2026-11-09 至 2026-11-09（单日快照）', '对比基准：同一数据日的上次快照',
-    '首次检测时间：2026-11-09 16:29（Asia/Shanghai）', '域名：news.example.com', '最早已确认下修数据日：2026-11-09',
-    '收入：$100.00 → $90.00；回退 $10.00（10.00%）', '请求 -5，展示 +5，点击 +0'
+    '【AdX 收入下降】', '账号：GAM Test（123456）', '渠道：赵飞', '域名：news.example.com',
+    '数据日：2026-11-09', '收入：$100.00 → $90.00，少 $10.00（10.00%）', '发现：2026-11-09 16:29（Asia/Shanghai）'
   ].join('\n'));
   const unknown = regressionAlertMessage(account, '赵飞', 'Asia/Shanghai', '2026-11-09 16:30', window,
     [{ ...alert, dropStartDate: null }]);
-  assert.match(unknown, /最早已确认下修数据日：区间内未定位（缺少同日历史快照）/);
-  assert.doesNotMatch(unknown, /倒扣起始数据日/);
+  assert.match(unknown, /数据日：2026-11-09/);
+  assert.doesNotMatch(unknown, /已确认下修日/);
   const multi = regressionAlertMessage(account, '赵飞', 'Asia/Singapore', '2026-11-10 00:43',
     { cadence:'three_days', start:'2026-11-07', end:'2026-11-09', baselineStart:'2026-11-04', baselineEnd:'2026-11-06' }, [alert]);
-  assert.match(multi, /对比区间：2026-11-04 至 2026-11-06/);
-  assert.match(multi, /首次检测时间：2026-11-09 16:29（Asia\/Singapore）/);
-  assert.match(multi, /区间下降 \$10\.00/);
-  assert.match(multi, /不等于已确认同一数据日被倒扣/);
+  assert.match(multi, /区间：2026-11-07 至 2026-11-09（对比 2026-11-04 至 2026-11-06）/);
+  assert.match(multi, /发现：2026-11-09 16:29（Asia\/Singapore）/);
+  assert.match(multi, /少 \$10\.00/);
 });
 
 test('drop start is the earliest confirmed same-date decrease only', () => {
@@ -65,7 +77,7 @@ test('drop start is the earliest confirmed same-date decrease only', () => {
 
 test('later multi-day run records the earliest revised data day without inventing a date for its first run', async () => {
   const db = new DatabaseSync(':memory:');
-  db.exec("CREATE TABLE soap_accounts(id INTEGER PRIMARY KEY,name TEXT,network_code TEXT,rest_network_timezone TEXT); CREATE TABLE channels(id INTEGER PRIMARY KEY,name TEXT); CREATE TABLE upstream_accounts(id INTEGER PRIMARY KEY,soap_account_id INTEGER,account_key TEXT,status TEXT); CREATE TABLE revenue_facts(channel_id INTEGER,account TEXT,report_date TEXT,domain TEXT,source_file TEXT,revenue REAL,requests INTEGER,impressions INTEGER,clicks INTEGER)");
+  db.exec("CREATE TABLE soap_accounts(id INTEGER PRIMARY KEY,name TEXT,network_code TEXT,rest_network_timezone TEXT); CREATE TABLE channels(id INTEGER PRIMARY KEY,name TEXT); CREATE TABLE upstream_accounts(id INTEGER PRIMARY KEY,soap_account_id INTEGER,account_key TEXT,status TEXT); CREATE TABLE audit_logs(id INTEGER PRIMARY KEY,action TEXT,target_id TEXT,detail TEXT,created_at TEXT); CREATE TABLE revenue_facts(channel_id INTEGER,account TEXT,report_date TEXT,domain TEXT,ad_unit_id TEXT DEFAULT '',source_file TEXT,revenue REAL,requests INTEGER,impressions INTEGER,clicks INTEGER)");
   db.exec("INSERT INTO soap_accounts(id,name,network_code,rest_network_timezone) VALUES(1,'GAM','123','Asia/Tokyo'); INSERT INTO channels(id,name) VALUES(1,'Publisher'); INSERT INTO upstream_accounts(id,soap_account_id,account_key,status) VALUES(1,1,'upstream','active')");
   const routes = new Map();
   const app = { get: (path, ...handlers) => routes.set(path, handlers.at(-1)), put() {} };
@@ -108,12 +120,12 @@ test('later multi-day run records the earliest revised data day without inventin
   try {
     await retryMonitor.runForAccount(account);
     assert.equal(sent, 1);
-    assert.match(message, /【AdX 数据回退告警】/);
-    assert.match(message, /GAM 账号：GAM（Network 123）/);
+    assert.match(message, /【AdX 收入下降】/);
+    assert.match(message, /账号：GAM（123）/);
     assert.match(message, /渠道：Publisher/);
-    assert.match(message, /对比区间：/);
-    assert.match(message, /首次检测时间：/);
-    assert.match(message, new RegExp('最早已确认下修数据日：' + window.end));
+    assert.match(message, /区间：/);
+    assert.match(message, /发现：/);
+    assert.match(message, new RegExp('已确认下修日：' + window.end));
     const delivered = db.prepare('SELECT alert_status,send_attempts FROM regression_events WHERE id=?').get(latest.id);
     assert.equal(delivered.alert_status, 'sent');
     assert.equal(delivered.send_attempts, 2);
