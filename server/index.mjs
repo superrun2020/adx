@@ -620,12 +620,19 @@ function serveReports(req, res, exportCsv = false) {
     return res.status(400).json({ ok:false, error:'invalid_report_domain_match' });
   if (req.query.domain) {
     const raw = String(req.query.domain).trim();
-    if (raw.length > 253) return res.status(400).json({ ok:false, error:'invalid_report_domain' });
-    const domain = normalizedDomain(raw);
-    if (req.query.domainMatch === 'contains') {
-      where.push("INSTR(LOWER(" + mappedDomainSql('rf') + "),LOWER(?))>0");
-      params.push(domain);
-    } else addExact(mappedDomainSql('rf'), domain);
+    const parts = raw.split(/[,，;；\s]+/).filter(Boolean);
+    if (raw.length > 4096 || parts.length > 20 || parts.some(part => part.length > 253))
+      return res.status(400).json({ ok:false, error:'invalid_report_domain' });
+    const domains = [...new Set(parts.map(normalizedDomain))];
+    if (domains.some(domain => !domain || domain.length > 253))
+      return res.status(400).json({ ok:false, error:'invalid_report_domain' });
+    const expression = mappedDomainSql('rf');
+    if (domains.length) {
+      where.push('(' + domains.map(() => req.query.domainMatch === 'contains'
+        ? 'INSTR(LOWER(' + expression + '),LOWER(?))>0'
+        : expression + '=? COLLATE NOCASE').join(' OR ') + ')');
+      params.push(...domains);
+    }
   }
   if (req.query.hour !== undefined && req.query.hour !== '') {
     const hour = Number(req.query.hour);

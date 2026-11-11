@@ -28,6 +28,7 @@ const pct = value => Number(value || 0).toFixed(2) + '%';
 const defaultFilters = { source:'rest', upstreamAccount:'', channelId:'', advertiser:'', bd:'',
   adUnit:'', adUnitId:'', domain:'', domainMatch:'contains', country:'', hour:'', minRequests:'',
   minRevenue:'', minMatchRate:'', minEcpm:'' };
+const splitDomains = value => String(value || '').split(/[,，;；\s]+/).filter(Boolean);
 const defaultDimensions = ['url','adUnit','adUnitId'];
 const width = { date:115, hour:75, account:170, channel:140, advertiser:150, bd:130,
   url:240, country:90, adUnit:240, adUnitId:150 };
@@ -120,7 +121,14 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
       .finally(() => { if (active) setDailyLoading(false); });
     return () => { active = false; };
   }, [range[0].valueOf(),range[1].valueOf(),applied,dailyBreakdown,dailyPage,dailyPageSize,selectedDimensions.includes('date'),dailySort]);
-  const search = () => { setPage(1); setDailyPage(1); setSelectedDate(null); setApplied({ ...filters }); setFilterOpen(false); };
+  const search = () => {
+    const domains = [...new Set(splitDomains(filters.domain).map(value => value.toLowerCase()))];
+    if (domains.length > 20 || domains.some(value => value.length > 253)) {
+      message.error('最多搜索 20 个域名，每项不超过 253 个字符'); return;
+    }
+    setPage(1); setDailyPage(1); setSelectedDate(null);
+    setApplied({ ...filters, domain:domains.join(',') }); setFilterOpen(false);
+  };
   const reset = () => { setFilters(defaultFilters); setApplied(defaultFilters); setPage(1); setDailyPage(1); setSelectedDate(null);
     setSelectedDimensions(defaultDimensions); setSelectedMetrics(coreMetrics.map(([key]) => key)); setSort(null); setDailySort(null); };
   const exportCsv = async () => {
@@ -156,10 +164,12 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
         <label className="report-filter-field report-filter-date"><span>日期范围</span><ReportDateFilter value={range} onChange={value => {
           setPage(1); setDailyPage(1); setSelectedDate(null); setRange(value);
         }}/></label>
-        <label className="report-filter-field"><span>域名</span><Space.Compact block>
+        <label className="report-filter-field"><span>域名（可批量搜索）</span><Space.Compact block>
           <Select aria-label="域名匹配方式" value={filters.domainMatch} onChange={value => setFilter('domainMatch',value)}
             options={[{value:'contains',label:'模糊匹配'},{value:'exact',label:'精确匹配'}]} style={{width:112,flex:'none'}}/>
-          <Input allowClear placeholder="输入域名关键字" value={filters.domain} onChange={event => setFilter('domain',event.target.value)}/>
+          <Input.TextArea aria-label="域名列表" autoSize={{minRows:1,maxRows:3}} maxLength={4096}
+            placeholder="多个域名用逗号、空格或换行分隔" value={filters.domain}
+            onChange={event => setFilter('domain',event.target.value)}/>
         </Space.Compact></label>
         {admin && <label className="report-filter-field"><span>账号</span><AutoComplete allowClear
           placeholder="全部账号" value={filters.upstreamAccount || undefined} onChange={value => setFilter('upstreamAccount',value)}

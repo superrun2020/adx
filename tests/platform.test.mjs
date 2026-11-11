@@ -321,6 +321,40 @@ test('reports keep distinct ad unit IDs, page safely, and drill into exact rows'
     { headers:{ 'X-Forwarded-Host':'adxpub.geekforest.ai' } })).response.status, 403);
 });
 
+test('report domain search combines multiple domains in detail, paging, and CSV', async () => {
+  cookie = '';
+  const login = await request('/api/auth/login', { method:'POST',
+    body:JSON.stringify({ email:'admin@example.test', password:'AdminPass123!' }) });
+  cookie = login.response.headers.get('set-cookie').split(';')[0];
+  const channelId = (await request('/api/admin/channels')).body.items[0].id;
+  const domains = ['alpha.batch.test', 'beta.batch.test', 'other.test'];
+  const imported = await request('/api/admin/imports', { method:'POST', body:JSON.stringify({
+    channelId, fileName:'multi-domain-report.json', payload:domains.map((domain, index) => ({
+      date:'2026-09-30', url:'https://' + domain, ad_unit:'batch-' + index,
+      requests:10, impressions:10, revenue:index + 1
+    }))
+  }) });
+  assert.equal(imported.body.accepted, 3);
+  const route = (domain, mode = 'exact', extra = {}) => '/api/reports?' + new URLSearchParams({
+    start:'2026-09-30', end:'2026-09-30', dimensions:'url', domain, domainMatch:mode, ...extra
+  });
+  assert.equal((await request(route('alpha.batch.test'))).body.total, 1);
+  assert.equal((await request(route('alpha.batch.test, beta.batch.test'))).body.total, 2);
+  assert.equal((await request(route('alpha.batch.test；ALPHA.BATCH.TEST\nbeta.batch.test'))).body.total, 2);
+  assert.equal((await request(route('alpha.batch\nbeta.batch', 'contains'))).body.total, 2);
+  const page = await request(route('alpha.batch.test,beta.batch.test', 'exact', { pageSize:'1', page:'2' }));
+  assert.equal(page.body.total, 2);
+  assert.equal(page.body.items.length, 1);
+  const exported = await fetch('http://127.0.0.1:' + port + route('alpha.batch.test,beta.batch.test').replace('/api/reports?', '/api/reports/export?'),
+    { headers:{ Cookie:cookie } });
+  const csv = await exported.text();
+  assert.equal(exported.status, 200);
+  assert.match(csv, /alpha.batch.test/);
+  assert.match(csv, /beta.batch.test/);
+  assert.doesNotMatch(csv, /other.test/);
+  assert.equal((await request(route(Array.from({length:21}, (_, i) => 'd' + i + '.test').join(',')))).response.status, 400);
+});
+
 test('report cache is user scoped and invalidates after an import', async () => {
   cookie = '';
   const login = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: 'admin@example.test', password: 'AdminPass123!' }) });

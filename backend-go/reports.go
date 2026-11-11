@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 var reportDimensions = map[string]string{
@@ -199,16 +200,39 @@ func (a *app) serveReports(w http.ResponseWriter, r *http.Request, export bool) 
 		return
 	}
 	if raw := strings.TrimSpace(q.Get("domain")); raw != "" {
-		if len(raw) > 253 {
+		if len(raw) > 4096 {
 			writeError(w, 400, "invalid_report_domain")
 			return
 		}
-		domain := normalizedDomain(raw)
-		if q.Get("domainMatch") == "contains" {
-			where = append(where, "INSTR(LOWER("+mappedDomainSQL("rf")+"),LOWER(?))>0")
+		parts := strings.FieldsFunc(raw, func(r rune) bool {
+			return unicode.IsSpace(r) || strings.ContainsRune(",，;；", r)
+		})
+		if len(parts) > 20 {
+			writeError(w, 400, "invalid_report_domain")
+			return
+		}
+		seen := make(map[string]bool, len(parts))
+		matches := make([]string, 0, len(parts))
+		expression := mappedDomainSQL("rf")
+		for _, part := range parts {
+			domain := normalizedDomain(part)
+			if len(part) > 253 || len(domain) > 253 || domain == "" {
+				writeError(w, 400, "invalid_report_domain")
+				return
+			}
+			if seen[domain] {
+				continue
+			}
+			seen[domain] = true
+			if q.Get("domainMatch") == "contains" {
+				matches = append(matches, "INSTR(LOWER("+expression+"),LOWER(?))>0")
+			} else {
+				matches = append(matches, expression+"=? COLLATE NOCASE")
+			}
 			args = append(args, domain)
-		} else {
-			addExact(mappedDomainSQL("rf"), domain)
+		}
+		if len(matches) > 0 {
+			where = append(where, "("+strings.Join(matches, " OR ")+")")
 		}
 	}
 	if raw := q.Get("hour"); raw != "" {
