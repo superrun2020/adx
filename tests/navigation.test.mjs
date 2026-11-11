@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { canVisit, viewForPath, viewPaths } from '../src/navigation.js';
+import { canVisit, shouldNavigateInPlace, viewForPath, viewPaths } from '../src/navigation.js';
 import { allowedAdminRequest } from '../server/admin-permissions.mjs';
 
 test('each sidebar view has a refreshable browser path', () => {
@@ -34,4 +34,14 @@ test('restricted administrators see only granted sidebar routes', () => {
   const botAdmin = { role:'admin', sidebar_permissions:'["bot-report"]' };
   assert.equal(allowedAdminRequest(botAdmin, '/api/admin/bot-report/settings', 'GET'), true);
   assert.equal(allowedAdminRequest(botAdmin, '/api/admin/regression/settings', 'GET'), false);
+});
+
+test('sidebar keeps ordinary clicks in place and leaves browser new-tab gestures alone', () => {
+  assert.equal(shouldNavigateInPlace({ button: 0 }), true);
+  assert.equal(shouldNavigateInPlace({ button: 0, ctrlKey: true }), false);
+  assert.equal(shouldNavigateInPlace({ button: 0, metaKey: true }), false);
+  assert.equal(shouldNavigateInPlace({ button: 0, shiftKey: true }), false);
+  assert.equal(shouldNavigateInPlace({ button: 0, altKey: true }), false);
+  assert.equal(shouldNavigateInPlace({ button: 1 }), false);
+  assert.equal(shouldNavigateInPlace({ button: 2 }), false);
 });

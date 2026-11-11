@@ -40,3 +40,8 @@ export function viewForPath(pathname, fallback = 'dashboard', userOrRole = 'admi
   if (canVisit(userOrRole, fallback)) return fallback;
   return Object.keys(viewPaths).find(candidate => canVisit(userOrRole, candidate)) || 'dashboard';
 }
+
+export function shouldNavigateInPlace(event) {
+  return (!event || event.button == null || event.button === 0) &&
+    !event?.ctrlKey && !event?.metaKey && !event?.shiftKey && !event?.altKey;
+}
