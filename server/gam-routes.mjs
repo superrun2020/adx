@@ -1,4 +1,4 @@
-import { adUnitResource, buildGamAdUnit, createGamAdUnit, findGamAdUnitByCode, findGamAdUnitByName, gamApiRequest, gamSiteResource, getGamSite, listGamAdUnits, listGamAdUnitSizes, listGamSites } from './gam-beta.mjs';
+import { adUnitResource, buildGamAdUnit, createGamAdUnit, findGamAdUnitByCode, findGamAdUnitByName, gamApiRequest, gamSiteResource, getGamAdUnit, getGamSite, listGamAdUnits, listGamAdUnitSizes, listGamSites, parseGamAdUnitSizes } from './gam-beta.mjs';
 import { canView } from './admin-permissions.mjs';
 
 function siteDomain(value) {
@@ -188,14 +188,95 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     const pageToken = String(req.query.pageToken || '');
     const search = String(req.query.search || '').trim();
     const statuses = String(req.query.statuses || '').split(',').filter(Boolean);
-    if (search.length > 100 || statuses.some(status => !['ACTIVE', 'INACTIVE'].includes(status)))
+    if (search.length > 100 || statuses.some(status => !['ACTIVE', 'INACTIVE', 'ARCHIVED'].includes(status)) ||
+        statuses.length > 2 || (statuses.length === 2 && statuses.join(',') !== 'ACTIVE,INACTIVE'))
       throw new Error('invalid_ad_unit_filter');
     const filters = [];
     if (search) filters.push('displayName = ' + JSON.stringify('*' + search.replaceAll('*', '') + '*'));
     if (statuses.length === 1) filters.push('status = ' + statuses[0]);
     if (statuses.length === 2) filters.push('status != ARCHIVED');
     const result = await listGamAdUnits(item.network_code, await tokenFor(item), { pageToken, pageSize: 100, filter: filters.join(' AND ') });
-    res.json({ ok: true, items: (result.adUnits || []).map(unit => ({ name: unit.name, displayName: unit.displayName, adUnitCode: unit.adUnitCode, parentAdUnit: unit.parentAdUnit, status: unit.status, adUnitSizes: unit.adUnitSizes || [] })), nextPageToken: result.nextPageToken || '' });
+    res.json({ ok: true, items: (result.adUnits || []).map(unit => ({ name: unit.name, displayName: unit.displayName, adUnitCode: unit.adUnitCode, parentAdUnit: unit.parentAdUnit, status: unit.status, adUnitSizes: unit.adUnitSizes || [], description: unit.description, appliedAdsenseEnabled: unit.appliedAdsenseEnabled, appliedTargetWindow: unit.appliedTargetWindow })), nextPageToken: result.nextPageToken || '' });
+  }));
+
+  const remoteUnit = async (req, requireEnabled = false) => {
+    const item = account(req.params.id);
+    if (!item || item.status !== 'active' || (requireEnabled && item.enabled !== 1)) throw new Error('invalid_gam_account_status');
+    if (!/^\d+$/.test(req.params.unitId) || req.params.unitId === '0') throw new Error('invalid_ad_unit_resource');
+    const name = adUnitResource('networks/' + item.network_code + '/adUnits/' + req.params.unitId, item.network_code);
+    const token = await tokenFor(item);
+    const unit = await getGamAdUnit(item.network_code, token, name);
+    if (unit.name !== name) throw new Error('invalid_ad_unit_resource');
+    return { item, name, token, unit };
+  };
+
+  app.get('/api/admin/gam-accounts/:id/ad-units/:unitId', requireAuth, requireAdmin, route(async (req, res) => {
+    res.json({ ok: true, item: (await remoteUnit(req)).unit });
+  }));
+
+  app.patch('/api/admin/gam-accounts/:id/ad-units/:unitId', requireAuth, requireAdmin, route(async (req, res) => {
+    const { item, name, token, unit } = await remoteUnit(req, true);
+    if (name === await rootAdUnit(item.network_code, token) || unit.status === 'ARCHIVED')
+      throw new Error('invalid_ad_unit_update');
+    const input = req.body;
+    const allowed = ['displayName', 'description', 'sizes', 'adsenseEnabled', 'targetWindow'];
+    if (!input || Array.isArray(input) || typeof input !== 'object' ||
+        Object.keys(input).some(key => !allowed.includes(key))) throw new Error('invalid_ad_unit_update');
+    const patch = { name }, mask = [];
+    if (Object.hasOwn(input, 'displayName')) {
+      if (typeof input.displayName !== 'string' || !input.displayName.trim() || input.displayName.trim().length > 255)
+        throw new Error('invalid_ad_unit_display_name');
+      const displayName = input.displayName.trim();
+      if (displayName !== unit.displayName) {
+        const match = await findGamAdUnitByName(item.network_code, token, displayName);
+        if (match && match.name !== name) throw new Error('ad_unit_name_already_exists_in_gam');
+      }
+      patch.displayName = displayName; mask.push('displayName');
+    }
+    if (Object.hasOwn(input, 'description')) {
+      if (typeof input.description !== 'string' || input.description.length > 65535)
+        throw new Error('invalid_ad_unit_description');
+      patch.description = input.description; mask.push('description');
+    }
+    if (Object.hasOwn(input, 'sizes')) {
+      const browser = parseGamAdUnitSizes(input.sizes);
+      patch.adUnitSizes = [...browser, ...(unit.adUnitSizes || []).filter(size => size.environmentType !== 'BROWSER')];
+      mask.push('adUnitSizes');
+    }
+    if (Object.hasOwn(input, 'adsenseEnabled')) {
+      if (typeof input.adsenseEnabled !== 'boolean') throw new Error('invalid_ad_unit_adsense');
+      patch.appliedAdsenseEnabled = input.adsenseEnabled; mask.push('appliedAdsenseEnabled');
+    }
+    if (Object.hasOwn(input, 'targetWindow')) {
+      if (!['TOP', 'BLANK'].includes(input.targetWindow)) throw new Error('invalid_ad_unit_target_window');
+      patch.appliedTargetWindow = input.targetWindow; mask.push('appliedTargetWindow');
+    }
+    if (!mask.length) throw new Error('invalid_ad_unit_update');
+    const updated = await gamApiRequest(item.network_code, token, name, {
+      method:'PATCH', query:{ updateMask:mask.join(',') }, body:patch
+    });
+    if (updated.name !== name) throw new Error('gam_ad_unit_update_mismatch');
+    audit(req.user.email, 'gam.ad_unit_update', 'gam_ad_unit', name,
+      JSON.stringify({ networkCode:item.network_code, before:unit, after:updated, updateMask:mask }), req.ip);
+    res.json({ ok:true, item:updated });
+  }));
+
+  app.post('/api/admin/gam-accounts/:id/ad-units/batch-archive', requireAuth, requireAdmin, route(async (req, res) => {
+    const item = account(req.params.id);
+    if (!item || item.status !== 'active' || item.enabled !== 1) throw new Error('invalid_gam_account_status');
+    const names = req.body?.names;
+    if (!Array.isArray(names) || !names.length || names.length > 100 ||
+        names.some(name => typeof name !== 'string' || !/^networks\/\d+\/adUnits\/\d+$/.test(name)) ||
+        new Set(names).size !== names.length) throw new Error('invalid_ad_unit_archive');
+    for (const name of names) adUnitResource(name, item.network_code);
+    const token = await tokenFor(item);
+    if (names.includes(await rootAdUnit(item.network_code, token))) throw new Error('invalid_ad_unit_archive');
+    await gamApiRequest(item.network_code, token, 'networks/' + item.network_code + '/adUnits:batchArchive', {
+      method:'POST', body:{ names }
+    });
+    audit(req.user.email, 'gam.ad_unit_archive', 'gam_ad_unit', item.network_code,
+      JSON.stringify({ networkCode:item.network_code, names }), req.ip);
+    res.json({ ok:true, archived:names.length });
   }));
 
   app.get('/api/admin/gam-accounts/:id/ad-unit-sizes', requireAuth, requireAdmin, route(async (req, res) => {

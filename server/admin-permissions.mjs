@@ -35,6 +35,8 @@ export function allowedAdminRequest(user, path, method) {
   else if (path.startsWith('/api/admin/gam-accounts/') && method === 'GET' && (path.endsWith('/sites') || path.endsWith('/site-domains'))) views = ['gam','links','ad-units','channels'];
   else if (path.startsWith('/api/admin/gam-accounts/') && method === 'GET' &&
     (path.endsWith('/ad-units') || path.endsWith('/ad-unit-sizes'))) views = ['gam','ad-units'];
+  else if (path.startsWith('/api/admin/gam-accounts/') && path.includes('/ad-units/') && method === 'GET') views = ['gam','ad-units'];
+  else if (path.startsWith('/api/admin/gam-accounts/') && path.includes('/ad-units/')) views = ['ad-units'];
   else if (path.startsWith('/api/admin/gam-accounts') || path.startsWith('/api/admin/gam-sync/')) views = ['gam'];
   else if (path.startsWith('/api/admin/gam-ad-units') || path.startsWith('/api/admin/ad-units')) views = ['ad-units'];
   else if (path === '/api/admin/channels' && method === 'GET') views = ['channels','settlement','gam','reports'];

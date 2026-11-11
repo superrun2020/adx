@@ -3,6 +3,7 @@ import { after, before, test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import express from 'express';
 import { registerGamRoutes } from '../server/gam-routes.mjs';
+import { allowedAdminRequest } from '../server/admin-permissions.mjs';
 import { normalizeGamFactSite } from '../server/gam-sync.mjs';
 
 const db = new DatabaseSync(':memory:');
@@ -45,6 +46,7 @@ registerGamRoutes(app, { db, requireAuth: auth, requireAdmin: (_req, _res, next)
 const realFetch = globalThis.fetch;
 const remoteUnits = new Map();
 const posts = [];
+const patches = [], archives = [];
 const listFilters = [];
 let server, base, failAfterCreate = false;
 const response = (payload, status = 200) => new Response(JSON.stringify(payload),
@@ -78,6 +80,24 @@ before(async () => {
       { name:'networks/' + network + '/adUnitSizes/1', environmentType:'BROWSER', size:{sizeType:'PIXEL',width:320,height:50} }
     ] });
     if (path === 'adUnits/9') return response({ name: 'networks/' + network + '/adUnits/9' });
+    if (path === 'adUnits:batchArchive' && options.method === 'POST') {
+      const { names } = JSON.parse(options.body);
+      archives.push(names);
+      for (const unit of remoteUnits.values()) if (names.includes(unit.name)) unit.status = 'ARCHIVED';
+      return response({});
+    }
+    if (path.startsWith('adUnits/') && options.method === 'PATCH') {
+      const unit = [...remoteUnits.values()].find(value => value.name === 'networks/' + network + '/' + path);
+      if (!unit) return response({ error: { message:'not found' } }, 404);
+      const body = JSON.parse(options.body);
+      patches.push({ name: unit.name, mask: url.searchParams.get('updateMask'), body });
+      Object.assign(unit, body);
+      return response(unit);
+    }
+    if (path.startsWith('adUnits/') && (!options.method || options.method === 'GET')) {
+      const unit = [...remoteUnits.values()].find(value => value.name === 'networks/' + network + '/' + path);
+      return unit ? response(unit) : response({ error: { message:'not found' } }, 404);
+    }
     if (path === 'adUnits' && options.method === 'POST') {
       const unit = JSON.parse(options.body);
       posts.push({ network, unit });
@@ -101,9 +121,10 @@ before(async () => {
       }
       if (filter) {
         listFilters.push(filter);
-        return response({ adUnits: [...remoteUnits.values()].filter(unit => unit.name.startsWith('networks/' + network + '/')) });
+        return response({ adUnits: [...remoteUnits.values()].filter(unit => unit.name.startsWith('networks/' + network + '/') &&
+          (filter !== 'status = ARCHIVED' || unit.status === 'ARCHIVED')) });
       }
-      return response({ adUnits: [{ name: 'networks/' + network + '/adUnits/9', displayName: 'Root' }] });
+      return response({ adUnits: [...remoteUnits.values()].filter(unit => unit.name.startsWith('networks/' + network + '/')) });
     }
     throw new Error('unexpected GAM request: ' + url.pathname);
   };
@@ -263,6 +284,53 @@ test('batch creates real REST resources, isolates networks, and reconciles a fai
   assert.equal(retried.body.item.status, 'created');
   assert.equal(retried.body.item.domain, 'retry.123456.example.com');
   assert.equal(posts.length, postsBeforeRetry);
+});
+
+test('existing GAM units can be edited and archived, with immutable codes and account isolation', async () => {
+  const name = 'networks/123456/adUnits/777';
+  remoteUnits.set('123456/editable', { name, parentAdUnit:'networks/123456/adUnits/9',
+    displayName:'Original name', adUnitCode:'editable', status:'ACTIVE', description:'Before',
+    adUnitSizes:[
+      { environmentType:'BROWSER', size:{ sizeType:'PIXEL', width:320, height:50 } },
+      { environmentType:'VIDEO_PLAYER', size:{ sizeType:'PIXEL', width:640, height:360 } }
+    ] });
+  const detail = await request('/api/admin/gam-accounts/1/ad-units/777');
+  assert.equal(detail.status, 200);
+  assert.equal(detail.body.item.adUnitCode, 'editable');
+  const edited = await request('/api/admin/gam-accounts/1/ad-units/777', 'PATCH', {
+    displayName:'Updated name', description:'After', sizes:['300x250']
+  });
+  assert.equal(edited.status, 200);
+  assert.equal(edited.body.item.displayName, 'Updated name');
+  assert.equal(edited.body.item.adUnitSizes.length, 2);
+  assert.equal(edited.body.item.adUnitSizes[1].environmentType, 'VIDEO_PLAYER');
+  assert.equal(patches.at(-1).mask, 'displayName,description,adUnitSizes');
+  assert.equal(patches.at(-1).body.adUnitCode, undefined);
+  assert.equal((await request('/api/admin/gam-accounts/1/ad-units/777', 'PATCH', { adUnitCode:'renamed' })).status, 400);
+  assert.equal((await request('/api/admin/gam-accounts/2/ad-units/777', 'PATCH', { displayName:'Wrong network' })).status, 502);
+  assert.equal((await request('/api/admin/gam-accounts/1/ad-units/batch-archive', 'POST',
+    { names:['networks/999999/adUnits/777'] })).status, 400);
+  assert.equal((await request('/api/admin/gam-accounts/1/ad-units/batch-archive', 'POST',
+    { names:['networks/123456/adUnits/9'] })).status, 400);
+  const archived = await request('/api/admin/gam-accounts/1/ad-units/batch-archive', 'POST', { names:[name] });
+  assert.equal(archived.status, 200);
+  assert.equal(archived.body.archived, 1);
+  assert.deepEqual(archives.at(-1), [name]);
+  assert.equal((await request('/api/admin/gam-accounts/1/ad-units?statuses=ARCHIVED')).body.items.find(unit => unit.name === name).status, 'ARCHIVED');
+  assert.equal((await request('/api/admin/gam-accounts/1/ad-units')).body.items.find(unit => unit.name === name).status, 'ARCHIVED');
+  assert.equal((await request('/api/admin/gam-accounts/1/ad-units/777', 'PATCH', { displayName:'Again' })).status, 400);
+});
+
+test('ad-unit edits and archive require the ad-unit sidebar permission', () => {
+  const detail = '/api/admin/gam-accounts/1/ad-units/777';
+  const archive = '/api/admin/gam-accounts/1/ad-units/batch-archive';
+  const gamOnly = { role:'admin', sidebar_permissions:'["gam"]' };
+  const unitsOnly = { role:'admin', sidebar_permissions:'["ad-units"]' };
+  assert.equal(allowedAdminRequest(gamOnly, detail, 'GET'), true);
+  assert.equal(allowedAdminRequest(gamOnly, detail, 'PATCH'), false);
+  assert.equal(allowedAdminRequest(gamOnly, archive, 'POST'), false);
+  assert.equal(allowedAdminRequest(unitsOnly, detail, 'PATCH'), true);
+  assert.equal(allowedAdminRequest(unitsOnly, archive, 'POST'), true);
 });
 
 test('disabled account cannot create or retry GAM ad units', async () => {

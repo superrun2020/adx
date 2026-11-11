@@ -116,8 +116,10 @@ func (a *app) gamRequest(ctx context.Context, network, token, resource, method s
 			return nil, errors.New("gam_response_too_large")
 		}
 		result := map[string]any{}
-		if err := json.Unmarshal(data, &result); err != nil && response.StatusCode >= 200 && response.StatusCode < 300 {
-			return nil, errors.New("invalid_gam_response")
+		if len(data) > 0 {
+			if err := json.Unmarshal(data, &result); err != nil && response.StatusCode >= 200 && response.StatusCode < 300 {
+				return nil, errors.New("invalid_gam_response")
+			}
 		}
 		if response.StatusCode >= 200 && response.StatusCode < 300 {
 			return result, nil

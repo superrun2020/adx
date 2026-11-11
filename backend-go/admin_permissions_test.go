@@ -42,6 +42,26 @@ func TestBotReportPermissionIsSeparateFromRegression(t *testing.T) {
 	}
 }
 
+func TestAdUnitWritesRequireAdUnitSidebarAccess(t *testing.T) {
+	path := "/api/admin/gam-accounts/1/ad-units/777"
+	archive := "/api/admin/gam-accounts/1/ad-units/batch-archive"
+	for _, item := range []struct {
+		view        string
+		read, write bool
+	}{{"gam", true, false}, {"ad-units", true, true}, {"links", false, false}} {
+		u := user{Role: "admin", SidebarPermissions: sql.NullString{String: adminPermissionsJSON([]string{item.view}), Valid: true}}
+		if got := u.allowedRequest(httptest.NewRequest(http.MethodGet, path, nil)); got != item.read {
+			t.Errorf("%s detail read=%v", item.view, got)
+		}
+		if got := u.allowedRequest(httptest.NewRequest(http.MethodPatch, path, nil)); got != item.write {
+			t.Errorf("%s edit=%v", item.view, got)
+		}
+		if got := u.allowedRequest(httptest.NewRequest(http.MethodPost, archive, nil)); got != item.write {
+			t.Errorf("%s archive=%v", item.view, got)
+		}
+	}
+}
+
 func TestChannelsOnlyAdminReadsGamDomainsWithoutLinkWriteAccess(t *testing.T) {
 	a := testApp(t)
 	if _, err := a.db.Exec("INSERT INTO channels(id,name,email) VALUES(7,'Channel','channel@example.test')"); err != nil {

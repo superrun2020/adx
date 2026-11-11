@@ -303,9 +303,12 @@ func (a *app) listGamAccountAdUnits(w http.ResponseWriter, r *http.Request) erro
 		return errors.New("invalid_ad_unit_filter")
 	}
 	for _, status := range statuses {
-		if status != "" && status != "ACTIVE" && status != "INACTIVE" {
+		if status != "" && status != "ACTIVE" && status != "INACTIVE" && status != "ARCHIVED" {
 			return errors.New("invalid_ad_unit_filter")
 		}
+	}
+	if len(statuses) > 2 || (len(statuses) == 2 && (statuses[0] != "ACTIVE" || statuses[1] != "INACTIVE")) {
+		return errors.New("invalid_ad_unit_filter")
 	}
 	if search != "" {
 		encoded, _ := json.Marshal("*" + strings.ReplaceAll(search, "*", "") + "*")
@@ -320,7 +323,7 @@ func (a *app) listGamAccountAdUnits(w http.ResponseWriter, r *http.Request) erro
 	if len(chosen) == 1 {
 		filters = append(filters, "status = "+chosen[0])
 	}
-	if len(chosen) >= 2 {
+	if len(chosen) == 2 {
 		filters = append(filters, "status != ARCHIVED")
 	}
 	token, err := a.tokenFor(r.Context(), account)
@@ -346,7 +349,7 @@ func (a *app) listGamAccountAdUnits(w http.ResponseWriter, r *http.Request) erro
 		if sizes == nil {
 			sizes = []any{}
 		}
-		items = append(items, map[string]any{"name": unit["name"], "displayName": unit["displayName"], "adUnitCode": unit["adUnitCode"], "parentAdUnit": unit["parentAdUnit"], "status": unit["status"], "adUnitSizes": sizes})
+		items = append(items, map[string]any{"name": unit["name"], "displayName": unit["displayName"], "adUnitCode": unit["adUnitCode"], "parentAdUnit": unit["parentAdUnit"], "status": unit["status"], "adUnitSizes": sizes, "description": unit["description"], "appliedAdsenseEnabled": unit["appliedAdsenseEnabled"], "appliedTargetWindow": unit["appliedTargetWindow"]})
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "items": items, "nextPageToken": importString(result["nextPageToken"])})
 	return nil

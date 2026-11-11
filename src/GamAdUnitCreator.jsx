@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Col, Collapse, DatePicker, Empty, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Switch, Table, Tabs, Tag, Typography, message } from 'antd';
 import { PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -71,6 +71,13 @@ function remoteSizes(values) {
     return sizeLabels[{ FLUID: 'fluid', INTERSTITIAL: 'out-of-page', NATIVE: 'native' }[size.sizeType]] || size.sizeType || '';
   }).filter(Boolean).join('、');
 }
+function browserSizes(values) {
+  return (values || []).filter(item => item.environmentType === 'BROWSER').map(item => {
+    const size = item.size || {};
+    if (size.sizeType === 'PIXEL') return size.width + 'x' + size.height;
+    return { FLUID: 'fluid', INTERSTITIAL: 'out-of-page', NATIVE: 'native' }[size.sizeType] || '';
+  }).filter(Boolean);
+}
 
 function UnitFields({ row, index, onChange, fixedSuffix, networkSizes }) {
   const template = typeFor(row.type);
@@ -87,10 +94,16 @@ function UnitFields({ row, index, onChange, fixedSuffix, networkSizes }) {
 
 export default function GamAdUnitCreator({ accounts = [] }) {
   const activeAccounts = accounts.filter(item => item.status === 'active' && Boolean(item.enabled));
+  const listAccounts = accounts.filter(item => item.status === 'active');
+  const accountListKey = listAccounts.map(item => item.id + ':' + item.networkCode).join(',');
   const [filterAccountId, setFilterAccountId] = useState(null), [filterName, setFilterName] = useState('');
-  const [filterStatuses, setFilterStatuses] = useState(['ACTIVE', 'INACTIVE']);
+  const [filterStatus, setFilterStatus] = useState('');
   const [queried, setQueried] = useState(false), [remoteUnits, setRemoteUnits] = useState([]);
-  const [nextUnits, setNextUnits] = useState(''), [lastQuery, setLastQuery] = useState(null), [listBusy, setListBusy] = useState(false);
+  const [lastQuery, setLastQuery] = useState(null), [listBusy, setListBusy] = useState(false);
+  const [listError, setListError] = useState(''), [selectedUnits, setSelectedUnits] = useState([]);
+  const [editing, setEditing] = useState(null), [editLoading, setEditLoading] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false), [archiving, setArchiving] = useState(false);
+  const listGeneration = useRef(0);
   const [open, setOpen] = useState(false), [mode, setMode] = useState('batch');
   const [accountId, setAccountId] = useState(null), [siteNames, setSiteNames] = useState([]);
   const [sites, setSites] = useState([]), [knownDomains, setKnownDomains] = useState([]);
@@ -150,18 +163,40 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     return () => { current = false; };
   }, [open, accountId]);
 
-  const searchUnits = async (query = { accountId: filterAccountId, name: filterName, statuses: filterStatuses }, pageToken = '') => {
-    if (!query.accountId) return message.warning('请先选择账号');
-    setListBusy(true);
-    try {
-      const params = new URLSearchParams({ search: query.name.trim(), statuses: query.statuses.join(',') });
-      if (pageToken) params.set('pageToken', pageToken);
-      const result = await api('/api/admin/gam-accounts/' + query.accountId + '/ad-units?' + params);
-      setRemoteUnits(previous => pageToken ? [...previous, ...(result.items || [])] : (result.items || []));
-      setNextUnits(result.nextPageToken || ''); setLastQuery(query); setQueried(true);
-    } catch (error) { message.error('查询 GAM 广告单元失败：' + error.message); }
-    finally { setListBusy(false); }
+  const searchUnits = async (query = { accountId: filterAccountId, name: filterName, status: filterStatus }) => {
+    const chosen = query.accountId ? listAccounts.filter(item => item.id === query.accountId) : listAccounts;
+    if (!chosen.length) return message.warning('暂无可查询的 GAM 账号');
+    const generation = ++listGeneration.current;
+    setRemoteUnits([]); setSelectedUnits([]); setQueried(true); setListBusy(true); setListError(''); setLastQuery(query);
+    const results = await Promise.allSettled(chosen.map(async account => {
+      let pageToken = '', count = 0;
+      const seen = new Set();
+      do {
+        const params = new URLSearchParams({ search: query.name.trim(), statuses: query.status || '' });
+        if (pageToken) params.set('pageToken', pageToken);
+        const result = await api('/api/admin/gam-accounts/' + account.id + '/ad-units?' + params);
+        if (generation !== listGeneration.current) return;
+        const rows = (result.items || []).map(row => ({ ...row, gamAccountId: account.id,
+          accountName: account.name, networkCode: account.networkCode, accountEnabled: Boolean(account.enabled) }));
+        setRemoteUnits(previous => [...previous, ...rows]);
+        count += rows.length;
+        const next = result.nextPageToken || '';
+        if (next && seen.has(next)) throw new Error('GAM 广告单元分页重复');
+        seen.add(next);
+        pageToken = next;
+      } while (pageToken && count < 10000);
+      if (pageToken) throw new Error('该账号广告单元超过 10000 个，请缩小筛选范围');
+    }));
+    if (generation !== listGeneration.current) return;
+    const failed = results.map((result, index) => result.status === 'rejected'
+      ? chosen[index].name + '：' + result.reason.message : '').filter(Boolean);
+    if (failed.length) setListError('部分账号查询失败：' + failed.join('；'));
+    setListBusy(false);
   };
+  useEffect(() => {
+    if (accountListKey) searchUnits({ accountId: null, name: '', status: '' });
+    return () => { listGeneration.current += 1; };
+  }, [accountListKey]);
   const chooseAccount = value => {
     setAccountId(value); setSites([]); setKnownDomains([]); setNetworkSizes([]); setSizeError(''); setNextSites('');
     setSiteNames([]); setDomainChoices({}); setDomainSearch({}); setInventoryError('');
@@ -198,7 +233,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
       const rows = mode === 'single' ? [{ status: 'created', code: items[0].code, domain: items[0].domain, item: result.item }]
         : (result.results || []).map(row => ({ ...row, domain: items[row.index]?.domain || '' }));
       setResults(rows); setOpen(false); await loadCreations();
-      if (lastQuery?.accountId === accountId) await searchUnits(lastQuery);
+      if (!lastQuery?.accountId || lastQuery.accountId === accountId) await searchUnits(lastQuery || { accountId: null, name: '', status: '' });
       const failures = rows.filter(row => row.status === 'failed').length;
       if (failures) message.warning('已创建 ' + (rows.length - failures) + ' 个，失败 ' + failures + ' 个；请查看下方逐条错误');
       else message.success('已同步 ' + rows.length + ' 个广告单元到 GAM');
@@ -213,6 +248,60 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     catch (error) { message.error(error.message); await loadCreations(); }
     finally { setRetrying(null); }
   };
+  const openEdit = async row => {
+    setEditLoading(row.name);
+    try {
+      const result = await api('/api/admin/gam-accounts/' + row.gamAccountId + '/ad-units/' + row.name.split('/').at(-1));
+      const unit = result.item;
+      if (unit.status === 'ARCHIVED' || !unit.parentAdUnit) return message.warning('根单元或已归档单元不能修改');
+      const original = { displayName: unit.displayName || '', description: unit.description || '',
+        sizes: browserSizes(unit.adUnitSizes) };
+      setEditing({ row, original, values: { ...original } });
+    } catch (error) { message.error('读取广告单元失败：' + error.message); }
+    finally { setEditLoading(''); }
+  };
+  const saveEdit = async () => {
+    if (!editing) return;
+    const { row, original, values } = editing;
+    const changes = {};
+    if (values.displayName.trim() !== original.displayName) changes.displayName = values.displayName.trim();
+    if (values.description !== original.description) changes.description = values.description;
+    if (JSON.stringify(values.sizes) !== JSON.stringify(original.sizes)) changes.sizes = values.sizes;
+    if (!Object.keys(changes).length) { setEditing(null); return; }
+    if (!values.displayName.trim() || values.displayName.length > 255 ||
+        (changes.sizes && !values.sizes.length)) return message.warning('请填写名称并至少保留一个浏览器尺寸');
+    setSavingEdit(true);
+    try {
+      await api('/api/admin/gam-accounts/' + row.gamAccountId + '/ad-units/' + row.name.split('/').at(-1),
+        { method: 'PATCH', body: JSON.stringify(changes) });
+      setEditing(null); message.success('已同步修改到 GAM');
+      await searchUnits(lastQuery || { accountId: null, name: '', status: '' });
+      await loadCreations().catch(() => {});
+    } catch (error) { message.error('修改失败：' + duplicateMessage(error.message)); }
+    finally { setSavingEdit(false); }
+  };
+  const archiveUnits = async names => {
+    const selected = new Set(names);
+    const rows = remoteUnits.filter(row => selected.has(row.name) && row.status !== 'ARCHIVED' && row.parentAdUnit && row.accountEnabled);
+    if (!rows.length) return;
+    const byAccount = new Map();
+    for (const row of rows) byAccount.set(row.gamAccountId, [...new Set([...(byAccount.get(row.gamAccountId) || []), row.name])]);
+    const batches = [...byAccount].flatMap(([gamAccountId, unitNames]) =>
+      Array.from({ length: Math.ceil(unitNames.length / 100) }, (_, index) =>
+        [gamAccountId, unitNames.slice(index * 100, (index + 1) * 100)]));
+    setArchiving(true);
+    const results = await Promise.allSettled(batches.map(([gamAccountId, unitNames]) =>
+      api('/api/admin/gam-accounts/' + gamAccountId + '/ad-units/batch-archive',
+        { method: 'POST', body: JSON.stringify({ names: unitNames }) })));
+    const archived = results.reduce((count, result, index) => count + (result.status === 'fulfilled'
+      ? batches[index][1].length : 0), 0);
+    const failed = results.filter(result => result.status === 'rejected').map(result => result.reason.message);
+    setSelectedUnits([]);
+    await searchUnits(lastQuery || { accountId: null, name: '', status: '' });
+    setArchiving(false);
+    if (failed.length) message.error('已归档 ' + archived + ' 个，部分失败：' + failed.join('；'));
+    else message.success('已在 GAM 归档 ' + archived + ' 个广告单元');
+  };
   let previewItems = [], previewError = '';
   try {
     if (accountId && siteNames.length) previewItems = preparedItems();
@@ -223,6 +312,8 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     }
   } catch (error) { previewError = error.message; }
   const accountOptions = activeAccounts.map(item => ({ value: item.id, label: item.name + '（' + item.networkCode + '）' }));
+  const listAccountOptions = [{ value: 'all', label: '全部 GAM 账号' },
+    ...listAccounts.map(item => ({ value: item.id, label: item.name + '（' + item.networkCode + '）' }))];
   const historyColumns = [
     { title: '账号', dataIndex: 'networkCode', width: 135 }, { title: '网站', dataIndex: 'domain', width: 170 },
     { title: '广告单元', dataIndex: 'displayName', width: 210 }, { title: '代码', dataIndex: 'adUnitCode', width: 200 },
@@ -231,20 +322,42 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     { title: '操作', width: 80, render: (_, row) => row.status === 'failed' && <Popconfirm title={'重试同步 ' + row.adUnitCode + '？'} onConfirm={() => retry(row)}><Button size="small" loading={retrying === row.id}>重试</Button></Popconfirm> }
   ];
   const remoteColumns = [
+    { title: 'GAM 账号', dataIndex: 'accountName', width: 180 },
     { title: '广告单元', dataIndex: 'displayName', width: 280 }, { title: '广告单元代码', dataIndex: 'adUnitCode', width: 230 },
     { title: '尺寸', dataIndex: 'adUnitSizes', render: remoteSizes },
-    { title: '状态', dataIndex: 'status', width: 120, render: value => <Tag color={value === 'ACTIVE' ? 'green' : 'default'}>{value === 'ACTIVE' ? '启用' : value === 'INACTIVE' ? '停用' : value || '—'}</Tag> }
+    { title: '状态', dataIndex: 'status', width: 135, render: value => <Tag color={value === 'ACTIVE' ? 'green' : value === 'ARCHIVED' ? 'red' : 'default'}>
+      {value === 'ACTIVE' ? '激活' : value === 'INACTIVE' ? '停用' : value === 'ARCHIVED' ? '已归档' : value || '—'}</Tag> },
+    { title: '操作', width: 180, render: (_, row) => row.parentAdUnit && row.status !== 'ARCHIVED' && row.accountEnabled ? <Space>
+      <Button size="small" loading={editLoading === row.name} onClick={() => openEdit(row)}>编辑</Button>
+      <Popconfirm title={'归档 ' + row.displayName + '？'} description="归档后停止投放，历史报表仍保留。" okText="确认归档" cancelText="取消"
+        onConfirm={() => archiveUnits([row.name])}><Button size="small" danger loading={archiving}>归档</Button></Popconfirm>
+    </Space> : row.accountEnabled ? '—' : '账号已停用' }
   ];
 
   return <Space direction="vertical" size={16} style={{ width: '100%' }}>
-    <div className="page-heading"><div><Title level={2}>广告单元</Title><Text type="secondary">按账号查询和创建 Google Ad Manager 广告单元</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={openCreator}>新建广告单元</Button></div>
+    <div className="page-heading"><div><Title level={2}>广告单元</Title><Text type="secondary">默认列出各 GAM 账号的全部广告单元；可编辑、筛选或归档</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={openCreator}>新建广告单元</Button></div>
     <Card><Space wrap>
-      <Select showSearch optionFilterProp="label" style={{ width: 310 }} placeholder="请选择账号" value={filterAccountId} onChange={value => { setFilterAccountId(value); setQueried(false); setRemoteUnits([]); setNextUnits(''); }} options={accountOptions}/>
+      <Select showSearch optionFilterProp="label" style={{ width: 310 }} value={filterAccountId ?? 'all'}
+        onChange={value => { const id = value === 'all' ? null : value; setFilterAccountId(id);
+          searchUnits({ accountId: id, name: filterName, status: filterStatus }); }} options={listAccountOptions}/>
       <Input style={{ width: 280 }} placeholder="广告单元名称" value={filterName} onChange={event => setFilterName(event.target.value)} onPressEnter={() => searchUnits()}/>
-      <Select mode="multiple" style={{ width: 240 }} value={filterStatuses} onChange={setFilterStatuses} options={[{ value: 'ACTIVE', label: '启用' }, { value: 'INACTIVE', label: '停用' }]}/>
+      <Select style={{ width: 200 }} value={filterStatus} onChange={value => { setFilterStatus(value);
+        searchUnits({ accountId: filterAccountId, name: filterName, status: value }); }} options={[
+        { value: '', label: '全部状态' }, { value: 'ACTIVE', label: '激活' },
+        { value: 'INACTIVE', label: '停用' }, { value: 'ARCHIVED', label: '已归档' }
+      ]}/>
       <Button icon={<SearchOutlined/>} loading={listBusy} onClick={() => searchUnits()}>查询广告单元</Button>
+      <Popconfirm title={'归档选中的 ' + selectedUnits.length + ' 个广告单元？'}
+        description="这些广告单元将在 GAM 停止投放；历史报表不会删除。" okText="确认归档" cancelText="取消"
+        onConfirm={() => archiveUnits(selectedUnits)}><Button danger disabled={!selectedUnits.length} loading={archiving}>归档选中</Button></Popconfirm>
     </Space></Card>
-    <Card bodyStyle={{ padding: 0 }}><Table rowKey="name" loading={listBusy} dataSource={remoteUnits} columns={remoteColumns} pagination={{ pageSize: 20 }} scroll={{ x: 900 }} locale={{ emptyText: <Empty description={queried ? '没有匹配的广告单元' : '选择账号后点击查询广告单元'}/> }}/>{nextUnits && <div style={{ textAlign: 'center', padding: 12 }}><Button loading={listBusy} onClick={() => searchUnits(lastQuery, nextUnits)}>加载更多</Button></div>}</Card>
+    {listError && <Alert type="warning" showIcon message={listError} action={<Button size="small" onClick={() => searchUnits(lastQuery)}>重试</Button>}/>}
+    <Card title="GAM 已存在的广告单元" extra={<Text type="secondary">{listBusy ? '正在加载…' : '共 ' + remoteUnits.length + ' 个'} · 归档后停止投放，历史报表保留</Text>} bodyStyle={{ padding: 0 }}>
+      <Table rowKey="name" loading={listBusy && !remoteUnits.length} dataSource={remoteUnits} columns={remoteColumns}
+        rowSelection={{ selectedRowKeys: selectedUnits, onChange: setSelectedUnits,
+          getCheckboxProps: row => ({ disabled: !row.parentAdUnit || row.status === 'ARCHIVED' || !row.accountEnabled }) }}
+        pagination={{ pageSize: 20 }} scroll={{ x: 1100 }} locale={{ emptyText: <Empty description={queried ? '没有匹配的广告单元' : '正在读取 GAM 广告单元'}/> }}/>
+    </Card>
     {results.length > 0 && <Alert type={results.some(row => row.status === 'failed') ? 'warning' : 'success'} showIcon
       message={'本次同步：成功 ' + results.filter(row => row.status === 'created').length + ' 个，失败 ' + results.filter(row => row.status === 'failed').length + ' 个'}
       description={results.some(row => row.status === 'failed') && <div style={{ maxHeight: 220, overflowY: 'auto', overflowWrap: 'anywhere' }}>
@@ -253,6 +366,21 @@ export default function GamAdUnitCreator({ accounts = [] }) {
         </div>)}
       </div>}/>}
     <Collapse items={[{ key: 'history', label: '同步记录与失败重试', children: <Table rowKey="id" size="small" dataSource={creations} columns={historyColumns} pagination={{ pageSize: 10 }} scroll={{ x: 1100 }}/> }]}/>
+    <Modal title="编辑 GAM 广告单元" open={Boolean(editing)} onCancel={() => { if (!savingEdit) setEditing(null); }}
+      onOk={saveEdit} okText="保存并同步到 GAM" confirmLoading={savingEdit} okButtonProps={{ disabled: !editing?.values.displayName.trim() }}>
+      {editing && <Space direction="vertical" size={14} style={{ width: '100%' }}>
+        <Text type="secondary">账号：{editing.row.accountName} · 广告单元代码不可修改</Text>
+        <label>广告单元代码<Input style={{ marginTop: 6 }} value={editing.row.adUnitCode} disabled/></label>
+        <label>名称<Input style={{ marginTop: 6 }} maxLength={255} value={editing.values.displayName}
+          onChange={event => setEditing(current => ({ ...current, values: { ...current.values, displayName: event.target.value } }))}/></label>
+        <label>说明<Input.TextArea style={{ marginTop: 6 }} maxLength={65535} rows={3} value={editing.values.description}
+          onChange={event => setEditing(current => ({ ...current, values: { ...current.values, description: event.target.value } }))}/></label>
+        <label>浏览器广告尺寸<Select mode="tags" tokenSeparators={[',', '，']} style={{ width: '100%', marginTop: 6 }}
+          value={editing.values.sizes} options={sizeOptions([...bannerSizes, ...interstitialSizes], editing.values.sizes)}
+          onChange={sizes => setEditing(current => ({ ...current, values: { ...current.values, sizes } }))}/></label>
+        <Text type="secondary">只修改浏览器尺寸；原有视频/音频尺寸及其他 GAM 设置保持不变。</Text>
+      </Space>}
+    </Modal>
     <Modal title="新建广告单元" open={open} width={760} onCancel={() => { if (!publishing) setOpen(false); }} maskClosable={!publishing} closable={!publishing} footer={<Space><Button disabled={publishing} onClick={() => setOpen(false)}>取消</Button><Button type="primary" loading={publishing} disabled={inventoryBusy || Boolean(previewError) || !previewItems.length} onClick={publish}>{mode === 'batch' ? '批量创建' : '创建并同步'}</Button></Space>}>
       <div style={{ maxHeight: '68vh', overflowY: 'auto', paddingRight: 8 }}>
         <Row gutter={[16, 12]}>

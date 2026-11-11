@@ -94,6 +94,10 @@ func (u user) allowedRequest(r *http.Request) bool {
 	case strings.HasPrefix(path, "/api/admin/gam-accounts/") && method == http.MethodGet &&
 		(strings.HasSuffix(path, "/ad-units") || strings.HasSuffix(path, "/ad-unit-sizes")):
 		views = []string{"gam", "ad-units"}
+	case strings.HasPrefix(path, "/api/admin/gam-accounts/") && strings.Contains(path, "/ad-units/") && method == http.MethodGet:
+		views = []string{"gam", "ad-units"}
+	case strings.HasPrefix(path, "/api/admin/gam-accounts/") && strings.Contains(path, "/ad-units/"):
+		views = []string{"ad-units"}
 	case strings.HasPrefix(path, "/api/admin/gam-accounts") || strings.HasPrefix(path, "/api/admin/gam-sync/"):
 		views = []string{"gam"}
 	case strings.HasPrefix(path, "/api/admin/gam-ad-units") || strings.HasPrefix(path, "/api/admin/ad-units"):
