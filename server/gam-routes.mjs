@@ -425,6 +425,9 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
   app.get('/api/admin/gam-ad-units', requireAuth, requireAdmin, (_req, res) => {
     res.json({ ok: true, items: db.prepare('SELECT id,gam_account_id gamAccountId,network_code networkCode,site_name siteName,site_url siteUrl,domain,parent_ad_unit parentAdUnit,display_name displayName,ad_unit_code adUnitCode,sizes_json sizesJson,description,adsense_enabled adsenseEnabled,target_window targetWindow,status,provider_id providerId,publish_error publishError,created_at createdAt,published_at publishedAt FROM gam_ad_unit_creations ORDER BY id DESC LIMIT 1000').all() });
   });
+  app.get('/api/admin/gam-ad-units/domain-map', requireAuth, requireAdmin, (_req, res) => {
+    res.json({ ok: true, items: db.prepare("SELECT network_code networkCode,site_url siteUrl,domain,provider_id providerId,status FROM gam_ad_unit_creations WHERE status='created' AND provider_id IS NOT NULL AND provider_id<>'' ORDER BY id DESC").all() });
+  });
 
   const createDirect = async (input, actor, ip, context = {}) => {
     const gamAccount = account(input?.gamAccountId);

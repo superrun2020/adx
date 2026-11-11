@@ -27,6 +27,34 @@ func TestGamSelectedSiteDomain(t *testing.T) {
 	}
 }
 
+func TestGamAdUnitDomainMapOnlyIncludesPublishedUnits(t *testing.T) {
+	a := testApp(t)
+	if _, err := a.db.Exec("INSERT INTO soap_accounts(id,name,network_code,credential_ciphertext,status,created_by) VALUES(1,'First','123456','cipher','active','test')"); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []struct{ status, provider string }{
+		{"created", "networks/123456/adUnits/11"},
+		{"failed", "networks/123456/adUnits/12"},
+	} {
+		_, err := a.db.Exec("INSERT INTO gam_ad_unit_creations(gam_account_id,network_code,site_name,site_url,domain,parent_ad_unit,display_name,ad_unit_code,sizes_json,status,provider_id,created_by) VALUES(1,'123456','networks/123456/sites/1','https://example.com','news.example.com','networks/123456/adUnits/9',?,?,'[]',?,?, 'test')", item.provider, item.provider, item.status, item.provider)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	response := httptest.NewRecorder()
+	a.gamAdUnitDomainMap(response, httptest.NewRequest(http.MethodGet, "/api/admin/gam-ad-units/domain-map", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var result struct{ Items []map[string]any }
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 || result.Items[0]["providerId"] != "networks/123456/adUnits/11" || result.Items[0]["siteUrl"] != "https://example.com" {
+		t.Fatalf("unexpected domain map: %v", result.Items)
+	}
+}
+
 func TestDisabledGamAccountCannotCreateAdUnits(t *testing.T) {
 	a := testApp(t)
 	if _, err := a.db.Exec("INSERT INTO soap_accounts(id,name,network_code,credential_ciphertext,status,enabled,created_by) VALUES(1,'Disabled','123456','cipher','active',0,'test')"); err != nil {

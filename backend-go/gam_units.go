@@ -201,6 +201,9 @@ func (a *app) publicGamCreation(id int64) map[string]any {
 func (a *app) gamAdUnitCreations(w http.ResponseWriter, r *http.Request) {
 	a.sendItems(w, "SELECT "+gamCreationColumns+" FROM gam_ad_unit_creations ORDER BY id DESC LIMIT 1000")
 }
+func (a *app) gamAdUnitDomainMap(w http.ResponseWriter, r *http.Request) {
+	a.sendItems(w, "SELECT network_code networkCode,site_url siteUrl,domain,provider_id providerId,status FROM gam_ad_unit_creations WHERE status='created' AND provider_id IS NOT NULL AND provider_id<>'' ORDER BY id DESC")
+}
 func (a *app) saveGamCreated(row, remote map[string]any, actor, ip string) (map[string]any, error) {
 	network := importString(row["network_code"])
 	if err := resourceForNetwork(adUnitPattern, importString(remote["name"]), network, "invalid_created_ad_unit"); err != nil {

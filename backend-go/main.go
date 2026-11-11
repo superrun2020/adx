@@ -183,6 +183,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("POST /api/admin/link-metadata", a.auth("admin", gamRoute(a.createLinkMetadata)))
 	mux.HandleFunc("PUT /api/admin/link-metadata", a.auth("admin", gamRoute(a.updateLinkMetadata)))
 	mux.HandleFunc("GET /api/admin/gam-ad-units", a.auth("admin", a.gamAdUnitCreations))
+	mux.HandleFunc("GET /api/admin/gam-ad-units/domain-map", a.auth("admin", a.gamAdUnitDomainMap))
 	mux.HandleFunc("POST /api/admin/gam-ad-units", a.auth("admin", gamRoute(a.createGamAdUnit)))
 	mux.HandleFunc("POST /api/admin/gam-ad-units/batch", a.auth("admin", gamRoute(a.batchGamAdUnits)))
 	mux.HandleFunc("POST /api/admin/gam-ad-units/{id}/retry", a.auth("admin", gamRoute(a.retryGamAdUnit)))

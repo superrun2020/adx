@@ -345,3 +345,21 @@ test('disabled account cannot create or retry GAM ad units', async () => {
     db.prepare('UPDATE soap_accounts SET enabled=1 WHERE id=1').run();
   }
 });
+
+test('domain map includes older created units beyond the history page without failed records', async () => {
+  const insert = db.prepare("INSERT INTO gam_ad_unit_creations(gam_account_id,network_code,site_name,site_url,domain,parent_ad_unit,display_name,ad_unit_code,sizes_json,status,provider_id,created_by) VALUES(1,'123456','networks/123456/sites/1','https://example.com','news.example.com','networks/123456/adUnits/9',?,?,'[]',?,?, 'test')");
+  db.exec('BEGIN');
+  for (let index = 0; index < 1001; index++)
+    insert.run('Map ' + index, 'map-' + index, 'created', 'networks/123456/adUnits/' + (10000 + index));
+  insert.run('Unpublished', 'unpublished-map', 'failed', 'networks/123456/adUnits/99999');
+  db.exec('COMMIT');
+  const response = await request('/api/admin/gam-ad-units/domain-map');
+  assert.equal(response.status, 200);
+  assert.equal(response.body.items.filter(row => {
+    const id = Number(row.providerId?.split('/').at(-1));
+    return id >= 10000 && id <= 11000;
+  }).length, 1001);
+  assert.equal(response.body.items.some(row => row.providerId === 'networks/123456/adUnits/99999'), false);
+  assert.equal(response.body.items[0].siteUrl, 'https://example.com');
+  assert.equal(response.body.items[0].accountEmail, undefined);
+});

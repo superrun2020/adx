@@ -1,8 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Col, Collapse, DatePicker, Empty, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Switch, Table, Tabs, Tag, Typography, message } from 'antd';
 import { PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { batchUnitTemplates, belongsToSite, gamBrowserSizes, prepareGamUnitItems, siteDomain } from './gam-unit-plan.mjs';
+import { archivableSubdomainUnit, indexCreationRecords, mainDomainOf, resolveAdUnitDomain, scanArchivableUnits } from './gam-unit-domains.mjs';
 
 const { Text, Title } = Typography;
 const bannerSizes = ['320x50', '336x280', '250x250', '300x250'];
@@ -118,10 +119,24 @@ export default function GamAdUnitCreator({ accounts = [] }) {
   const [description, setDescription] = useState(''), [adsenseEnabled, setAdsenseEnabled] = useState(false);
   const [targetWindow, setTargetWindow] = useState('TOP');
   const [creations, setCreations] = useState([]), [results, setResults] = useState([]);
+  const [domainMap, setDomainMap] = useState([]);
+  const [bulkOpen, setBulkOpen] = useState(false), [bulkInput, setBulkInput] = useState('');
+  const [bulkPreview, setBulkPreview] = useState(null), [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkError, setBulkError] = useState('');
   const [publishing, setPublishing] = useState(false), [retrying, setRetrying] = useState(null);
 
-  const loadCreations = () => api('/api/admin/gam-ad-units').then(result => setCreations(result.items || []));
+  const loadCreations = async () => {
+    const [history, mapping] = await Promise.all([
+      api('/api/admin/gam-ad-units'), api('/api/admin/gam-ad-units/domain-map')
+    ]);
+    setCreations(history.items || []);
+    setDomainMap(mapping.items || []);
+  };
   useEffect(() => { loadCreations().catch(error => message.error(error.message)); }, []);
+  const creationByResource = useMemo(() => indexCreationRecords(domainMap), [domainMap]);
+  const withDomain = row => ({ ...row, ...resolveAdUnitDomain(row,
+    creationByResource.get(String(row.networkCode) + ':' + row.name)) });
+  const displayedUnits = useMemo(() => remoteUnits.map(withDomain), [remoteUnits, creationByResource]);
   useEffect(() => {
     if (!open || !accountId) return;
     let current = true;
@@ -280,27 +295,84 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     } catch (error) { message.error('修改失败：' + duplicateMessage(error.message)); }
     finally { setSavingEdit(false); }
   };
-  const archiveUnits = async names => {
-    const selected = new Set(names);
-    const rows = remoteUnits.filter(row => selected.has(row.name) && row.status !== 'ARCHIVED' && row.parentAdUnit && row.accountEnabled);
-    if (!rows.length) return;
+  const archiveRows = async rows => {
+    if (!rows.length) return { archived: 0, failed: [] };
     const byAccount = new Map();
     for (const row of rows) byAccount.set(row.gamAccountId, [...new Set([...(byAccount.get(row.gamAccountId) || []), row.name])]);
     const batches = [...byAccount].flatMap(([gamAccountId, unitNames]) =>
       Array.from({ length: Math.ceil(unitNames.length / 100) }, (_, index) =>
         [gamAccountId, unitNames.slice(index * 100, (index + 1) * 100)]));
     setArchiving(true);
-    const results = await Promise.allSettled(batches.map(([gamAccountId, unitNames]) =>
-      api('/api/admin/gam-accounts/' + gamAccountId + '/ad-units/batch-archive',
-        { method: 'POST', body: JSON.stringify({ names: unitNames }) })));
-    const archived = results.reduce((count, result, index) => count + (result.status === 'fulfilled'
-      ? batches[index][1].length : 0), 0);
-    const failed = results.filter(result => result.status === 'rejected').map(result => result.reason.message);
-    setSelectedUnits([]);
-    await searchUnits(lastQuery || { accountId: null, name: '', status: '' });
-    setArchiving(false);
+    try {
+      const results = await Promise.allSettled(batches.map(([gamAccountId, unitNames]) =>
+        api('/api/admin/gam-accounts/' + gamAccountId + '/ad-units/batch-archive',
+          { method: 'POST', body: JSON.stringify({ names: unitNames }) })));
+      const archived = results.reduce((count, result, index) => count + (result.status === 'fulfilled'
+        ? batches[index][1].length : 0), 0);
+      const failed = results.filter(result => result.status === 'rejected').map(result => result.reason.message);
+      setSelectedUnits([]);
+      await searchUnits(lastQuery || { accountId: null, name: '', status: '' });
+      return { archived, failed };
+    } finally { setArchiving(false); }
+  };
+  const archiveUnits = async names => {
+    const selected = new Set(names);
+    const rows = remoteUnits.filter(row => selected.has(row.name) && row.status !== 'ARCHIVED' && row.parentAdUnit && row.accountEnabled);
+    const { archived, failed } = await archiveRows(rows);
     if (failed.length) message.error('已归档 ' + archived + ' 个，部分失败：' + failed.join('；'));
     else message.success('已在 GAM 归档 ' + archived + ' 个广告单元');
+  };
+  const findBulkMatches = async target => {
+    const [mapping, allUnits] = await Promise.all([
+      api('/api/admin/gam-ad-units/domain-map'),
+      scanArchivableUnits(activeAccounts, (account, pageToken) => {
+        const query = new URLSearchParams({ statuses: 'ACTIVE,INACTIVE' });
+        if (pageToken) query.set('pageToken', pageToken);
+        return api('/api/admin/gam-accounts/' + account.id + '/ad-units?' + query);
+      })
+    ]);
+    const records = mapping.items || [];
+    setDomainMap(records);
+    const byResource = indexCreationRecords(records);
+    const rows = allUnits.filter(row => archivableSubdomainUnit(row, target,
+      byResource.get(String(row.networkCode) + ':' + row.name)))
+      .map(row => ({ ...row, ...resolveAdUnitDomain(row,
+        byResource.get(String(row.networkCode) + ':' + row.name)) }));
+    return { target, rows, scanned: allUnits.length };
+  };
+  const previewBulkArchive = async () => {
+    const target = siteDomain(bulkInput);
+    if (!target || target === mainDomainOf(target)) {
+      setBulkError('请输入完整子域名，例如 news.example.com；主域名不能使用此批量操作。');
+      setBulkPreview(null);
+      return;
+    }
+    if (!activeAccounts.length) { setBulkError('暂无可归档的 GAM 账号'); return; }
+    setBulkBusy(true); setBulkError(''); setBulkPreview(null);
+    try {
+      const preview = await findBulkMatches(target);
+      setBulkPreview(preview);
+      if (!preview.rows.length) setBulkError('未找到可确认归属且未归档的广告单元；未执行任何归档。');
+    } catch (error) { setBulkError('预览不完整，已停止：' + error.message); }
+    finally { setBulkBusy(false); }
+  };
+  const confirmBulkArchive = async () => {
+    if (!bulkPreview?.rows.length || siteDomain(bulkInput) !== bulkPreview.target) return;
+    setBulkBusy(true); setBulkError('');
+    try {
+      const fresh = await findBulkMatches(bulkPreview.target);
+      const signature = result => result.rows.map(row => row.gamAccountId + ':' + row.name).sort().join('|');
+      if (signature(fresh) !== signature(bulkPreview)) {
+        setBulkPreview(fresh);
+        setBulkError('GAM 广告单元已变化，请检查更新后的名单，再次确认。');
+        return;
+      }
+      const { archived, failed } = await archiveRows(fresh.rows);
+      setBulkPreview(null);
+      if (failed.length) setBulkError('已归档 ' + archived + ' 个；部分失败：' + failed.join('；') + '。请重新预览剩余单元。');
+      else { setBulkOpen(false); message.success('已在 GAM 归档 ' + archived + ' 个属于 ' + fresh.target + ' 的广告单元'); }
+    } catch (error) { setBulkError('归档前核对失败，未执行批量归档：' + error.message); }
+    finally { setBulkBusy(false); }
   };
   let previewItems = [], previewError = '';
   try {
@@ -324,6 +396,9 @@ export default function GamAdUnitCreator({ accounts = [] }) {
   const remoteColumns = [
     { title: 'GAM 账号', dataIndex: 'accountName', width: 180 },
     { title: '广告单元', dataIndex: 'displayName', width: 280 }, { title: '广告单元代码', dataIndex: 'adUnitCode', width: 230 },
+    { title: '主域名', dataIndex: 'mainDomain', width: 190, render: value => value || '—' },
+    { title: '子域名', dataIndex: 'subdomain', width: 210, render: (value, row) => value || (row.domain ? '—' : <Text type="secondary">未确认 · {row.source}</Text>) },
+    { title: '归属依据', dataIndex: 'source', width: 145 },
     { title: '尺寸', dataIndex: 'adUnitSizes', render: remoteSizes },
     { title: '状态', dataIndex: 'status', width: 135, render: value => <Tag color={value === 'ACTIVE' ? 'green' : value === 'ARCHIVED' ? 'red' : 'default'}>
       {value === 'ACTIVE' ? '激活' : value === 'INACTIVE' ? '停用' : value === 'ARCHIVED' ? '已归档' : value || '—'}</Tag> },
@@ -350,13 +425,15 @@ export default function GamAdUnitCreator({ accounts = [] }) {
       <Popconfirm title={'归档选中的 ' + selectedUnits.length + ' 个广告单元？'}
         description="这些广告单元将在 GAM 停止投放；历史报表不会删除。" okText="确认归档" cancelText="取消"
         onConfirm={() => archiveUnits(selectedUnits)}><Button danger disabled={!selectedUnits.length} loading={archiving}>归档选中</Button></Popconfirm>
+      <Button danger onClick={() => { setBulkOpen(true); setBulkInput(''); setBulkPreview(null); setBulkError(''); }}>
+        按子域名批量归档</Button>
     </Space></Card>
     {listError && <Alert type="warning" showIcon message={listError} action={<Button size="small" onClick={() => searchUnits(lastQuery)}>重试</Button>}/>}
     <Card title="GAM 已存在的广告单元" extra={<Text type="secondary">{listBusy ? '正在加载…' : '共 ' + remoteUnits.length + ' 个'} · 归档后停止投放，历史报表保留</Text>} bodyStyle={{ padding: 0 }}>
-      <Table rowKey="name" loading={listBusy && !remoteUnits.length} dataSource={remoteUnits} columns={remoteColumns}
+      <Table rowKey="name" loading={listBusy && !remoteUnits.length} dataSource={displayedUnits} columns={remoteColumns}
         rowSelection={{ selectedRowKeys: selectedUnits, onChange: setSelectedUnits,
           getCheckboxProps: row => ({ disabled: !row.parentAdUnit || row.status === 'ARCHIVED' || !row.accountEnabled }) }}
-        pagination={{ pageSize: 20 }} scroll={{ x: 1100 }} locale={{ emptyText: <Empty description={queried ? '没有匹配的广告单元' : '正在读取 GAM 广告单元'}/> }}/>
+        pagination={{ pageSize: 20 }} scroll={{ x: 1600 }} locale={{ emptyText: <Empty description={queried ? '没有匹配的广告单元' : '正在读取 GAM 广告单元'}/> }}/>
     </Card>
     {results.length > 0 && <Alert type={results.some(row => row.status === 'failed') ? 'warning' : 'success'} showIcon
       message={'本次同步：成功 ' + results.filter(row => row.status === 'created').length + ' 个，失败 ' + results.filter(row => row.status === 'failed').length + ' 个'}
@@ -366,6 +443,28 @@ export default function GamAdUnitCreator({ accounts = [] }) {
         </div>)}
       </div>}/>}
     <Collapse items={[{ key: 'history', label: '同步记录与失败重试', children: <Table rowKey="id" size="small" dataSource={creations} columns={historyColumns} pagination={{ pageSize: 10 }} scroll={{ x: 1100 }}/> }]}/>
+    <Modal title="按子域名批量归档 GAM 广告单元" open={bulkOpen} width={1080}
+      onCancel={() => { if (!bulkBusy && !archiving) setBulkOpen(false); }}
+      onOk={confirmBulkArchive} okText="确认批量归档到 GAM" confirmLoading={bulkBusy || archiving}
+      okButtonProps={{ danger: true, disabled: !bulkPreview?.rows.length || bulkBusy || archiving }}>
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Alert type="info" showIcon message="只归档明确属于输入子域名的广告单元"
+          description="从所有可用 GAM 账号完整扫描未归档广告单元，按本站创建记录或 GAM 代码/名称中的完整域名精确匹配。主域名、相似域名和无法确认归属的单元不会归档；历史报表保留。"/>
+        <Space wrap>
+          <Input style={{ width: 360 }} placeholder="输入完整子域名，如 news.example.com" value={bulkInput}
+            onChange={event => { setBulkInput(event.target.value); setBulkPreview(null); setBulkError(''); }}
+            onPressEnter={previewBulkArchive} disabled={bulkBusy || archiving}/>
+          <Button onClick={previewBulkArchive} loading={bulkBusy} disabled={archiving}>扫描并预览</Button>
+        </Space>
+        {bulkError && <Alert type="warning" showIcon message={bulkError}/>}
+        {bulkPreview && <>
+          <Text>子域名：<strong>{bulkPreview.target}</strong> · 已扫描 {bulkPreview.scanned} 个单元 · 精确命中 <strong>{bulkPreview.rows.length}</strong> 个
+            {bulkPreview.rows.length > 0 && ' · 涉及 ' + new Set(bulkPreview.rows.map(row => row.gamAccountId)).size + ' 个 GAM 账号'}</Text>
+          <Table size="small" rowKey="name" dataSource={bulkPreview.rows} pagination={{ pageSize: 10 }} scroll={{ x: 1000 }}
+            columns={remoteColumns.filter(col => ['accountName', 'displayName', 'adUnitCode', 'mainDomain', 'subdomain', 'status'].includes(col.dataIndex))}/>
+        </>}
+      </Space>
+    </Modal>
     <Modal title="编辑 GAM 广告单元" open={Boolean(editing)} onCancel={() => { if (!savingEdit) setEditing(null); }}
       onOk={saveEdit} okText="保存并同步到 GAM" confirmLoading={savingEdit} okButtonProps={{ disabled: !editing?.values.displayName.trim() }}>
       {editing && <Space direction="vertical" size={14} style={{ width: '100%' }}>
