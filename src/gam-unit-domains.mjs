@@ -70,6 +70,12 @@ export function archivableSubdomainUnit(unit, target, creation) {
   return Boolean(subdomain) && (target instanceof Set ? target.has(subdomain) : subdomain === siteDomain(target));
 }
 
+export function activatableSubdomainUnit(unit, target, creation) {
+  if (!unit?.parentAdUnit || !unit.accountEnabled || !['ARCHIVED', 'INACTIVE'].includes(unit.status)) return false;
+  const subdomain = resolveAdUnitDomain(unit, creation).subdomain;
+  return Boolean(subdomain) && (target instanceof Set ? target.has(subdomain) : subdomain === siteDomain(target));
+}
+
 export function parseSubdomainLines(input) {
   const lines = String(input || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   if (!lines.length) throw new Error('请每行输入一个完整子域名');
@@ -84,7 +90,25 @@ export function parseSubdomainLines(input) {
   return domains;
 }
 
-export async function scanArchivableUnits(accounts, fetchPage) {
+export function unitActionBatches(rows) {
+  const byAccount = new Map();
+  for (const row of rows) {
+    if (!byAccount.has(row.gamAccountId)) byAccount.set(row.gamAccountId, new Set());
+    byAccount.get(row.gamAccountId).add(row.name);
+  }
+  return [...byAccount].flatMap(([gamAccountId, uniqueNames]) => {
+    const names = [...uniqueNames];
+    return Array.from({ length: Math.ceil(names.length / 100) }, (_, index) =>
+      [gamAccountId, names.slice(index * 100, (index + 1) * 100)]);
+  });
+}
+
+export function bulkUnitSignature(preview) {
+  return preview.action + '|' + preview.targets.join('|') + '|' +
+    preview.rows.map(row => row.gamAccountId + ':' + row.name + ':' + row.subdomain + ':' + row.status).sort().join('|');
+}
+
+export async function scanGamUnits(accounts, fetchPage) {
   const groups = await Promise.all(accounts.map(async account => {
     const items = [], tokens = new Set();
     let pageToken = '';
