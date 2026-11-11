@@ -24,7 +24,7 @@ func TestEditAndArchiveExistingGamAdUnit(t *testing.T) {
 			map[string]any{"environmentType": "BROWSER", "size": map[string]any{"sizeType": "PIXEL", "width": 320, "height": 50}},
 			map[string]any{"environmentType": "VIDEO_PLAYER", "size": map[string]any{"sizeType": "PIXEL", "width": 640, "height": 360}},
 		}}
-	patchCount, archiveCount := 0, 0
+	patchCount, archiveCount, activateCount := 0, 0, 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-token" {
 			t.Error("missing GAM token")
@@ -60,6 +60,15 @@ func TestEditAndArchiveExistingGamAdUnit(t *testing.T) {
 				t.Errorf("archive names=%v", payload)
 			}
 			unit["status"] = "ARCHIVED"
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/networks/"+network+"/adUnits:batchActivate":
+			activateCount++
+			var payload map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			if entries := payload["names"].([]any); len(entries) != 1 || entries[0] != name {
+				t.Errorf("activate names=%v", payload)
+			}
+			unit["status"] = "ACTIVE"
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			t.Errorf("unexpected GAM request %s %s", r.Method, r.URL.Path)
@@ -105,5 +114,20 @@ func TestEditAndArchiveExistingGamAdUnit(t *testing.T) {
 	status, body, err = call(http.MethodGet, "/api/admin/gam-accounts/1/ad-units?statuses=ARCHIVED", "", "", a.listGamAccountAdUnits)
 	if err != nil || status != 200 || !strings.Contains(body, "\"status\":\"ARCHIVED\"") {
 		t.Fatalf("archived list status=%d body=%s err=%v", status, body, err)
+	}
+	activatePath := "/api/admin/gam-accounts/1/ad-units/batch-activate"
+	if _, _, err := call(http.MethodPost, activatePath, "{\"names\":[\"networks/999999/adUnits/777\"]}", "", a.activateGamAdUnits); err == nil {
+		t.Fatal("cross-account activate accepted")
+	}
+	if _, _, err := call(http.MethodPost, activatePath, "{\"names\":[\""+root+"\"]}", "", a.activateGamAdUnits); err == nil {
+		t.Fatal("root unit activate accepted")
+	}
+	status, body, err = call(http.MethodPost, activatePath, "{\"names\":[\""+name+"\"]}", "", a.activateGamAdUnits)
+	if err != nil || status != 200 || activateCount != 1 || !strings.Contains(body, "\"activated\":1") {
+		t.Fatalf("activate status=%d body=%s activations=%d err=%v", status, body, activateCount, err)
+	}
+	status, body, err = call(http.MethodGet, "/api/admin/gam-accounts/1/ad-units", "", "", a.listGamAccountAdUnits)
+	if err != nil || status != 200 || !strings.Contains(body, "\"status\":\"ACTIVE\"") {
+		t.Fatalf("active list status=%d body=%s err=%v", status, body, err)
 	}
 }

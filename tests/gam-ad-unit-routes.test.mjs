@@ -46,7 +46,7 @@ registerGamRoutes(app, { db, requireAuth: auth, requireAdmin: (_req, _res, next)
 const realFetch = globalThis.fetch;
 const remoteUnits = new Map();
 const posts = [];
-const patches = [], archives = [];
+const patches = [], archives = [], activations = [];
 const listFilters = [];
 let server, base, failAfterCreate = false;
 const response = (payload, status = 200) => new Response(JSON.stringify(payload),
@@ -84,6 +84,12 @@ before(async () => {
       const { names } = JSON.parse(options.body);
       archives.push(names);
       for (const unit of remoteUnits.values()) if (names.includes(unit.name)) unit.status = 'ARCHIVED';
+      return response({});
+    }
+    if (path === 'adUnits:batchActivate' && options.method === 'POST') {
+      const { names } = JSON.parse(options.body);
+      activations.push(names);
+      for (const unit of remoteUnits.values()) if (names.includes(unit.name)) unit.status = 'ACTIVE';
       return response({});
     }
     if (path.startsWith('adUnits/') && options.method === 'PATCH') {
@@ -319,18 +325,30 @@ test('existing GAM units can be edited and archived, with immutable codes and ac
   assert.equal((await request('/api/admin/gam-accounts/1/ad-units?statuses=ARCHIVED')).body.items.find(unit => unit.name === name).status, 'ARCHIVED');
   assert.equal((await request('/api/admin/gam-accounts/1/ad-units')).body.items.find(unit => unit.name === name).status, 'ARCHIVED');
   assert.equal((await request('/api/admin/gam-accounts/1/ad-units/777', 'PATCH', { displayName:'Again' })).status, 400);
+  assert.equal((await request('/api/admin/gam-accounts/1/ad-units/batch-activate', 'POST',
+    { names:['networks/999999/adUnits/777'] })).status, 400);
+  assert.equal((await request('/api/admin/gam-accounts/1/ad-units/batch-activate', 'POST',
+    { names:['networks/123456/adUnits/9'] })).status, 400);
+  const activated = await request('/api/admin/gam-accounts/1/ad-units/batch-activate', 'POST', { names:[name] });
+  assert.equal(activated.status, 200);
+  assert.equal(activated.body.activated, 1);
+  assert.deepEqual(activations.at(-1), [name]);
+  assert.equal((await request('/api/admin/gam-accounts/1/ad-units')).body.items.find(unit => unit.name === name).status, 'ACTIVE');
 });
 
 test('ad-unit edits and archive require the ad-unit sidebar permission', () => {
   const detail = '/api/admin/gam-accounts/1/ad-units/777';
   const archive = '/api/admin/gam-accounts/1/ad-units/batch-archive';
+  const activate = '/api/admin/gam-accounts/1/ad-units/batch-activate';
   const gamOnly = { role:'admin', sidebar_permissions:'["gam"]' };
   const unitsOnly = { role:'admin', sidebar_permissions:'["ad-units"]' };
   assert.equal(allowedAdminRequest(gamOnly, detail, 'GET'), true);
   assert.equal(allowedAdminRequest(gamOnly, detail, 'PATCH'), false);
   assert.equal(allowedAdminRequest(gamOnly, archive, 'POST'), false);
+  assert.equal(allowedAdminRequest(gamOnly, activate, 'POST'), false);
   assert.equal(allowedAdminRequest(unitsOnly, detail, 'PATCH'), true);
   assert.equal(allowedAdminRequest(unitsOnly, archive, 'POST'), true);
+  assert.equal(allowedAdminRequest(unitsOnly, activate, 'POST'), true);
 });
 
 test('disabled account cannot create or retry GAM ad units', async () => {

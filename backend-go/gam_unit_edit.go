@@ -190,3 +190,48 @@ func (a *app) archiveGamAdUnits(w http.ResponseWriter, r *http.Request) error {
 	writeJSON(w, 200, map[string]any{"ok": true, "archived": len(names)})
 	return nil
 }
+
+func (a *app) activateGamAdUnits(w http.ResponseWriter, r *http.Request) error {
+	account, err := a.gamAccount(pathID(r))
+	if err != nil || account["status"] != "active" || intMap(account, "enabled") != 1 {
+		return errors.New("invalid_gam_account_status")
+	}
+	input, ok := bodyMap(w, r)
+	if !ok {
+		return nil
+	}
+	entries := array(input["names"])
+	if len(entries) == 0 || len(entries) > 100 {
+		return errors.New("invalid_ad_unit_activate")
+	}
+	network := importString(account["network_code"])
+	names := make([]string, 0, len(entries))
+	seen := make(map[string]bool)
+	for _, entry := range entries {
+		name, valid := entry.(string)
+		if !valid || resourceForNetwork(adUnitPattern, name, network, "invalid_ad_unit_resource") != nil || seen[name] {
+			return errors.New("invalid_ad_unit_activate")
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	token, err := a.tokenFor(r.Context(), account)
+	if err != nil {
+		return err
+	}
+	root, err := a.gamRootAdUnit(r.Context(), network, token)
+	if err != nil {
+		return err
+	}
+	if seen[root] {
+		return errors.New("invalid_ad_unit_activate")
+	}
+	_, err = a.gamRequest(r.Context(), network, token, "networks/"+network+"/adUnits:batchActivate", http.MethodPost, nil, map[string]any{"names": names})
+	if err != nil {
+		return err
+	}
+	a.audit(currentUser(r).Email, "gam.ad_unit_activate", "gam_ad_unit", network,
+		marshalText(map[string]any{"networkCode": network, "names": names}), clientIP(r))
+	writeJSON(w, 200, map[string]any{"ok": true, "activated": len(names)})
+	return nil
+}

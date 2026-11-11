@@ -279,6 +279,24 @@ export function registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptC
     res.json({ ok:true, archived:names.length });
   }));
 
+  app.post('/api/admin/gam-accounts/:id/ad-units/batch-activate', requireAuth, requireAdmin, route(async (req, res) => {
+    const item = account(req.params.id);
+    if (!item || item.status !== 'active' || item.enabled !== 1) throw new Error('invalid_gam_account_status');
+    const names = req.body?.names;
+    if (!Array.isArray(names) || !names.length || names.length > 100 ||
+        names.some(name => typeof name !== 'string' || !/^networks\/\d+\/adUnits\/\d+$/.test(name)) ||
+        new Set(names).size !== names.length) throw new Error('invalid_ad_unit_activate');
+    for (const name of names) adUnitResource(name, item.network_code);
+    const token = await tokenFor(item);
+    if (names.includes(await rootAdUnit(item.network_code, token))) throw new Error('invalid_ad_unit_activate');
+    await gamApiRequest(item.network_code, token, 'networks/' + item.network_code + '/adUnits:batchActivate', {
+      method:'POST', body:{ names }
+    });
+    audit(req.user.email, 'gam.ad_unit_activate', 'gam_ad_unit', item.network_code,
+      JSON.stringify({ networkCode:item.network_code, names }), req.ip);
+    res.json({ ok:true, activated:names.length });
+  }));
+
   app.get('/api/admin/gam-accounts/:id/ad-unit-sizes', requireAuth, requireAdmin, route(async (req, res) => {
     const item = account(req.params.id);
     if (!item) return res.status(404).json({ ok: false, error: 'gam_account_not_found' });

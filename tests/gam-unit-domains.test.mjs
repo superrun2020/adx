@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { domainInUnit, indexCreationRecords, mainDomainOf, resolveAdUnitDomain,
-  archivableSubdomainUnit, scanArchivableUnits } from '../src/gam-unit-domains.mjs';
+  archivableSubdomainUnit, parseSubdomainLines, scanArchivableUnits } from '../src/gam-unit-domains.mjs';
 
 const unit = (code, name = code, status = 'ACTIVE') => ({
   name: 'networks/123/adUnits/9', networkCode: '123', adUnitCode: code,
@@ -26,6 +26,16 @@ test('matches only the complete subdomain and excludes main, similar and archive
   assert.equal(archivableSubdomainUnit(unit('at_c1_aut_lb-news.youxiglobal.xyz.evil.net_inst'), target), false);
   assert.equal(archivableSubdomainUnit(unit('at_c1_aut_lb-news.youxiglobal.xyz_inst', undefined, 'ARCHIVED'), target), false);
   assert.equal(archivableSubdomainUnit({ ...unit('at_c1_aut_lb-news.youxiglobal.xyz_inst'), parentAdUnit: '' }, target), false);
+  assert.equal(archivableSubdomainUnit(unit('at_c1_aut_lb-news.youxiglobal.xyz_inst'), new Set([target, 'finance.youxiglobal.xyz'])), true);
+});
+
+test('newline bulk input normalizes, deduplicates and rejects invalid or main domains', () => {
+  assert.deepEqual(parseSubdomainLines('news.example.com\r\nhttps://finance.example.com/path\nnews.example.com\n'),
+    ['news.example.com', 'finance.example.com']);
+  assert.throws(() => parseSubdomainLines('example.com\nnews.example.com'), /第 1 行/);
+  assert.throws(() => parseSubdomainLines('news.example.com\nnot a domain'), /第 2 行/);
+  assert.throws(() => parseSubdomainLines('\n  '), /每行输入/);
+  assert.throws(() => parseSubdomainLines(Array(101).fill('news.example.com').join('\n')), /最多输入 100/);
 });
 
 test('creation records are scoped to GAM network and conflicting evidence is excluded', () => {

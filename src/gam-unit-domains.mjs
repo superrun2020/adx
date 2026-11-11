@@ -66,7 +66,22 @@ export function resolveAdUnitDomain(unit, creation) {
 
 export function archivableSubdomainUnit(unit, target, creation) {
   if (!unit?.parentAdUnit || !unit.accountEnabled || !['ACTIVE', 'INACTIVE'].includes(unit.status)) return false;
-  return resolveAdUnitDomain(unit, creation).subdomain === siteDomain(target);
+  const subdomain = resolveAdUnitDomain(unit, creation).subdomain;
+  return Boolean(subdomain) && (target instanceof Set ? target.has(subdomain) : subdomain === siteDomain(target));
+}
+
+export function parseSubdomainLines(input) {
+  const lines = String(input || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  if (!lines.length) throw new Error('请每行输入一个完整子域名');
+  if (lines.length > 100) throw new Error('每次最多输入 100 行子域名');
+  const domains = [];
+  for (const [index, line] of lines.entries()) {
+    const domain = siteDomain(line);
+    if (!domain || domain === mainDomainOf(domain))
+      throw new Error('第 ' + (index + 1) + ' 行不是有效子域名：' + line);
+    if (!domains.includes(domain)) domains.push(domain);
+  }
+  return domains;
 }
 
 export async function scanArchivableUnits(accounts, fetchPage) {

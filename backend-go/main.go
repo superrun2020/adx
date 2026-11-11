@@ -176,6 +176,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /api/admin/gam-accounts/{id}/ad-units/{unitId}", a.auth("admin", gamRoute(a.gamAdUnitDetail)))
 	mux.HandleFunc("PATCH /api/admin/gam-accounts/{id}/ad-units/{unitId}", a.auth("admin", gamRoute(a.updateGamAdUnit)))
 	mux.HandleFunc("POST /api/admin/gam-accounts/{id}/ad-units/batch-archive", a.auth("admin", gamRoute(a.archiveGamAdUnits)))
+	mux.HandleFunc("POST /api/admin/gam-accounts/{id}/ad-units/batch-activate", a.auth("admin", gamRoute(a.activateGamAdUnits)))
 	mux.HandleFunc("GET /api/admin/gam-accounts/{id}/ad-unit-sizes", a.auth("admin", gamRoute(a.listGamAccountAdUnitSizes)))
 	mux.HandleFunc("GET /api/admin/gam-accounts/{id}/sites", a.auth("admin", gamRoute(a.listGamAccountSites)))
 	mux.HandleFunc("GET /api/admin/gam-accounts/{id}/site-domains", a.auth("admin", gamRoute(a.gamAccountSiteDomains)))
