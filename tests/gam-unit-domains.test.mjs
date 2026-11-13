@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { domainInUnit, indexCreationRecords, mainDomainOf, resolveAdUnitDomain,
-  activatableSubdomainUnit, archivableSubdomainUnit, bulkUnitSignature, parseSubdomainLines,
+  activatableDomainUnit, archivableDomainUnit, bulkUnitSignature, parseDomainLines,
   scanGamUnits, unitActionBatches } from '../src/gam-unit-domains.mjs';
 
 const unit = (code, name = code, status = 'ACTIVE') => ({
@@ -19,29 +19,31 @@ test('extracts exact website from legacy and generated GAM codes', () => {
   assert.equal(mainDomainOf('news.example.github.io'), 'example.github.io');
 });
 
-test('matches only the complete subdomain and excludes main, similar and archived units', () => {
+test('matches the exact host for main or child domains without including descendants', () => {
   const target = 'news.youxiglobal.xyz';
-  assert.equal(archivableSubdomainUnit(unit('at_c1_aut_lb-news.youxiglobal.xyz_inst'), target), true);
-  assert.equal(archivableSubdomainUnit(unit('261104-youxiglobal.xyz-INT'), target), false);
-  assert.equal(archivableSubdomainUnit(unit('at_c1_aut_lb-anews.youxiglobal.xyz_inst'), target), false);
-  assert.equal(archivableSubdomainUnit(unit('at_c1_aut_lb-news.youxiglobal.xyz.evil.net_inst'), target), false);
-  assert.equal(archivableSubdomainUnit(unit('at_c1_aut_lb-news.youxiglobal.xyz_inst', undefined, 'ARCHIVED'), target), false);
-  assert.equal(archivableSubdomainUnit({ ...unit('at_c1_aut_lb-news.youxiglobal.xyz_inst'), parentAdUnit: '' }, target), false);
-  assert.equal(archivableSubdomainUnit(unit('at_c1_aut_lb-news.youxiglobal.xyz_inst'), new Set([target, 'finance.youxiglobal.xyz'])), true);
+  assert.equal(archivableDomainUnit(unit('at_c1_aut_lb-news.youxiglobal.xyz_inst'), target), true);
+  assert.equal(archivableDomainUnit(unit('261104-youxiglobal.xyz-INT'), target), false);
+  assert.equal(archivableDomainUnit(unit('261104-youxiglobal.xyz-INT'), 'youxiglobal.xyz'), true);
+  assert.equal(archivableDomainUnit(unit('at_c1_aut_lb-news.youxiglobal.xyz_inst'), 'youxiglobal.xyz'), false);
+  assert.equal(archivableDomainUnit(unit('at_c1_aut_lb-anews.youxiglobal.xyz_inst'), target), false);
+  assert.equal(archivableDomainUnit(unit('at_c1_aut_lb-news.youxiglobal.xyz.evil.net_inst'), target), false);
+  assert.equal(archivableDomainUnit(unit('at_c1_aut_lb-news.youxiglobal.xyz_inst', undefined, 'ARCHIVED'), target), false);
+  assert.equal(archivableDomainUnit({ ...unit('at_c1_aut_lb-news.youxiglobal.xyz_inst'), parentAdUnit: '' }, target), false);
+  assert.equal(archivableDomainUnit(unit('at_c1_aut_lb-news.youxiglobal.xyz_inst'), new Set([target, 'finance.youxiglobal.xyz'])), true);
 });
 
-test('bulk activation matches only exact subdomain units that GAM can reactivate', () => {
-  const target = new Set(['news.youxiglobal.xyz', 'finance.youxiglobal.xyz']);
-  assert.equal(activatableSubdomainUnit(unit('261104-news.youxiglobal.xyz-banner1', undefined, 'ARCHIVED'), target), true);
-  assert.equal(activatableSubdomainUnit(unit('261104-finance.youxiglobal.xyz-ANC', undefined, 'INACTIVE'), target), true);
-  assert.equal(activatableSubdomainUnit(unit('261104-news.youxiglobal.xyz-banner1', undefined, 'ACTIVE'), target), false);
-  assert.equal(activatableSubdomainUnit(unit('261104-youxiglobal.xyz-banner1', undefined, 'ARCHIVED'), target), false);
-  assert.equal(activatableSubdomainUnit(unit('261104-anews.youxiglobal.xyz-banner1', undefined, 'ARCHIVED'), target), false);
-  assert.equal(activatableSubdomainUnit({ ...unit('261104-news.youxiglobal.xyz-banner1', undefined, 'ARCHIVED'), parentAdUnit: '' }, target), false);
-  assert.equal(activatableSubdomainUnit({ ...unit('261104-news.youxiglobal.xyz-banner1', undefined, 'ARCHIVED'), accountEnabled: false }, target), false);
+test('bulk activation matches exact main or child domains that GAM can reactivate', () => {
+  const target = new Set(['news.youxiglobal.xyz', 'finance.youxiglobal.xyz', 'youxiglobal.xyz']);
+  assert.equal(activatableDomainUnit(unit('261104-news.youxiglobal.xyz-banner1', undefined, 'ARCHIVED'), target), true);
+  assert.equal(activatableDomainUnit(unit('261104-finance.youxiglobal.xyz-ANC', undefined, 'INACTIVE'), target), true);
+  assert.equal(activatableDomainUnit(unit('261104-youxiglobal.xyz-banner1', undefined, 'ARCHIVED'), target), true);
+  assert.equal(activatableDomainUnit(unit('261104-news.youxiglobal.xyz-banner1', undefined, 'ACTIVE'), target), false);
+  assert.equal(activatableDomainUnit(unit('261104-anews.youxiglobal.xyz-banner1', undefined, 'ARCHIVED'), target), false);
+  assert.equal(activatableDomainUnit({ ...unit('261104-news.youxiglobal.xyz-banner1', undefined, 'ARCHIVED'), parentAdUnit: '' }, target), false);
+  assert.equal(activatableDomainUnit({ ...unit('261104-news.youxiglobal.xyz-banner1', undefined, 'ARCHIVED'), accountEnabled: false }, target), false);
   const record = { networkCode: '123', providerId: 'networks/123/adUnits/9', status: 'created',
     domain: 'finance.youxiglobal.xyz', siteUrl: 'https://youxiglobal.xyz' };
-  assert.equal(activatableSubdomainUnit(unit('261104-news.youxiglobal.xyz-banner1', undefined, 'ARCHIVED'), target, record), false);
+  assert.equal(activatableDomainUnit(unit('261104-news.youxiglobal.xyz-banner1', undefined, 'ARCHIVED'), target, record), false);
 });
 
 test('batch activation groups accounts, deduplicates and respects GAM limit', () => {
@@ -53,23 +55,22 @@ test('batch activation groups accounts, deduplicates and respects GAM limit', ()
 });
 
 test('confirmation signature changes with account, status, domain or unit membership', () => {
-  const row = { gamAccountId: 1, name: 'networks/123/adUnits/9', subdomain: 'news.example.com', status: 'ARCHIVED' };
+  const row = { gamAccountId: 1, name: 'networks/123/adUnits/9', domain: 'news.example.com', status: 'ARCHIVED' };
   const preview = { action: 'activate', targets: ['news.example.com'], rows: [row] };
   const signature = bulkUnitSignature(preview);
   assert.notEqual(bulkUnitSignature({ ...preview, rows: [{ ...row, status: 'INACTIVE' }] }), signature);
   assert.notEqual(bulkUnitSignature({ ...preview, rows: [{ ...row, gamAccountId: 2 }] }), signature);
-  assert.notEqual(bulkUnitSignature({ ...preview, rows: [{ ...row, subdomain: 'other.example.com' }] }), signature);
+  assert.notEqual(bulkUnitSignature({ ...preview, rows: [{ ...row, domain: 'other.example.com' }] }), signature);
   assert.notEqual(bulkUnitSignature({ ...preview, rows: [] }), signature);
   assert.notEqual(bulkUnitSignature({ ...preview, action: 'archive' }), signature);
 });
 
-test('newline bulk input normalizes, deduplicates and rejects invalid or main domains', () => {
-  assert.deepEqual(parseSubdomainLines('news.example.com\r\nhttps://finance.example.com/path\nnews.example.com\n'),
-    ['news.example.com', 'finance.example.com']);
-  assert.throws(() => parseSubdomainLines('example.com\nnews.example.com'), /第 1 行/);
-  assert.throws(() => parseSubdomainLines('news.example.com\nnot a domain'), /第 2 行/);
-  assert.throws(() => parseSubdomainLines('\n  '), /每行输入/);
-  assert.throws(() => parseSubdomainLines(Array(101).fill('news.example.com').join('\n')), /最多输入 100/);
+test('newline bulk input accepts main and child domains and rejects invalid hosts', () => {
+  assert.deepEqual(parseDomainLines('example.com\r\nhttps://finance.example.com/path\nexample.com\n'),
+    ['example.com', 'finance.example.com']);
+  assert.throws(() => parseDomainLines('news.example.com\nnot a domain'), /第 2 行/);
+  assert.throws(() => parseDomainLines('\n  '), /每行输入/);
+  assert.throws(() => parseDomainLines(Array(101).fill('news.example.com').join('\n')), /最多输入 100/);
 });
 
 test('creation records are scoped to GAM network and conflicting evidence is excluded', () => {

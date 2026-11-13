@@ -73,6 +73,57 @@ func TestRegressionWindowsAndThresholds(t *testing.T) {
 	}
 }
 
+func TestRegressionCycleWaitsForFullLocalPeriods(t *testing.T) {
+	instant := time.Date(2026, 11, 13, 1, 30, 0, 0, time.UTC)
+	three, ready, err := regressionCycleWindowAt("Asia/Shanghai", instant, "three_days", "2026-11-11")
+	if err != nil || ready || three.Start != "2026-11-12" || three.End != "2026-11-14" || three.BaselineStart != "2026-11-09" || three.BaselineEnd != "2026-11-11" {
+		t.Fatalf("incomplete three-day period: window=%+v ready=%v error=%v", three, ready, err)
+	}
+	three, ready, err = regressionCycleWindowAt("Asia/Shanghai", time.Date(2026, 11, 15, 0, 30, 0, 0, time.UTC), "three_days", "2026-11-11")
+	if err != nil || !ready {
+		t.Fatalf("completed three-day period: window=%+v ready=%v error=%v", three, ready, err)
+	}
+	next, ready, err := regressionCycleWindowAt("Asia/Shanghai", time.Date(2026, 11, 16, 0, 30, 0, 0, time.UTC), "three_days", three.End)
+	if err != nil || ready || next.Start != "2026-11-15" || next.End != "2026-11-17" {
+		t.Fatalf("next three-day period: window=%+v ready=%v error=%v", next, ready, err)
+	}
+	la, ready, err := regressionCycleWindowAt("America/Los_Angeles", time.Date(2026, 11, 16, 1, 0, 0, 0, time.UTC), "week", "2026-11-08")
+	if err != nil || ready || la.Start != "2026-11-09" || la.End != "2026-11-15" || la.BaselineStart != "2026-11-02" || la.BaselineEnd != "2026-11-08" {
+		t.Fatalf("incomplete Los Angeles week: window=%+v ready=%v error=%v", la, ready, err)
+	}
+	_, ready, err = regressionCycleWindowAt("America/Los_Angeles", time.Date(2026, 11, 16, 8, 0, 0, 0, time.UTC), "week", "2026-11-08")
+	if err != nil || !ready {
+		t.Fatalf("completed Los Angeles week: ready=%v error=%v", ready, err)
+	}
+}
+
+func TestCompletedRegressionCycleDoesNotRunAgain(t *testing.T) {
+	t.Setenv("ADX_DB_PATH", filepath.Join(t.TempDir(), "adx.sqlite"))
+	a, err := newApp(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.db.Close()
+	defer a.reportCache.close()
+	if _, err := a.db.Exec("INSERT INTO soap_accounts(id,name,network_code,credential_ciphertext,created_by) VALUES(1,'GAM','123456','test','admin')"); err != nil {
+		t.Fatal(err)
+	}
+	window := regressionWindow{Cadence: "three_days", Start: "2026-11-09", End: "2026-11-11"}
+	if !a.regressionDue(1, window) {
+		t.Fatal("new completed period should run")
+	}
+	if _, err := a.db.Exec("INSERT INTO regression_runs(soap_account_id,cadence,period_start,period_end,status,finished_at) VALUES(1,'three_days','2026-11-09','2026-11-11','success','2026-11-11 12:00:00')"); err != nil {
+		t.Fatal(err)
+	}
+	if a.regressionDue(1, window) {
+		t.Fatal("successful period must not run again even after its interval")
+	}
+	window.Start, window.End = "2026-11-12", "2026-11-14"
+	if !a.regressionDue(1, window) {
+		t.Fatal("next complete period should run")
+	}
+}
+
 func TestRegressionPauseExclusionKeepsOtherRevenueDrops(t *testing.T) {
 	t.Setenv("ADX_DB_PATH", filepath.Join(t.TempDir(), "adx.sqlite"))
 	a, err := newApp(t.TempDir())

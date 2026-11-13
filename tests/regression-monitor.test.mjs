@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { regressionWindow, alertQualified, firstDropDate, regressionAlertMessage, pausedAdUnitIds, excludePausedRevenue, registerRegressionMonitor } from '../server/regression-monitor.mjs';
+import { regressionWindow, regressionCycleWindow, alertQualified, firstDropDate, regressionAlertMessage, pausedAdUnitIds, excludePausedRevenue, registerRegressionMonitor } from '../server/regression-monitor.mjs';
 
 test('regression windows use each GAM account timezone and equal-length periods', () => {
   const instant = new Date('2026-11-04T01:30:00Z');
@@ -12,6 +12,21 @@ test('regression windows use each GAM account timezone and equal-length periods'
   assert.deepEqual([three.start, three.end, three.baselineStart, three.baselineEnd], ['2026-11-01', '2026-11-03', '2026-10-29', '2026-10-31']);
   const month = regressionWindow('Asia/Tokyo', 'month', instant);
   assert.deepEqual([month.start, month.end, month.baselineStart, month.baselineEnd], ['2026-10-05', '2026-11-03', '2026-09-05', '2026-10-04']);
+});
+
+test('three and seven day comparisons advance only after a full local period', () => {
+  const instant = new Date('2026-11-13T01:30:00Z');
+  const three = regressionCycleWindow('Asia/Shanghai', 'three_days', instant, '2026-11-11');
+  assert.deepEqual([three.window.start, three.window.end, three.window.baselineStart, three.window.baselineEnd, three.ready],
+    ['2026-11-12', '2026-11-14', '2026-11-09', '2026-11-11', false]);
+  const complete = regressionCycleWindow('Asia/Shanghai', 'three_days', new Date('2026-11-15T00:30:00Z'), '2026-11-11');
+  assert.equal(complete.ready, true);
+  const next = regressionCycleWindow('Asia/Shanghai', 'three_days', new Date('2026-11-16T00:30:00Z'), complete.window.end);
+  assert.deepEqual([next.window.start, next.window.end, next.ready], ['2026-11-15', '2026-11-17', false]);
+  const la = regressionCycleWindow('America/Los_Angeles', 'week', new Date('2026-11-16T01:00:00Z'), '2026-11-08');
+  assert.deepEqual([la.window.start, la.window.end, la.window.baselineStart, la.window.baselineEnd, la.ready],
+    ['2026-11-09', '2026-11-15', '2026-11-02', '2026-11-08', false]);
+  assert.equal(regressionCycleWindow('America/Los_Angeles', 'week', new Date('2026-11-16T08:00:00Z'), '2026-11-08').ready, true);
 });
 
 test('Feishu threshold requires both original revenue and drop percentage', () => {
@@ -75,7 +90,7 @@ test('drop start is the earliest confirmed same-date decrease only', () => {
   assert.equal(firstDropDate('example.com', [{ reportDate: '2026-11-07', domain: 'example.com', revenue: 100 }], prior), null);
 });
 
-test('later multi-day run records the earliest revised data day without inventing a date for its first run', async () => {
+test('completed three-day comparison runs once and Feishu retries its original alert', async () => {
   const db = new DatabaseSync(':memory:');
   db.exec("CREATE TABLE soap_accounts(id INTEGER PRIMARY KEY,name TEXT,network_code TEXT,rest_network_timezone TEXT); CREATE TABLE channels(id INTEGER PRIMARY KEY,name TEXT); CREATE TABLE upstream_accounts(id INTEGER PRIMARY KEY,soap_account_id INTEGER,account_key TEXT,status TEXT); CREATE TABLE audit_logs(id INTEGER PRIMARY KEY,action TEXT,target_id TEXT,detail TEXT,created_at TEXT); CREATE TABLE revenue_facts(channel_id INTEGER,account TEXT,report_date TEXT,domain TEXT,ad_unit_id TEXT DEFAULT '',source_file TEXT,revenue REAL,requests INTEGER,impressions INTEGER,clicks INTEGER)");
   db.exec("INSERT INTO soap_accounts(id,name,network_code,rest_network_timezone) VALUES(1,'GAM','123','Asia/Tokyo'); INSERT INTO channels(id,name) VALUES(1,'Publisher'); INSERT INTO upstream_accounts(id,soap_account_id,account_key,status) VALUES(1,1,'upstream','active')");
@@ -93,20 +108,19 @@ test('later multi-day run records the earliest revised data day without inventin
   insert.run(regressionWindow(account.rest_network_timezone, 'day').start, 90);
   await monitor.runForAccount(account);
   assert.equal(db.prepare("SELECT COUNT(*) total FROM regression_runs WHERE cadence='day' AND status='success'").get().total, 2);
-  assert.equal(db.prepare("SELECT drop_start_date FROM regression_events WHERE cadence='three_days' ORDER BY id DESC LIMIT 1").get().drop_start_date, null);
+  const first = db.prepare("SELECT id,drop_start_date FROM regression_events WHERE cadence='three_days' ORDER BY id DESC LIMIT 1").get();
+  assert.equal(first.drop_start_date, null);
   db.prepare('UPDATE regression_runs SET finished_at=?').run(new Date(Date.now() - 2 * 86400_000).toISOString().slice(0, 19).replace('T', ' '));
   db.prepare('UPDATE revenue_facts SET revenue=60 WHERE report_date=?').run(window.end);
   await monitor.runForAccount(account);
-  const latest = db.prepare("SELECT id,drop_start_date FROM regression_events WHERE cadence='three_days' ORDER BY id DESC LIMIT 1").get();
-  assert.equal(latest.drop_start_date, window.end);
+  assert.equal(db.prepare("SELECT COUNT(*) total FROM regression_runs WHERE cadence='three_days' AND status='success'").get().total, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) total FROM regression_events WHERE cadence='three_days'").get().total, 1);
   let body;
   routes.get('/api/admin/regression/events')({ query: { alertsOnly: '1', cadence: 'three_days' } }, { json: value => { body = value; } });
-  assert.equal(body.items[0].dropStartDate, window.end);
+  assert.equal(body.items[0].dropStartDate, null);
 
   db.prepare("UPDATE regression_settings SET feishu_enabled=1,webhook_ciphertext='test-ciphertext' WHERE id=1").run();
-  db.prepare("UPDATE regression_events SET alert_status='failed',send_attempts=1,last_attempt_at='2000-01-01 00:00:00' WHERE id=?").run(latest.id);
-  const older = db.prepare("SELECT id FROM regression_events WHERE cadence='three_days' AND id<>? ORDER BY id LIMIT 1").get(latest.id);
-  db.prepare("UPDATE regression_events SET alert_status='failed',send_attempts=1,last_attempt_at='2000-01-01 00:00:00' WHERE id=?").run(older.id);
+  db.prepare("UPDATE regression_events SET alert_status='failed',send_attempts=1,last_attempt_at='2000-01-01 00:00:00' WHERE id=?").run(first.id);
   const retryMonitor = registerRegressionMonitor(app, { db, requireAuth: () => {}, requireAdmin: () => {}, encryptCredential: () => '',
     decryptCredential: () => ({ url: 'https://open.feishu.cn/open-apis/bot/v2/hook/test', secret: '' }), transaction,
     gamSync: { execute: async () => ({ rows: 1 }) }, audit: () => {} });
@@ -125,17 +139,16 @@ test('later multi-day run records the earliest revised data day without inventin
     assert.match(message, /渠道：Publisher/);
     assert.match(message, /区间：/);
     assert.match(message, /发现：/);
-    assert.match(message, new RegExp('已确认下修日：' + window.end));
-    const delivered = db.prepare('SELECT alert_status,send_attempts FROM regression_events WHERE id=?').get(latest.id);
+    assert.doesNotMatch(message, /已确认下修日/);
+    const delivered = db.prepare('SELECT alert_status,send_attempts FROM regression_events WHERE id=?').get(first.id);
     assert.equal(delivered.alert_status, 'sent');
     assert.equal(delivered.send_attempts, 2);
-    assert.equal(db.prepare('SELECT alert_status FROM regression_events WHERE id=?').get(older.id).alert_status, 'duplicate');
     await retryMonitor.runForAccount(account);
     assert.equal(sent, 1);
     db.prepare('UPDATE regression_runs SET finished_at=?').run(new Date(Date.now() - 2 * 86400_000).toISOString().slice(0, 19).replace('T', ' '));
     await retryMonitor.runForAccount(account);
     assert.equal(sent, 1);
-    assert.equal(db.prepare("SELECT alert_status FROM regression_events WHERE cadence='three_days' ORDER BY id DESC LIMIT 1").get().alert_status, 'duplicate');
+    assert.equal(db.prepare("SELECT COUNT(*) total FROM regression_events WHERE cadence='three_days'").get().total, 1);
   } finally { globalThis.fetch = originalFetch; }
   db.close();
 });

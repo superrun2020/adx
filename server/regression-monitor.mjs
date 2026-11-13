@@ -3,8 +3,8 @@ import { localDate } from './gam-sync.mjs';
 
 const cadences = [
   { name: 'day', days: 1, interval: 15 * 60_000 },
-  { name: 'three_days', days: 3, interval: 24 * 3600_000 },
-  { name: 'week', days: 7, interval: 72 * 3600_000 },
+  { name: 'three_days', days: 3, interval: 72 * 3600_000 },
+  { name: 'week', days: 7, interval: 168 * 3600_000 },
   { name: 'month', days: 30, interval: 168 * 3600_000 }
 ];
 
@@ -19,6 +19,20 @@ export function regressionWindow(timeZone, cadence, instant = new Date()) {
     baselineEnd: item.days === 1 ? '' : localDate(timeZone, endOffset - item.days, instant),
     interval: item.interval
   };
+}
+
+export function regressionCycleWindow(timeZone, cadence, instant = new Date(), lastEnd = '') {
+  const window = regressionWindow(timeZone, cadence, instant);
+  if (!lastEnd || !['three_days', 'week'].includes(cadence)) return { window, ready: true };
+  const days = cadence === 'three_days' ? 3 : 7;
+  const date = new Date(lastEnd + 'T00:00:00Z');
+  if (Number.isNaN(date.valueOf()) || date.toISOString().slice(0, 10) !== lastEnd) throw new Error('invalid_regression_period_end');
+  const shift = offset => new Date(date.getTime() + offset * 86400_000).toISOString().slice(0, 10);
+  window.start = shift(1);
+  window.end = shift(days);
+  window.baselineStart = shift(1 - days);
+  window.baselineEnd = lastEnd;
+  return { window, ready: window.end <= localDate(timeZone, -1, instant) };
 }
 
 export function alertQualified(before, after, settings) {
@@ -367,16 +381,28 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
     for (const cadence of cadences) {
       let networkWindow;
       const instant = new Date();
-      try { networkWindow = regressionWindow(account.rest_network_timezone, cadence.name, instant); }
+      let ready;
+      try {
+        const lastEnd = ['three_days', 'week'].includes(cadence.name)
+          ? db.prepare("SELECT period_end FROM regression_runs WHERE soap_account_id=? AND cadence=? AND status='success' ORDER BY period_end DESC,id DESC LIMIT 1").get(account.id, cadence.name)?.period_end || ''
+          : '';
+        ({ window: networkWindow, ready } = regressionCycleWindow(account.rest_network_timezone, cadence.name, instant, lastEnd));
+      }
       catch (error) { console.error('regression_timezone_invalid', account.id, error.message); return; }
+      if (!ready) continue;
       const yesterday = localDate(account.rest_network_timezone, -1, instant);
       const windows = cadence.days === 1 ? [networkWindow, { ...networkWindow, start: yesterday, end: yesterday }] : [networkWindow];
       for (const window of windows) {
         if (cadence.days === 1 && !facts(account, window.start, window.end).size) continue;
-        const previous = window.cadence === 'day'
+        const fixed = ['three_days', 'week'].includes(window.cadence);
+        const previous = fixed
+          ? db.prepare("SELECT status,finished_at FROM regression_runs WHERE soap_account_id=? AND cadence=? AND period_start=? AND period_end=? AND status IN ('success','skipped') ORDER BY id DESC LIMIT 1").get(account.id, window.cadence, window.start, window.end)
+          : window.cadence === 'day'
           ? db.prepare("SELECT MAX(finished_at) finished_at FROM regression_runs WHERE soap_account_id=? AND cadence=? AND period_start=? AND status IN ('success','skipped')").get(account.id, window.cadence, window.start)
           : db.prepare("SELECT MAX(finished_at) finished_at FROM regression_runs WHERE soap_account_id=? AND cadence=? AND status IN ('success','skipped')").get(account.id, window.cadence);
-        if (previous.finished_at && Date.now() - Date.parse(previous.finished_at.replace(' ', 'T') + 'Z') < window.interval - 60_000) continue;
+        if (fixed && previous?.status === 'success') continue;
+        const retryInterval = fixed ? 24 * 3600_000 : window.interval;
+        if (previous?.finished_at && Date.now() - Date.parse(previous.finished_at.replace(' ', 'T') + 'Z') < retryInterval - 60_000) continue;
         try {
           let old = null;
           if (cadence.days === 1) {

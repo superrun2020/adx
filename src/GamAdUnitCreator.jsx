@@ -3,7 +3,7 @@ import { Alert, Button, Card, Checkbox, Col, Collapse, DatePicker, Empty, Input,
 import { PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { batchUnitTemplates, belongsToSite, gamBrowserSizes, prepareGamUnitItems, siteDomain } from './gam-unit-plan.mjs';
-import { activatableSubdomainUnit, archivableSubdomainUnit, bulkUnitSignature, indexCreationRecords, parseSubdomainLines, resolveAdUnitDomain, scanGamUnits, unitActionBatches } from './gam-unit-domains.mjs';
+import { activatableDomainUnit, archivableDomainUnit, bulkUnitSignature, indexCreationRecords, parseDomainLines, resolveAdUnitDomain, scanGamUnits, unitActionBatches } from './gam-unit-domains.mjs';
 
 const { Text, Title } = Typography;
 const bannerSizes = ['320x50', '336x280', '250x250', '300x250'];
@@ -368,13 +368,13 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     const records = mapping.items || [];
     setDomainMap(records);
     const byResource = indexCreationRecords(records);
-    const eligible = action === 'archive' ? archivableSubdomainUnit : activatableSubdomainUnit;
+    const eligible = action === 'archive' ? archivableDomainUnit : activatableDomainUnit;
     const rows = allUnits.filter(row => eligible(row, targetSet,
       byResource.get(String(row.networkCode) + ':' + row.name)))
       .map(row => ({ ...row, ...resolveAdUnitDomain(row,
         byResource.get(String(row.networkCode) + ':' + row.name)) }));
     const counts = Object.fromEntries(targets.map(domain => [domain, 0]));
-    for (const row of rows) counts[row.subdomain] += 1;
+    for (const row of rows) counts[row.domain] += 1;
     return { action, targets, rows, counts, scanned: allUnits.length };
   };
   const openBulk = action => {
@@ -382,7 +382,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
   };
   const previewBulk = async () => {
     let targets;
-    try { targets = parseSubdomainLines(bulkInput); }
+    try { targets = parseDomainLines(bulkInput); }
     catch (error) { setBulkError(error.message); setBulkPreview(null); return; }
     if (!activeAccounts.length) { setBulkError('暂无可操作的 GAM 账号'); return; }
     setBulkBusy(true); setBulkError(''); setBulkPreview(null);
@@ -396,7 +396,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
   const confirmBulk = async () => {
     if (!bulkPreview?.rows.length || bulkPreview.action !== bulkAction) return;
     let targets;
-    try { targets = parseSubdomainLines(bulkInput); }
+    try { targets = parseDomainLines(bulkInput); }
     catch (error) { setBulkError(error.message); setBulkPreview(null); return; }
     if (targets.join('|') !== bulkPreview.targets.join('|')) { setBulkPreview(null); return; }
     setBulkBusy(true); setBulkError('');
@@ -411,7 +411,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
       setBulkPreview(null);
       const verb = bulkAction === 'archive' ? '归档' : '激活';
       if (failed.length) setBulkError('已' + verb + ' ' + updated + ' 个；部分失败：' + failed.join('；') + '。请重新预览剩余单元。');
-      else { setBulkOpen(false); message.success('已在 GAM ' + verb + ' ' + updated + ' 个广告单元，涉及 ' + fresh.targets.length + ' 个子域名'); }
+      else { setBulkOpen(false); message.success('已在 GAM ' + verb + ' ' + updated + ' 个广告单元，涉及 ' + fresh.targets.length + ' 个域名'); }
     } catch (error) { setBulkError('操作前核对失败，未执行批量操作：' + error.message); }
     finally { setBulkBusy(false); }
   };
@@ -478,9 +478,9 @@ export default function GamAdUnitCreator({ accounts = [] }) {
         description="将同步到 GAM 恢复为激活状态；实际投放仍取决于网站标签和 GAM 投放设置。" okText="确认激活" cancelText="取消"
         onConfirm={() => activateUnits(selectedActivatable.map(row => row.name))}><Button type="primary" ghost disabled={!selectedActivatable.length || listBusy || archiving || batchActivating} loading={batchActivating}>激活选中（{selectedActivatable.length}）</Button></Popconfirm>
       <Button danger disabled={archiving || batchActivating} onClick={() => openBulk('archive')}>
-        按子域名批量归档</Button>
+        按域名批量归档</Button>
       <Button type="primary" ghost disabled={archiving || batchActivating} onClick={() => openBulk('activate')}>
-        按子域名批量激活</Button>
+        按域名批量激活</Button>
     </Space></Card>
     {listError && <Alert type="warning" showIcon message={listError} action={<Button size="small" onClick={() => searchUnits(lastQuery)}>重试</Button>}/>}
     <Card title="GAM 已存在的广告单元" extra={<Text type="secondary">{listBusy ? '正在加载…' : '共 ' + remoteUnits.length + ' 个'} · 归档后停止投放，历史报表保留</Text>} bodyStyle={{ padding: 0 }}>
@@ -498,22 +498,22 @@ export default function GamAdUnitCreator({ accounts = [] }) {
         </div>)}
       </div>}/>}
     <Collapse items={[{ key: 'history', label: '同步记录与失败重试', children: <Table rowKey="id" size="small" dataSource={creations} columns={historyColumns} pagination={{ pageSize: 10 }} scroll={{ x: 1100 }}/> }]}/>
-    <Modal title={'按子域名批量' + (bulkAction === 'archive' ? '归档' : '激活') + ' GAM 广告单元'} open={bulkOpen} width={1080}
+    <Modal title={'按域名批量' + (bulkAction === 'archive' ? '归档' : '激活') + ' GAM 广告单元'} open={bulkOpen} width={1080}
       onCancel={() => { if (!bulkBusy && !archiving && !batchActivating) setBulkOpen(false); }}
       onOk={confirmBulk} okText={'确认批量' + (bulkAction === 'archive' ? '归档' : '激活') + '到 GAM'} cancelText="取消" confirmLoading={bulkBusy || archiving || batchActivating}
       okButtonProps={{ danger: bulkAction === 'archive', disabled: !bulkPreview?.rows.length || bulkBusy || archiving || batchActivating }}>
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
-        <Alert type="info" showIcon message="每行一个完整子域名，支持一次匹配多条"
-          description={'从所有可用 GAM 账号完整扫描' + (bulkAction === 'archive' ? '未归档' : '已归档或停用') + '广告单元，按本站创建记录或 GAM 代码/名称中的完整域名精确匹配。主域名、相似域名和无法确认归属的单元不会' + (bulkAction === 'archive' ? '归档' : '激活') + '；操作前会重新核对 GAM 状态。'}/>
+        <Alert type="info" showIcon message="每行一个完整主域名或子域名，支持一次匹配多条"
+          description={'从所有可用 GAM 账号完整扫描' + (bulkAction === 'archive' ? '未归档' : '已归档或停用') + '广告单元，按本站创建记录或 GAM 代码/名称中的完整域名精确匹配。输入主域名只匹配该主域名的广告单元，不会自动包含子域名；无法确认归属的单元不会' + (bulkAction === 'archive' ? '归档' : '激活') + '；操作前会重新核对 GAM 状态。'}/>
         <Space align="start" wrap>
-          <Input.TextArea style={{ width: 420 }} rows={5} placeholder={'每行一个完整子域名，例如：\nnews.example.com\nfinance.example.com'} value={bulkInput}
+          <Input.TextArea style={{ width: 420 }} rows={5} placeholder={'每行一个完整域名，例如：\nexample.com\nnews.example.com'} value={bulkInput}
             onChange={event => { setBulkInput(event.target.value); setBulkPreview(null); setBulkError(''); }}
             disabled={bulkBusy || archiving || batchActivating}/>
           <Button onClick={previewBulk} loading={bulkBusy} disabled={archiving || batchActivating}>扫描并预览</Button>
         </Space>
         {bulkError && <Alert type="warning" showIcon message={bulkError}/>}
         {bulkPreview && <>
-          <Text>输入 <strong>{bulkPreview.targets.length}</strong> 个子域名 · 已扫描 {bulkPreview.scanned} 个单元 · 精确命中 <strong>{bulkPreview.rows.length}</strong> 个
+          <Text>输入 <strong>{bulkPreview.targets.length}</strong> 个域名 · 已扫描 {bulkPreview.scanned} 个单元 · 精确命中 <strong>{bulkPreview.rows.length}</strong> 个
             {bulkPreview.rows.length > 0 && ' · 涉及 ' + new Set(bulkPreview.rows.map(row => row.gamAccountId)).size + ' 个 GAM 账号'}</Text>
           <div style={{ maxHeight: 125, overflowY: 'auto' }}>{bulkPreview.targets.map(domain =>
             <Tag key={domain} color={bulkPreview.counts[domain] ? 'blue' : 'default'} style={{ marginBottom: 6 }}>

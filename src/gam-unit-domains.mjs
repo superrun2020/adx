@@ -64,27 +64,26 @@ export function resolveAdUnitDomain(unit, creation) {
     source: stored ? '本站创建记录' : codeDomain ? 'GAM 代码' : 'GAM 名称' };
 }
 
-export function archivableSubdomainUnit(unit, target, creation) {
+export function archivableDomainUnit(unit, target, creation) {
   if (!unit?.parentAdUnit || !unit.accountEnabled || !['ACTIVE', 'INACTIVE'].includes(unit.status)) return false;
-  const subdomain = resolveAdUnitDomain(unit, creation).subdomain;
-  return Boolean(subdomain) && (target instanceof Set ? target.has(subdomain) : subdomain === siteDomain(target));
+  const domain = resolveAdUnitDomain(unit, creation).domain;
+  return Boolean(domain) && (target instanceof Set ? target.has(domain) : domain === siteDomain(target));
 }
 
-export function activatableSubdomainUnit(unit, target, creation) {
+export function activatableDomainUnit(unit, target, creation) {
   if (!unit?.parentAdUnit || !unit.accountEnabled || !['ARCHIVED', 'INACTIVE'].includes(unit.status)) return false;
-  const subdomain = resolveAdUnitDomain(unit, creation).subdomain;
-  return Boolean(subdomain) && (target instanceof Set ? target.has(subdomain) : subdomain === siteDomain(target));
+  const domain = resolveAdUnitDomain(unit, creation).domain;
+  return Boolean(domain) && (target instanceof Set ? target.has(domain) : domain === siteDomain(target));
 }
 
-export function parseSubdomainLines(input) {
+export function parseDomainLines(input) {
   const lines = String(input || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  if (!lines.length) throw new Error('请每行输入一个完整子域名');
-  if (lines.length > 100) throw new Error('每次最多输入 100 行子域名');
+  if (!lines.length) throw new Error('请每行输入一个完整域名');
+  if (lines.length > 100) throw new Error('每次最多输入 100 行域名');
   const domains = [];
   for (const [index, line] of lines.entries()) {
     const domain = siteDomain(line);
-    if (!domain || domain === mainDomainOf(domain))
-      throw new Error('第 ' + (index + 1) + ' 行不是有效子域名：' + line);
+    if (!domain) throw new Error('第 ' + (index + 1) + ' 行不是有效域名：' + line);
     if (!domains.includes(domain)) domains.push(domain);
   }
   return domains;
@@ -105,7 +104,7 @@ export function unitActionBatches(rows) {
 
 export function bulkUnitSignature(preview) {
   return preview.action + '|' + preview.targets.join('|') + '|' +
-    preview.rows.map(row => row.gamAccountId + ':' + row.name + ':' + row.subdomain + ':' + row.status).sort().join('|');
+    preview.rows.map(row => row.gamAccountId + ':' + row.name + ':' + row.domain + ':' + row.status).sort().join('|');
 }
 
 export async function scanGamUnits(accounts, fetchPage) {

@@ -62,8 +62,8 @@ var regressionCadences = []struct {
 	Interval time.Duration
 }{
 	{"day", 1, 15 * time.Minute},
-	{"three_days", 3, 24 * time.Hour},
-	{"week", 7, 72 * time.Hour},
+	{"three_days", 3, 72 * time.Hour},
+	{"week", 7, 168 * time.Hour},
 	{"month", 30, 168 * time.Hour},
 }
 
@@ -100,6 +100,32 @@ func regressionWindowAt(zone string, now time.Time, cadence string) (regressionW
 		return window, nil
 	}
 	return regressionWindow{}, errors.New("invalid_regression_cadence")
+}
+
+// After the first complete comparison, advance by one entire non-overlapping
+// period. The previous completed period becomes the next baseline.
+func regressionCycleWindowAt(zone string, now time.Time, cadence, lastEnd string) (regressionWindow, bool, error) {
+	window, err := regressionWindowAt(zone, now, cadence)
+	if err != nil || lastEnd == "" || (cadence != "three_days" && cadence != "week") {
+		return window, err == nil, err
+	}
+	last, err := time.Parse("2006-01-02", lastEnd)
+	if err != nil {
+		return regressionWindow{}, false, err
+	}
+	days := 3
+	if cadence == "week" {
+		days = 7
+	}
+	yesterday, err := localGamDateAt(zone, now, -1)
+	if err != nil {
+		return regressionWindow{}, false, err
+	}
+	window.Start = last.AddDate(0, 0, 1).Format("2006-01-02")
+	window.End = last.AddDate(0, 0, days).Format("2006-01-02")
+	window.BaselineStart = last.AddDate(0, 0, 1-days).Format("2006-01-02")
+	window.BaselineEnd = lastEnd
+	return window, window.End <= yesterday, nil
 }
 
 func (a *app) currentRegressionConfig() (regressionConfig, error) {
@@ -301,6 +327,18 @@ func (a *app) regressionRuns(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) regressionDue(accountID int64, window regressionWindow) bool {
+	if window.Cadence == "three_days" || window.Cadence == "week" {
+		var status, finished string
+		err := a.db.QueryRow("SELECT status,finished_at FROM regression_runs WHERE soap_account_id=? AND cadence=? AND period_start=? AND period_end=? AND status IN ('success','skipped') ORDER BY id DESC LIMIT 1", accountID, window.Cadence, window.Start, window.End).Scan(&status, &finished)
+		if err == sql.ErrNoRows {
+			return true
+		}
+		if err != nil || status == "success" {
+			return false
+		}
+		last, parseErr := time.ParseInLocation("2006-01-02 15:04:05", finished, time.UTC)
+		return parseErr != nil || !last.After(time.Now().Add(-24*time.Hour+time.Minute))
+	}
 	var latest sql.NullString
 	query := "SELECT MAX(finished_at) FROM regression_runs WHERE soap_account_id=? AND cadence=? AND status IN ('success','skipped')"
 	args := []any{accountID, window.Cadence}
@@ -675,10 +713,21 @@ func (a *app) runRegressionForAccount(ctx context.Context, account map[string]an
 	}
 	zone := importString(account["rest_network_timezone"])
 	for _, item := range regressionCadences {
-		window, err := regressionWindowAt(zone, time.Now(), item.Name)
+		lastEnd := ""
+		if item.Name == "three_days" || item.Name == "week" {
+			err := a.db.QueryRowContext(ctx, "SELECT period_end FROM regression_runs WHERE soap_account_id=? AND cadence=? AND status='success' ORDER BY period_end DESC,id DESC LIMIT 1", intMap(account, "id"), item.Name).Scan(&lastEnd)
+			if err != nil && err != sql.ErrNoRows {
+				log.Printf("regression_last_period_failed account=%d cadence=%s error=%v", intMap(account, "id"), item.Name, err)
+				continue
+			}
+		}
+		window, ready, err := regressionCycleWindowAt(zone, time.Now(), item.Name, lastEnd)
 		if err != nil {
 			log.Printf("regression_timezone_invalid account=%d error=%v", intMap(account, "id"), err)
 			return
+		}
+		if !ready {
+			continue
 		}
 		if item.Days == 1 {
 			yesterday := window

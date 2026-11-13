@@ -5,7 +5,7 @@ import ReportDateFilter from './ReportDateFilter.jsx';
 import NumericSortHeader from './NumericSortHeader.jsx';
 
 const { Title, Text } = Typography;
-const cadenceNames = { day: '单日 · 同日上次快照', three_days: '近 3 天 · 前 3 天', week: '近 7 天 · 前 7 天', month: '近 30 天 · 前 30 天' };
+const cadenceNames = { day: '单日 · 同日上次快照', three_days: '每 3 天 · 前 3 天', week: '每 7 天 · 前 7 天', month: '近 30 天 · 前 30 天' };
 const money = value => '$' + Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const signedMoney = value => (Number(value) > 0 ? '+' : Number(value) < 0 ? '-' : '') + money(Math.abs(Number(value || 0)));
 const signed = (value, suffix = '') => (Number(value) > 0 ? '+' : '') + Number(value || 0).toLocaleString('en-US', { maximumFractionDigits: suffix ? 2 : 0 }) + suffix;
@@ -106,7 +106,7 @@ export default function RegressionMonitor() {
       <Space><Button icon={<ReloadOutlined/>} loading={loading} onClick={() => { loadMeta(); loadEvents(); }}>刷新记录</Button><Button type="primary" icon={<SettingOutlined/>} onClick={openSettings}>通知条件设置</Button></Space></div>
     <Alert showIcon type="info" message={
       '飞书条件：原收入 > ' + money(settings?.minRevenue ?? 50) + ' 且收入下降 ≥ ' + Number(settings?.minDropPercent ?? 2).toFixed(2) + '%；' + (settings?.feishuEnabled ? '通知已启用' : '通知未启用')
-    } description="今天和昨天有数据时，分别每 15 分钟与各自的同日上次快照比较；近 3 天每 24 小时、近 7 天每 3 天、近 30 天每 7 天重新拉取，与前一等长时段比较。已记录的广告单元停投影响会从区间收入中扣除；扣除后仍达到下降阈值，继续推送。仅看已触发也包含通知关闭期间的历史记录，请以每行的飞书通知状态判断是否送达。"/>
+    } description="今天和昨天有数据时，分别每 15 分钟与各自的同日上次快照比较；3 天和 7 天仅在完整区间结束后各比较一次，下一完整区间再与刚结束的区间比较。近 30 天每 7 天重新拉取。已记录的广告单元停投影响会从区间收入中扣除；扣除后仍达到下降阈值，继续推送。"/>
     {latest && <Text type="secondary">最近完成：{latest.accountName} · {cadenceNames[latest.cadence]} · {stamp(latest.finishedAt, latest.timeZone)}（{latest.timeZone}）</Text>}
     {runs[0]?.status === 'failed' && <Alert type="warning" showIcon message={'最近一次监测失败：' + runs[0].accountName + ' · ' + cadenceNames[runs[0].cadence]} description={runs[0].detail || '请检查 GAM 账号同步状态'} />}
     {runs[0]?.status === 'skipped' && <Alert type="info" showIcon message={'最近一次监测暂未比较：' + runs[0].accountName + ' · ' + cadenceNames[runs[0].cadence]} description={runs[0].detail || '等待 GAM 返回可比较的完整数据'} />}
