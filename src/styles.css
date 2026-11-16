@@ -69,3 +69,21 @@
 .ant-layout-sider .sidebar-icon-link{display:inline-flex;align-items:center}
 .ant-layout-sider .ant-menu-item{position:relative}
 .ant-layout-sider .sidebar-route-link::after{content:"";position:absolute;inset:0;z-index:1}
+
+
+/* Keep every selected detail column visible within the report card. */
+.report-results-card .ant-card-body{padding:16px}
+.report-detail-table .ant-table{font-size:12px}
+.report-detail-table .ant-table-container table{width:100%;table-layout:fixed}
+.report-detail-table .ant-table-thead>tr>th,
+.report-detail-table .ant-table-tbody>tr>td{padding:10px 6px!important;white-space:normal;overflow-wrap:anywhere}
+.report-detail-table .report-detail-metric{font-variant-numeric:tabular-nums}
+.report-detail-table .numeric-sort-header{display:flex;max-width:100%;gap:2px;white-space:normal}
+.report-detail-table .numeric-sort-header>span:first-child{min-width:0;overflow-wrap:anywhere}
+.report-detail-table .numeric-sort-actions{flex-shrink:0}
+.report-detail-table .ant-table-pagination{flex-wrap:wrap;row-gap:8px}
+@media(max-width:850px){
+  .report-results-card .ant-card-body{padding:10px}
+  .report-detail-table .ant-table-thead>tr>th,
+  .report-detail-table .ant-table-tbody>tr>td{padding:8px 3px!important;font-size:11px}
+}

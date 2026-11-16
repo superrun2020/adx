@@ -151,6 +151,13 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
     render:value => value === null || value === undefined || value === '' ? '—' : String(value)
   }));
   const columns = [...dimensionColumns(selectedDimensions),...metricColumns(selectedMetrics,admin,sort,value => { setPage(1); setSort(value); })];
+  const detailColumnWeight = column => ['url','adUnit','account'].includes(column.dataIndex) ? 2.2
+    : ['adUnitId','advertiser','channel','bd','date'].includes(column.dataIndex) ? 1.5 : 1;
+  const detailWeight = columns.reduce((total,column) => total + detailColumnWeight(column), 0);
+  const detailColumns = columns.map(column => ({...column,
+    width:(detailColumnWeight(column) / detailWeight * 100) + '%',
+    className:selectedDimensions.includes(column.dataIndex) ? 'report-detail-dimension' : 'report-detail-metric'
+  }));
   const dailyColumns = [{title:'日期',dataIndex:'date',width:130,fixed:'left'},
     ...dimensionColumns(dailyBreakdown ? [dailyBreakdown] : []),
     ...metricColumns(selectedMetrics,admin,dailySort,value => { setDailyPage(1); setDailySort(value); })];
@@ -202,7 +209,7 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
     <Card className="report-results-card" title="收益明细" extra={<Space><Text type="secondary">{range[0].format('YYYY-MM-DD')} 至 {range[1].format('YYYY-MM-DD')} · 共 {number(total)} 组</Text>
       {selectedDate && <Button size="small" onClick={() => { setPage(1); setSelectedDate(null); }}>全部日期</Button>}</Space>}>
       <Table size="small" rowKey={(row,index) => String(page) + '-' + index} loading={loading && !cachedRows} dataSource={rows}
-        columns={columns} scroll={{x:'max-content'}} pagination={{ current:page, pageSize, total, showSizeChanger:true, pageSizeOptions:[20,50,100,200],
+        className="report-detail-table" tableLayout="fixed" columns={detailColumns} pagination={{ current:page, pageSize, total, showSizeChanger:true, pageSizeOptions:[20,50,100,200],
           onChange:(next,size) => { setPage(next); setPageSize(size); } }}
         locale={{emptyText:'该条件下没有已同步的 REST 数据'}}/></Card>
     {selectedDimensions.includes('date') && <Card title="所选区间每日汇总"
