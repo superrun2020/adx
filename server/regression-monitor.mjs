@@ -200,7 +200,7 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
     if (cadence) { where.push('e.cadence=?'); args.push(cadence); }
     if (accountId) { where.push('e.soap_account_id=?'); args.push(Number(accountId)); }
     if (String(domain).trim()) { where.push('e.domain LIKE ?'); args.push('%' + String(domain).trim() + '%'); }
-    if (alertsOnly === '1') where.push("e.alert_status IN ('sent','failed','duplicate','disabled','pending')");
+    if (alertsOnly === '1') where.push("e.alert_status IN ('sent','failed','duplicate','disabled','pending','ownership_suppressed')");
     const clause = where.join(' AND ');
     const page = Math.max(1, Math.min(10000, Number(req.query.page) || 1));
     const total = db.prepare('SELECT COUNT(*) total FROM regression_events e WHERE ' + clause).get(...args).total;
@@ -296,8 +296,15 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
   const notify = async (account, window, alerts) => {
     const config = settings();
     if (!config.feishu_enabled || !config.webhook_ciphertext) return;
+    const windowChannel = gamChannelForDate(db, account, window.end);
+    const currentChannel = db.prepare('SELECT rest_channel_id FROM soap_accounts WHERE id=?').get(account.id)?.rest_channel_id;
+    if (!currentChannel || !windowChannel || windowChannel !== currentChannel) {
+      const suppress = db.prepare("UPDATE regression_events SET alert_status='ownership_suppressed',alert_error='账号已转归其他渠道' WHERE id=? AND alert_status IN ('pending','failed')");
+      for (const alert of alerts) suppress.run(alert.id);
+      return;
+    }
     const { url, secret } = decryptCredential(config.webhook_ciphertext);
-    const channelName = db.prepare('SELECT name FROM channels WHERE id=?').get(gamChannelForDate(db, account, window.end))?.name || '未关联渠道';
+    const channelName = db.prepare('SELECT name FROM channels WHERE id=?').get(windowChannel)?.name || '未关联渠道';
     const timeZone = account.rest_network_timezone || 'UTC';
     const sentAt = accountTimestamp(timeZone);
     for (let offset = 0; offset < alerts.length; offset += 20) {

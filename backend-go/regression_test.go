@@ -383,3 +383,31 @@ func TestRegressionStartDateNeedsPreviousSameDaySnapshot(t *testing.T) {
 		t.Fatalf("second date=%v error=%v", secondDate, err)
 	}
 }
+func TestRegressionSuppressesAlertsForTransferredAccount(t *testing.T) {
+	a := testApp(t)
+	for _, statement := range []string{
+		"INSERT INTO channels(id,name,email) VALUES(1,'Old','old@example.test'),(2,'New','new@example.test')",
+		"INSERT INTO soap_accounts(id,name,network_code,credential_ciphertext,created_by,rest_channel_id,rest_network_timezone) VALUES(1,'GAM','123456','test','admin',2,'Asia/Shanghai')",
+		"INSERT INTO gam_channel_assignments(soap_account_id,channel_id,effective_from,created_by) VALUES(1,1,'1900-01-01','test'),(1,2,'2026-11-16','test')",
+		"INSERT INTO regression_runs(id,soap_account_id,cadence,period_start,period_end,status) VALUES(1,1,'day','2026-11-15','2026-11-15','success')",
+		"INSERT INTO regression_events(id,run_id,soap_account_id,cadence,period_start,period_end,domain,old_revenue,new_revenue,old_requests,new_requests,old_impressions,new_impressions,old_clicks,new_clicks,alert_status) VALUES(1,1,1,'day','2026-11-15','2026-11-15','example.com',100,80,0,0,0,0,0,0,'failed')",
+		"UPDATE regression_settings SET feishu_enabled=1,webhook_ciphertext='configured' WHERE id=1",
+	} {
+		if _, err := a.db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	account, err := a.gamAccount(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.retryRegressionAlerts(context.Background(), account)
+	var status, detail string
+	var attempts int
+	if err := a.db.QueryRow("SELECT alert_status,alert_error,send_attempts FROM regression_events WHERE id=1").Scan(&status, &detail, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if status != "ownership_suppressed" || detail != "账号已转归其他渠道" || attempts != 0 {
+		t.Fatalf("status=%s detail=%s attempts=%d", status, detail, attempts)
+	}
+}

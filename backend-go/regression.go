@@ -290,7 +290,7 @@ func (a *app) regressionEvents(w http.ResponseWriter, r *http.Request) {
 		args = append(args, "%"+domain+"%")
 	}
 	if q.Get("alertsOnly") == "1" {
-		where = append(where, "e.alert_status IN ('sent','failed','duplicate','disabled','pending')")
+		where = append(where, "e.alert_status IN ('sent','failed','duplicate','disabled','pending','ownership_suppressed')")
 	}
 	page, _ := strconv.Atoi(q.Get("page"))
 	if page < 1 {
@@ -921,18 +921,31 @@ func (a *app) deliverRegressionAlerts(ctx context.Context, account map[string]an
 	if err != nil || !config.Enabled || config.Ciphertext == "" {
 		return
 	}
-	credential, err := a.decryptCredential(config.Ciphertext)
-	if err != nil {
-		log.Printf("regression_webhook_decrypt_failed: %v", err)
-		return
-	}
-	webhook, signingSecret := importString(credential["url"]), importString(credential["secret"])
 	channelName := "未关联渠道"
 	windowChannel, err := a.gamChannelForDate(intMap(account, "id"), intMap(account, "rest_channel_id"), window.End)
 	if err != nil {
 		log.Printf("regression_channel_assignment_failed account=%d error=%v", intMap(account, "id"), err)
 		return
 	}
+	var currentChannel sql.NullInt64
+	if err := a.db.QueryRowContext(ctx, "SELECT rest_channel_id FROM soap_accounts WHERE id=?", intMap(account, "id")).Scan(&currentChannel); err != nil {
+		log.Printf("regression_current_channel_failed account=%d error=%v", intMap(account, "id"), err)
+		return
+	}
+	if !currentChannel.Valid || windowChannel == 0 || windowChannel != currentChannel.Int64 {
+		for _, alert := range alerts {
+			if _, updateErr := a.db.ExecContext(ctx, "UPDATE regression_events SET alert_status='ownership_suppressed',alert_error='账号已转归其他渠道' WHERE id=? AND alert_status IN ('pending','failed')", alert.ID); updateErr != nil {
+				log.Printf("regression_owner_suppression_failed id=%d error=%v", alert.ID, updateErr)
+			}
+		}
+		return
+	}
+	credential, err := a.decryptCredential(config.Ciphertext)
+	if err != nil {
+		log.Printf("regression_webhook_decrypt_failed: %v", err)
+		return
+	}
+	webhook, signingSecret := importString(credential["url"]), importString(credential["secret"])
 	if err := a.db.QueryRowContext(ctx, "SELECT name FROM channels WHERE id=?", windowChannel).Scan(&channelName); err != nil && err != sql.ErrNoRows {
 		log.Printf("regression_channel_lookup_failed account=%d error=%v", intMap(account, "id"), err)
 	}

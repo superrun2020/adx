@@ -92,8 +92,8 @@ test('drop start is the earliest confirmed same-date decrease only', () => {
 
 test('completed three-day comparison runs once and Feishu retries its original alert', async () => {
   const db = new DatabaseSync(':memory:');
-  db.exec("CREATE TABLE soap_accounts(id INTEGER PRIMARY KEY,name TEXT,network_code TEXT,rest_network_timezone TEXT); CREATE TABLE channels(id INTEGER PRIMARY KEY,name TEXT); CREATE TABLE gam_channel_assignments(soap_account_id INTEGER,channel_id INTEGER,effective_from TEXT); CREATE TABLE upstream_accounts(id INTEGER PRIMARY KEY,soap_account_id INTEGER,account_key TEXT,status TEXT); CREATE TABLE audit_logs(id INTEGER PRIMARY KEY,action TEXT,target_id TEXT,detail TEXT,created_at TEXT); CREATE TABLE revenue_facts(channel_id INTEGER,account TEXT,report_date TEXT,domain TEXT,ad_unit_id TEXT DEFAULT '',source_file TEXT,revenue REAL,requests INTEGER,impressions INTEGER,clicks INTEGER)");
-  db.exec("INSERT INTO soap_accounts(id,name,network_code,rest_network_timezone) VALUES(1,'GAM','123','Asia/Tokyo'); INSERT INTO channels(id,name) VALUES(1,'Publisher'); INSERT INTO upstream_accounts(id,soap_account_id,account_key,status) VALUES(1,1,'upstream','active')");
+  db.exec("CREATE TABLE soap_accounts(id INTEGER PRIMARY KEY,name TEXT,network_code TEXT,rest_network_timezone TEXT,rest_channel_id INTEGER); CREATE TABLE channels(id INTEGER PRIMARY KEY,name TEXT); CREATE TABLE gam_channel_assignments(soap_account_id INTEGER,channel_id INTEGER,effective_from TEXT); CREATE TABLE upstream_accounts(id INTEGER PRIMARY KEY,soap_account_id INTEGER,account_key TEXT,status TEXT); CREATE TABLE audit_logs(id INTEGER PRIMARY KEY,action TEXT,target_id TEXT,detail TEXT,created_at TEXT); CREATE TABLE revenue_facts(channel_id INTEGER,account TEXT,report_date TEXT,domain TEXT,ad_unit_id TEXT DEFAULT '',source_file TEXT,revenue REAL,requests INTEGER,impressions INTEGER,clicks INTEGER)");
+  db.exec("INSERT INTO soap_accounts(id,name,network_code,rest_network_timezone,rest_channel_id) VALUES(1,'GAM','123','Asia/Tokyo',1); INSERT INTO channels(id,name) VALUES(1,'Publisher'); INSERT INTO upstream_accounts(id,soap_account_id,account_key,status) VALUES(1,1,'upstream','active')");
   const routes = new Map();
   const app = { get: (path, ...handlers) => routes.set(path, handlers.at(-1)), put() {} };
   const transaction = fn => { db.exec('BEGIN'); try { const result = fn(); db.exec('COMMIT'); return result; } catch (error) { db.exec('ROLLBACK'); throw error; } };
@@ -150,5 +150,28 @@ test('completed three-day comparison runs once and Feishu retries its original a
     assert.equal(sent, 1);
     assert.equal(db.prepare("SELECT COUNT(*) total FROM regression_events WHERE cadence='three_days'").get().total, 1);
   } finally { globalThis.fetch = originalFetch; }
+  db.close();
+});
+test('transferred account never retries old-channel Feishu alerts', async () => {
+  const db = new DatabaseSync(':memory:');
+  db.exec("CREATE TABLE soap_accounts(id INTEGER PRIMARY KEY,name TEXT,network_code TEXT,rest_network_timezone TEXT,rest_channel_id INTEGER); CREATE TABLE channels(id INTEGER PRIMARY KEY,name TEXT); CREATE TABLE gam_channel_assignments(soap_account_id INTEGER,channel_id INTEGER,effective_from TEXT); CREATE TABLE upstream_accounts(id INTEGER PRIMARY KEY,soap_account_id INTEGER,account_key TEXT,status TEXT); CREATE TABLE audit_logs(id INTEGER PRIMARY KEY,action TEXT,target_id TEXT,detail TEXT,created_at TEXT); CREATE TABLE revenue_facts(channel_id INTEGER,account TEXT,report_date TEXT,domain TEXT,ad_unit_id TEXT DEFAULT '',source_file TEXT,revenue REAL,requests INTEGER,impressions INTEGER,clicks INTEGER)");
+  db.exec("INSERT INTO soap_accounts(id,name,network_code,rest_network_timezone,rest_channel_id) VALUES(1,'GAM','123','Asia/Shanghai',2); INSERT INTO channels(id,name) VALUES(1,'Old'),(2,'New'); INSERT INTO gam_channel_assignments(soap_account_id,channel_id,effective_from) VALUES(1,1,'1900-01-01'),(1,2,'2026-11-16'); INSERT INTO upstream_accounts(id,soap_account_id,account_key,status) VALUES(1,1,'upstream','active')");
+  const routes = new Map();
+  const app = { get: (path, ...handlers) => routes.set(path, handlers.at(-1)), put() {} };
+  const transaction = fn => { db.exec('BEGIN'); try { const value = fn(); db.exec('COMMIT'); return value; } catch (error) { db.exec('ROLLBACK'); throw error; } };
+  const monitor = registerRegressionMonitor(app, { db, requireAuth: () => {}, requireAdmin: () => {}, encryptCredential: () => '',
+    decryptCredential: () => { throw new Error('old owner must not decrypt webhook'); }, transaction,
+    gamSync: { execute: async () => ({ rows: 0 }) }, audit: () => {} });
+  db.exec("UPDATE regression_settings SET feishu_enabled=1,webhook_ciphertext='configured' WHERE id=1");
+  db.exec("INSERT INTO regression_runs(id,soap_account_id,cadence,period_start,period_end,status) VALUES(1,1,'day','2026-11-15','2026-11-15','success')");
+  db.exec("INSERT INTO regression_events(id,run_id,soap_account_id,cadence,period_start,period_end,domain,old_revenue,new_revenue,old_requests,new_requests,old_impressions,new_impressions,old_clicks,new_clicks,alert_status) VALUES(1,1,1,'day','2026-11-15','2026-11-15','example.com',100,80,0,0,0,0,0,0,'failed')");
+  await monitor.runForAccount({ id:1, name:'GAM', network_code:'123', rest_channel_id:2, rest_upstream_account_id:1, rest_network_timezone:'Asia/Shanghai' });
+  const event = db.prepare('SELECT alert_status,alert_error,send_attempts FROM regression_events WHERE id=1').get();
+  assert.equal(event.alert_status, 'ownership_suppressed');
+  assert.equal(event.alert_error, '账号已转归其他渠道');
+  assert.equal(event.send_attempts, 0);
+  let result;
+  routes.get('/api/admin/regression/events')({ query:{ alertsOnly:'1' } }, { json:value => { result=value; } });
+  assert.equal(result.items.some(row => row.id===1), true);
   db.close();
 });
