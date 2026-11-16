@@ -87,3 +87,11 @@
   .report-detail-table .ant-table-thead>tr>th,
   .report-detail-table .ant-table-tbody>tr>td{padding:8px 3px!important;font-size:11px}
 }
+
+/* Align numeric labels with their values; reserve a separate lane for sort arrows. */
+.report-detail-table .report-detail-dimension{text-align:left}
+.report-detail-table th.report-detail-metric{text-align:right}
+.report-detail-table td.report-detail-metric{padding-right:24px!important;text-align:right}
+.report-detail-table .report-detail-metric .numeric-sort-header{position:relative;justify-content:flex-end;padding-right:18px}
+.report-detail-table .report-detail-metric .numeric-sort-actions{position:absolute;right:0;top:50%;transform:translateY(-50%)}
+@media(max-width:850px){.report-detail-table td.report-detail-metric{padding-right:21px!important}}
