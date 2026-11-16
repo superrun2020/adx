@@ -1,5 +1,6 @@
 import { gamApiRequest } from './gam-beta.mjs';
 import { createRestReport, fetchRestReport, normalizeRestReportRows, setReportRange, validateReportDefinition } from './gam-reports.mjs';
+import { gamChannelAssignments, channelForGamDate } from './gam-channel-assignment.mjs';
 
 export function localDate(timeZone, offset = 0, instant = new Date()) {
   if (!timeZone) throw new Error('invalid_network_timezone');
@@ -61,8 +62,16 @@ export function createGamSync({ db, transaction, tokenFor, normalizedDomain, aud
       } else {
         reportName = (await createRestReport(account.network_code, token, yesterday, today)).name;
       }
-      db.prepare("UPDATE soap_accounts SET rest_report_name=?,rest_channel_id=?,rest_upstream_account_id=?,rest_money_divisor=?,rest_sync_enabled=0,rest_last_preview_at=NULL,rest_last_preview_rows=0,rest_network_timezone=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
-        .run(reportName, channelId, upstreamAccountId, moneyDivisor, network.timeZone, account.id);
+      transaction(() => {
+        if (account.rest_channel_id) db.prepare("INSERT INTO gam_channel_assignments(soap_account_id,channel_id,effective_from,created_by) SELECT ?,?,'1900-01-01',? WHERE NOT EXISTS (SELECT 1 FROM gam_channel_assignments WHERE soap_account_id=?)")
+          .run(account.id, account.rest_channel_id, actor, account.id);
+        db.prepare("UPDATE soap_accounts SET rest_report_name=?,rest_channel_id=?,rest_upstream_account_id=?,rest_money_divisor=?,rest_sync_enabled=0,rest_last_preview_at=NULL,rest_last_preview_rows=0,rest_network_timezone=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+          .run(reportName, channelId, upstreamAccountId, moneyDivisor, network.timeZone, account.id);
+        if (!account.rest_channel_id) db.prepare("INSERT OR IGNORE INTO gam_channel_assignments(soap_account_id,channel_id,effective_from,created_by) VALUES(?,?,'1900-01-01',?)")
+          .run(account.id, channelId, actor);
+        else if (account.rest_channel_id !== channelId) db.prepare('INSERT INTO gam_channel_assignments(soap_account_id,channel_id,effective_from,created_by) VALUES(?,?,?,?) ON CONFLICT(soap_account_id,effective_from) DO UPDATE SET channel_id=excluded.channel_id,created_by=excluded.created_by')
+          .run(account.id, channelId, today, actor);
+      });
       audit(actor, 'gam.report_configure', 'gam_account', account.id, JSON.stringify({ reportName, channelId, upstreamAccountId, moneyDivisor }));
       return { reportName, channelId, upstreamAccountId, moneyDivisor, timeZone: network.timeZone };
     });
@@ -116,21 +125,24 @@ export function createGamSync({ db, transaction, tokenFor, normalizedDomain, aud
         const endKey = through.split('-').map(Number).join('-');
         if (dateKey(actual.startDate) !== startKey || dateKey(actual.endDate) !== endKey) throw new Error('rest_report_range_mismatch');
         const sourceFile = 'gam-rest:' + account.network_code + ':' + from + '_' + through;
+        const assignments = gamChannelAssignments(db, account.id, channelId, through);
         const facts = normalizeRestReportRows(result.rows, {
           channelId, accountKey, sourceFile, moneyDivisor: account.rest_money_divisor
         }).map(fact => {
           if (fact.reportDate < from || fact.reportDate > through) throw new Error('rest_report_row_outside_range');
-          return normalizeGamFactSite(fact, normalizedDomain);
+          return normalizeGamFactSite({ ...fact, channelId: channelForGamDate(assignments, fact.reportDate) }, normalizedDomain);
         });
         checkpoint('normalize');
         const revenue = facts.reduce((sum, fact) => sum + fact.revenue, 0);
         if (write) {
           stage('writing');
+          const affected = new Set([channelId, ...facts.map(fact => fact.channelId)]);
           transaction(() => {
             // A completed REST run replaces that account's previous rows for
             // the same dates, including legacy five-dimensional rows.
-            db.prepare("DELETE FROM revenue_facts WHERE channel_id=? AND account=? AND report_date BETWEEN ? AND ? AND source_file LIKE ?")
-              .run(channelId, accountKey, from, through, 'gam-rest:' + account.network_code + ':%');
+            for (const row of db.prepare('SELECT DISTINCT channel_id channelId FROM revenue_facts WHERE account=? AND report_date BETWEEN ? AND ? AND source_file LIKE ?').all(accountKey, from, through, 'gam-rest:' + account.network_code + ':%')) affected.add(row.channelId);
+            db.prepare('DELETE FROM revenue_facts WHERE account=? AND report_date BETWEEN ? AND ? AND source_file LIKE ?')
+              .run(accountKey, from, through, 'gam-rest:' + account.network_code + ':%');
             for (const fact of facts) upsert.run(
               fact.channelId, fact.reportDate, fact.hour, fact.url, fact.domain, fact.account,
               fact.adUnit, fact.adUnitId, fact.country, fact.requests, fact.matched, fact.impressions,
@@ -140,7 +152,7 @@ export function createGamSync({ db, transaction, tokenFor, normalizedDomain, aud
               db.prepare('UPDATE soap_accounts SET rest_report_name=?,updated_at=CURRENT_TIMESTAMP WHERE id=?')
                 .run(activeReport.name, account.id);
           });
-          onFactsChanged(channelId, from, through);
+          for (const affectedChannel of affected) onFactsChanged(affectedChannel, from, through);
           checkpoint('persist');
           db.prepare("UPDATE soap_sync_runs SET status='success',stage='complete',rows_read=?,rows_written=?,timings_json=?,finished_at=CURRENT_TIMESTAMP WHERE id=?")
             .run(result.rows.length, facts.length, JSON.stringify(timingsMs), runId);

@@ -59,6 +59,7 @@ func (a *app) ensureSchema() error {
 	}
 	for _, item := range []struct{ table, column, definition string }{
 		{"channels", "api_secret_ciphertext", "TEXT"},
+		{"channels", "internal_only", "INTEGER NOT NULL DEFAULT 0"},
 		{"managed_ad_units", "description", "TEXT NOT NULL DEFAULT ''"}, {"managed_ad_units", "adsense_enabled", "INTEGER NOT NULL DEFAULT 0"}, {"managed_ad_units", "placement", "TEXT NOT NULL DEFAULT ''"}, {"managed_ad_units", "target_window", "TEXT NOT NULL DEFAULT ''"}, {"managed_ad_units", "label", "TEXT NOT NULL DEFAULT ''"},
 		{"managed_ad_units", "gam_network_code", "TEXT"}, {"managed_ad_units", "gam_parent_ad_unit", "TEXT"}, {"managed_ad_units", "publish_error", "TEXT NOT NULL DEFAULT ''"}, {"managed_ad_units", "published_at", "TEXT"},
 		{"soap_accounts", "rest_report_name", "TEXT NOT NULL DEFAULT ''"}, {"soap_accounts", "rest_channel_id", "INTEGER"}, {"soap_accounts", "rest_upstream_account_id", "INTEGER"}, {"soap_accounts", "rest_money_divisor", "INTEGER"}, {"soap_accounts", "rest_sync_enabled", "INTEGER NOT NULL DEFAULT 0"}, {"soap_accounts", "rest_last_preview_at", "TEXT"}, {"soap_accounts", "rest_last_preview_rows", "INTEGER NOT NULL DEFAULT 0"}, {"soap_accounts", "rest_network_timezone", "TEXT NOT NULL DEFAULT ''"},

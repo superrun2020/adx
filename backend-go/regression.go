@@ -355,11 +355,11 @@ func (a *app) regressionDue(accountID int64, window regressionWindow) bool {
 }
 
 func (a *app) regressionFacts(ctx context.Context, account map[string]any, start, end string) (map[string]regressionMeasure, error) {
-	channelID, key, err := a.gamMapping(account)
+	_, key, err := a.gamMapping(account)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := a.db.QueryContext(ctx, "SELECT domain,SUM(revenue),SUM(requests),SUM(impressions),SUM(clicks) FROM revenue_facts WHERE channel_id=? AND account=? AND report_date BETWEEN ? AND ? AND domain<>'' AND source_file LIKE ? GROUP BY domain", channelID, key, start, end, "gam-rest:"+importString(account["network_code"])+":%")
+	rows, err := a.db.QueryContext(ctx, "SELECT domain,SUM(revenue),SUM(requests),SUM(impressions),SUM(clicks) FROM revenue_facts WHERE account=? AND report_date BETWEEN ? AND ? AND domain<>'' AND source_file LIKE ? GROUP BY domain", key, start, end, "gam-rest:"+importString(account["network_code"])+":%")
 	if err != nil {
 		return nil, err
 	}
@@ -437,11 +437,11 @@ func (a *app) pausedAdUnitRevenue(ctx context.Context, account map[string]any, w
 	if len(paused) == 0 {
 		return result, nil
 	}
-	channelID, key, err := a.gamMapping(account)
+	_, key, err := a.gamMapping(account)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := a.db.QueryContext(ctx, "SELECT domain,ad_unit_id,SUM(CASE WHEN report_date BETWEEN ? AND ? THEN revenue ELSE 0 END),SUM(CASE WHEN report_date BETWEEN ? AND ? THEN revenue ELSE 0 END) FROM revenue_facts WHERE channel_id=? AND account=? AND report_date BETWEEN ? AND ? AND domain<>'' AND ad_unit_id<>'' AND source_file LIKE ? GROUP BY domain,ad_unit_id", window.BaselineStart, window.BaselineEnd, window.Start, window.End, channelID, key, window.BaselineStart, window.End, "gam-rest:"+network+":%")
+	rows, err := a.db.QueryContext(ctx, "SELECT domain,ad_unit_id,SUM(CASE WHEN report_date BETWEEN ? AND ? THEN revenue ELSE 0 END),SUM(CASE WHEN report_date BETWEEN ? AND ? THEN revenue ELSE 0 END) FROM revenue_facts WHERE account=? AND report_date BETWEEN ? AND ? AND domain<>'' AND ad_unit_id<>'' AND source_file LIKE ? GROUP BY domain,ad_unit_id", window.BaselineStart, window.BaselineEnd, window.Start, window.End, key, window.BaselineStart, window.End, "gam-rest:"+network+":%")
 	if err != nil {
 		return nil, err
 	}
@@ -473,11 +473,11 @@ func excludePausedRevenue(before, after regressionMeasure, paused pausedRevenue)
 }
 
 func (a *app) regressionDailyFacts(ctx context.Context, account map[string]any, start, end string) (map[regressionDailyKey]regressionMeasure, error) {
-	channelID, key, err := a.gamMapping(account)
+	_, key, err := a.gamMapping(account)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := a.db.QueryContext(ctx, "SELECT report_date,domain,SUM(revenue),SUM(requests),SUM(impressions),SUM(clicks) FROM revenue_facts WHERE channel_id=? AND account=? AND report_date BETWEEN ? AND ? AND domain<>'' AND source_file LIKE ? GROUP BY report_date,domain", channelID, key, start, end, "gam-rest:"+importString(account["network_code"])+":%")
+	rows, err := a.db.QueryContext(ctx, "SELECT report_date,domain,SUM(revenue),SUM(requests),SUM(impressions),SUM(clicks) FROM revenue_facts WHERE account=? AND report_date BETWEEN ? AND ? AND domain<>'' AND source_file LIKE ? GROUP BY report_date,domain", key, start, end, "gam-rest:"+importString(account["network_code"])+":%")
 	if err != nil {
 		return nil, err
 	}
@@ -533,12 +533,12 @@ func firstRegressionDropDate(domain string, window regressionWindow, newer, prev
 }
 
 func (a *app) regressionCoveredDays(ctx context.Context, account map[string]any, start, end string) (int, error) {
-	channelID, key, err := a.gamMapping(account)
+	_, key, err := a.gamMapping(account)
 	if err != nil {
 		return 0, err
 	}
 	var days int
-	err = a.db.QueryRowContext(ctx, "SELECT COUNT(DISTINCT report_date) FROM revenue_facts WHERE channel_id=? AND account=? AND report_date BETWEEN ? AND ? AND domain<>'' AND source_file LIKE ?", channelID, key, start, end, "gam-rest:"+importString(account["network_code"])+":%").Scan(&days)
+	err = a.db.QueryRowContext(ctx, "SELECT COUNT(DISTINCT report_date) FROM revenue_facts WHERE account=? AND report_date BETWEEN ? AND ? AND domain<>'' AND source_file LIKE ?", key, start, end, "gam-rest:"+importString(account["network_code"])+":%").Scan(&days)
 	return days, err
 }
 
@@ -928,7 +928,12 @@ func (a *app) deliverRegressionAlerts(ctx context.Context, account map[string]an
 	}
 	webhook, signingSecret := importString(credential["url"]), importString(credential["secret"])
 	channelName := "未关联渠道"
-	if err := a.db.QueryRowContext(ctx, "SELECT name FROM channels WHERE id=?", intMap(account, "rest_channel_id")).Scan(&channelName); err != nil && err != sql.ErrNoRows {
+	windowChannel, err := a.gamChannelForDate(intMap(account, "id"), intMap(account, "rest_channel_id"), window.End)
+	if err != nil {
+		log.Printf("regression_channel_assignment_failed account=%d error=%v", intMap(account, "id"), err)
+		return
+	}
+	if err := a.db.QueryRowContext(ctx, "SELECT name FROM channels WHERE id=?", windowChannel).Scan(&channelName); err != nil && err != sql.ErrNoRows {
 		log.Printf("regression_channel_lookup_failed account=%d error=%v", intMap(account, "id"), err)
 	}
 	zone := importString(account["rest_network_timezone"])

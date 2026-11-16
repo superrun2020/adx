@@ -66,8 +66,31 @@ func (a *app) configureGam(ctx context.Context, account map[string]any, channelI
 		}
 		reportName = importString(report["name"])
 	}
-	_, err = a.db.ExecContext(ctx, "UPDATE soap_accounts SET rest_report_name=?,rest_channel_id=?,rest_upstream_account_id=?,rest_money_divisor=?,rest_sync_enabled=0,rest_last_preview_at=NULL,rest_last_preview_rows=0,rest_network_timezone=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", reportName, channelID, upstreamID, divisor, timezone, id)
+	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	oldChannel := intMap(account, "rest_channel_id")
+	if oldChannel > 0 {
+		_, err = tx.ExecContext(ctx, "INSERT INTO gam_channel_assignments(soap_account_id,channel_id,effective_from,created_by) SELECT ?,?,'1900-01-01',? WHERE NOT EXISTS (SELECT 1 FROM gam_channel_assignments WHERE soap_account_id=?)", id, oldChannel, actor, id)
+		if err != nil {
+			return nil, err
+		}
+	}
+	_, err = tx.ExecContext(ctx, "UPDATE soap_accounts SET rest_report_name=?,rest_channel_id=?,rest_upstream_account_id=?,rest_money_divisor=?,rest_sync_enabled=0,rest_last_preview_at=NULL,rest_last_preview_rows=0,rest_network_timezone=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", reportName, channelID, upstreamID, divisor, timezone, id)
+	if err != nil {
+		return nil, err
+	}
+	if oldChannel == 0 {
+		_, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO gam_channel_assignments(soap_account_id,channel_id,effective_from,created_by) VALUES(?,?,'1900-01-01',?)", id, channelID, actor)
+	} else if oldChannel != channelID {
+		_, err = tx.ExecContext(ctx, "INSERT INTO gam_channel_assignments(soap_account_id,channel_id,effective_from,created_by) VALUES(?,?,?,?) ON CONFLICT(soap_account_id,effective_from) DO UPDATE SET channel_id=excluded.channel_id,created_by=excluded.created_by", id, channelID, today, actor)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
 	a.audit(actor, "gam.report_configure", "gam_account", id, marshalText(map[string]any{"reportName": reportName, "channelId": channelID, "upstreamAccountId": upstreamID, "moneyDivisor": divisor}), "")
@@ -159,6 +182,16 @@ func (a *app) executeGam(ctx context.Context, account map[string]any, start, end
 	}
 	code := importString(account["network_code"])
 	facts := result.facts
+	assignments, err := a.gamChannelAssignments(id, channelID, end)
+	if err != nil {
+		return nil, err
+	}
+	affected := map[int64]bool{channelID: true}
+	for _, fact := range facts {
+		assigned := channelForGamDate(assignments, importString(fact["reportDate"]))
+		fact["channelId"] = assigned
+		affected[assigned] = true
+	}
 	if write {
 		stage("writing")
 		tx, err := a.db.BeginTx(ctx, nil)
@@ -166,7 +199,26 @@ func (a *app) executeGam(ctx context.Context, account map[string]any, start, end
 			return nil, err
 		}
 		defer tx.Rollback()
-		_, err = tx.ExecContext(ctx, "DELETE FROM revenue_facts WHERE channel_id=? AND account=? AND report_date BETWEEN ? AND ? AND source_file LIKE ?", channelID, accountKey, start, end, "gam-rest:"+code+":%")
+		previous, previousErr := tx.QueryContext(ctx, "SELECT DISTINCT channel_id FROM revenue_facts WHERE account=? AND report_date BETWEEN ? AND ? AND source_file LIKE ?", accountKey, start, end, "gam-rest:"+code+":%")
+		if previousErr != nil {
+			return nil, previousErr
+		}
+		for previous.Next() {
+			var prior int64
+			if err = previous.Scan(&prior); err != nil {
+				break
+			}
+			affected[prior] = true
+		}
+		previousErr = previous.Err()
+		previous.Close()
+		if err != nil {
+			return nil, err
+		}
+		if previousErr != nil {
+			return nil, previousErr
+		}
+		_, err = tx.ExecContext(ctx, "DELETE FROM revenue_facts WHERE account=? AND report_date BETWEEN ? AND ? AND source_file LIKE ?", accountKey, start, end, "gam-rest:"+code+":%")
 		if err != nil {
 			return nil, err
 		}
@@ -193,7 +245,9 @@ func (a *app) executeGam(ctx context.Context, account map[string]any, start, end
 		if err = tx.Commit(); err != nil {
 			return nil, err
 		}
-		a.refreshDailySafely(channelID, start, end)
+		for affectedChannel := range affected {
+			a.refreshDailySafely(affectedChannel, start, end)
+		}
 		checkpoint("persist")
 		_, err = a.db.ExecContext(ctx, "UPDATE soap_sync_runs SET status='success',stage='complete',rows_read=?,rows_written=?,timings_json=?,finished_at=CURRENT_TIMESTAMP WHERE id=?", result.rowsRead, len(facts), marshalText(timings), runID)
 		if err != nil {

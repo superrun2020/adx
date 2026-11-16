@@ -7,7 +7,7 @@ import (
 )
 
 func (a *app) channels(w http.ResponseWriter, r *http.Request) {
-	a.sendItems(w, "SELECT c.id,c.name,c.email,c.share_percent sharePercent,c.status,c.created_at createdAt,(SELECT COUNT(*) FROM channel_domains d WHERE d.channel_id=c.id) domainCount,CASE WHEN c.api_secret_hash IS NULL THEN 0 ELSE 1 END apiConfigured FROM channels c ORDER BY c.id DESC")
+	a.sendItems(w, "SELECT c.id,c.name,CASE WHEN c.internal_only=1 THEN '' ELSE c.email END email,c.internal_only internalOnly,c.share_percent sharePercent,c.status,c.created_at createdAt,(SELECT COUNT(*) FROM channel_domains d WHERE d.channel_id=c.id) domainCount,CASE WHEN c.api_secret_hash IS NULL THEN 0 ELSE 1 END apiConfigured FROM channels c ORDER BY c.id DESC")
 }
 
 func (a *app) createChannel(w http.ResponseWriter, r *http.Request) {
@@ -17,28 +17,41 @@ func (a *app) createChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	name, email, password := fieldString(input, "name"), strings.ToLower(fieldString(input, "email")), fieldString(input, "password")
 	share, valid := validShare(input, "sharePercent")
-	if name == "" || email == "" || len(password) < 10 || !valid {
+	if name == "" || !valid || (email == "" && password != "") || (email != "" && len(password) < 10) {
 		writeError(w, 400, "invalid_channel")
 		return
+	}
+	internalOnly := email == ""
+	if internalOnly {
+		identifier, err := newSecret("internal-", 16)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		email = identifier + "@adx.invalid"
 	}
 	status := "active"
 	if fieldString(input, "status") == "disabled" {
 		status = "disabled"
 	}
-	secret, err := newSecret("adx_", 24)
-	if err != nil {
-		serverError(w, err)
-		return
-	}
-	cipher, err := a.encryptCredential(map[string]string{"secret": secret})
-	if err != nil {
-		serverError(w, err)
-		return
-	}
-	hash, err := passwordHash(password)
-	if err != nil {
-		serverError(w, err)
-		return
+	var secret, cipher, hash string
+	var err error
+	if !internalOnly {
+		secret, err = newSecret("adx_", 24)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		cipher, err = a.encryptCredential(map[string]string{"secret": secret})
+		if err != nil {
+			serverError(w, err)
+			return
+		}
+		hash, err = passwordHash(password)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
 	}
 	tx, err := a.db.Begin()
 	if err != nil {
@@ -46,7 +59,11 @@ func (a *app) createChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	result, err := tx.Exec("INSERT INTO channels(name,email,share_percent,status,api_secret_hash,api_secret_ciphertext) VALUES(?,?,?,?,?,?)", name, email, share, status, sha256Hex(secret), cipher)
+	var secretHash, secretCipher any
+	if !internalOnly {
+		secretHash, secretCipher = sha256Hex(secret), cipher
+	}
+	result, err := tx.Exec("INSERT INTO channels(name,email,share_percent,status,api_secret_hash,api_secret_ciphertext,internal_only) VALUES(?,?,?,?,?,?,?)", name, email, share, status, secretHash, secretCipher, internalOnly)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			writeError(w, 409, "email_exists")
@@ -60,17 +77,23 @@ func (a *app) createChannel(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err)
 		return
 	}
-	if _, err = tx.Exec("INSERT INTO users(email,name,password_hash,role,channel_id,status) VALUES(?,?,?,'channel',?,?)", email, name, hash, id, status); err != nil {
-		serverError(w, err)
-		return
+	if !internalOnly {
+		if _, err = tx.Exec("INSERT INTO users(email,name,password_hash,role,channel_id,status) VALUES(?,?,?,'channel',?,?)", email, name, hash, id, status); err != nil {
+			serverError(w, err)
+			return
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		serverError(w, err)
 		return
 	}
-	a.audit(currentUser(r).Email, "channel.create", "channel", id, marshalText(map[string]any{"name": name, "email": email, "share": share}), clientIP(r))
-	item, _ := a.one("SELECT id,name,email,share_percent sharePercent,status FROM channels WHERE id=?", id)
-	writeJSON(w, 201, map[string]any{"ok": true, "channel": item, "secret": secret})
+	a.audit(currentUser(r).Email, "channel.create", "channel", id, marshalText(map[string]any{"name": name, "internalOnly": internalOnly, "share": share}), clientIP(r))
+	item, _ := a.one("SELECT id,name,CASE WHEN internal_only=1 THEN '' ELSE email END email,internal_only internalOnly,share_percent sharePercent,status FROM channels WHERE id=?", id)
+	response := map[string]any{"ok": true, "channel": item}
+	if !internalOnly {
+		response["secret"] = secret
+	}
+	writeJSON(w, 201, response)
 }
 
 func (a *app) updateChannel(w http.ResponseWriter, r *http.Request) {
@@ -97,7 +120,7 @@ func (a *app) updateChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_effective_date")
 		return
 	}
-	before, found := a.one("SELECT id,name,email,share_percent sharePercent,status FROM channels WHERE id=?", id)
+	before, found := a.one("SELECT id,name,CASE WHEN internal_only=1 THEN '' ELSE email END email,internal_only internalOnly,share_percent sharePercent,status FROM channels WHERE id=?", id)
 	if !found {
 		writeError(w, 404, "channel_not_found")
 		return
@@ -124,7 +147,7 @@ func (a *app) updateChannel(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err)
 		return
 	}
-	after, _ := a.one("SELECT id,name,email,share_percent sharePercent,status FROM channels WHERE id=?", id)
+	after, _ := a.one("SELECT id,name,CASE WHEN internal_only=1 THEN '' ELSE email END email,internal_only internalOnly,share_percent sharePercent,status FROM channels WHERE id=?", id)
 	a.audit(currentUser(r).Email, "channel.update", "channel", id, marshalText(map[string]any{"before": before, "after": after}), clientIP(r))
 	a.refreshDailySafely(0, "", "")
 	writeJSON(w, 200, map[string]any{"ok": true, "channel": after})

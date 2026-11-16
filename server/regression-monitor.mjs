@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { localDate } from './gam-sync.mjs';
+import { gamChannelForDate } from './gam-channel-assignment.mjs';
 
 const cadences = [
   { name: 'day', days: 1, interval: 15 * 60_000 },
@@ -216,8 +217,8 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
   const facts = (account, start, end) => {
     const upstream = db.prepare("SELECT account_key FROM upstream_accounts WHERE id=? AND soap_account_id=? AND status='active'").get(account.rest_upstream_account_id, account.id);
     if (!upstream) throw new Error('rest_report_mapping_inactive');
-    const rows = db.prepare("SELECT domain,SUM(revenue) revenue,SUM(requests) requests,SUM(impressions) impressions,SUM(clicks) clicks FROM revenue_facts WHERE channel_id=? AND account=? AND report_date BETWEEN ? AND ? AND domain<>'' AND source_file LIKE ? GROUP BY domain")
-      .all(account.rest_channel_id, upstream.account_key, start, end, 'gam-rest:' + account.network_code + ':%');
+    const rows = db.prepare("SELECT domain,SUM(revenue) revenue,SUM(requests) requests,SUM(impressions) impressions,SUM(clicks) clicks FROM revenue_facts WHERE account=? AND report_date BETWEEN ? AND ? AND domain<>'' AND source_file LIKE ? GROUP BY domain")
+      .all(upstream.account_key, start, end, 'gam-rest:' + account.network_code + ':%');
     return new Map(rows.map(({ domain, ...row }) => [domain, row]));
   };
   const pausedRevenue = (account, window) => {
@@ -228,8 +229,8 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
     if (!ids.size) return totals;
     const upstream = db.prepare("SELECT account_key FROM upstream_accounts WHERE id=? AND soap_account_id=? AND status='active'").get(account.rest_upstream_account_id, account.id);
     if (!upstream) throw new Error('rest_report_mapping_inactive');
-    const rows = db.prepare("SELECT domain,ad_unit_id,SUM(CASE WHEN report_date BETWEEN ? AND ? THEN revenue ELSE 0 END) before,SUM(CASE WHEN report_date BETWEEN ? AND ? THEN revenue ELSE 0 END) after FROM revenue_facts WHERE channel_id=? AND account=? AND report_date BETWEEN ? AND ? AND domain<>'' AND ad_unit_id<>'' AND source_file LIKE ? GROUP BY domain,ad_unit_id")
-      .all(window.baselineStart, window.baselineEnd, window.start, window.end, account.rest_channel_id, upstream.account_key, window.baselineStart, window.end, 'gam-rest:' + account.network_code + ':%');
+    const rows = db.prepare("SELECT domain,ad_unit_id,SUM(CASE WHEN report_date BETWEEN ? AND ? THEN revenue ELSE 0 END) before,SUM(CASE WHEN report_date BETWEEN ? AND ? THEN revenue ELSE 0 END) after FROM revenue_facts WHERE account=? AND report_date BETWEEN ? AND ? AND domain<>'' AND ad_unit_id<>'' AND source_file LIKE ? GROUP BY domain,ad_unit_id")
+      .all(window.baselineStart, window.baselineEnd, window.start, window.end, upstream.account_key, window.baselineStart, window.end, 'gam-rest:' + account.network_code + ':%');
     for (const row of rows) {
       if (!ids.has(row.ad_unit_id)) continue;
       const item = totals.get(row.domain) || { before: 0, after: 0 };
@@ -241,8 +242,8 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
   const dailyFacts = (account, start, end) => {
     const upstream = db.prepare("SELECT account_key FROM upstream_accounts WHERE id=? AND soap_account_id=? AND status='active'").get(account.rest_upstream_account_id, account.id);
     if (!upstream) throw new Error('rest_report_mapping_inactive');
-    return db.prepare("SELECT report_date reportDate,domain,SUM(revenue) revenue,SUM(requests) requests,SUM(impressions) impressions,SUM(clicks) clicks FROM revenue_facts WHERE channel_id=? AND account=? AND report_date BETWEEN ? AND ? AND domain<>'' AND source_file LIKE ? GROUP BY report_date,domain ORDER BY report_date,domain")
-      .all(account.rest_channel_id, upstream.account_key, start, end, 'gam-rest:' + account.network_code + ':%');
+    return db.prepare("SELECT report_date reportDate,domain,SUM(revenue) revenue,SUM(requests) requests,SUM(impressions) impressions,SUM(clicks) clicks FROM revenue_facts WHERE account=? AND report_date BETWEEN ? AND ? AND domain<>'' AND source_file LIKE ? GROUP BY report_date,domain ORDER BY report_date,domain")
+      .all(upstream.account_key, start, end, 'gam-rest:' + account.network_code + ':%');
   };
   const previousDaily = (account, start, end, priorRunCutoff) => {
     const rows = db.prepare('SELECT report_date reportDate,domain,revenue FROM regression_daily_snapshots WHERE soap_account_id=? AND report_date BETWEEN ? AND ? AND run_id<=? ORDER BY run_id DESC')
@@ -257,8 +258,8 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
   const coveredDays = (account, start, end) => {
     const upstream = db.prepare("SELECT account_key FROM upstream_accounts WHERE id=? AND soap_account_id=? AND status='active'").get(account.rest_upstream_account_id, account.id);
     if (!upstream) throw new Error('rest_report_mapping_inactive');
-    return db.prepare("SELECT COUNT(DISTINCT report_date) days FROM revenue_facts WHERE channel_id=? AND account=? AND report_date BETWEEN ? AND ? AND domain<>'' AND source_file LIKE ?")
-      .get(account.rest_channel_id, upstream.account_key, start, end, 'gam-rest:' + account.network_code + ':%').days;
+    return db.prepare("SELECT COUNT(DISTINCT report_date) days FROM revenue_facts WHERE account=? AND report_date BETWEEN ? AND ? AND domain<>'' AND source_file LIKE ?")
+      .get(upstream.account_key, start, end, 'gam-rest:' + account.network_code + ':%').days;
   };
   const saveRun = (account, window, status, detail = '', old = null, newer = new Map(), dailyRows = [], priorDaily = new Map()) => transaction(() => {
     const runId = Number(db.prepare('INSERT INTO regression_runs(soap_account_id,cadence,period_start,period_end,baseline_start,baseline_end,status,detail) VALUES(?,?,?,?,?,?,?,?)')
@@ -296,7 +297,7 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
     const config = settings();
     if (!config.feishu_enabled || !config.webhook_ciphertext) return;
     const { url, secret } = decryptCredential(config.webhook_ciphertext);
-    const channelName = db.prepare('SELECT name FROM channels WHERE id=?').get(account.rest_channel_id)?.name || '未关联渠道';
+    const channelName = db.prepare('SELECT name FROM channels WHERE id=?').get(gamChannelForDate(db, account, window.end))?.name || '未关联渠道';
     const timeZone = account.rest_network_timezone || 'UTC';
     const sentAt = accountTimestamp(timeZone);
     for (let offset = 0; offset < alerts.length; offset += 20) {

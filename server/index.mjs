@@ -66,7 +66,14 @@ db.exec(`
 CREATE TABLE IF NOT EXISTS channels (
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE COLLATE NOCASE,
   share_percent REAL NOT NULL DEFAULT 100 CHECK(share_percent BETWEEN 0 AND 100), status TEXT NOT NULL DEFAULT 'active', api_secret_ciphertext TEXT,
-  api_secret_hash TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  api_secret_hash TEXT, internal_only INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS gam_channel_assignments (
+  soap_account_id INTEGER NOT NULL, channel_id INTEGER NOT NULL, effective_from TEXT NOT NULL,
+  created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(soap_account_id,effective_from),
+  FOREIGN KEY(soap_account_id) REFERENCES soap_accounts(id) ON DELETE CASCADE,
+  FOREIGN KEY(channel_id) REFERENCES channels(id)
 );
 CREATE TABLE IF NOT EXISTS channel_share_versions (
   id INTEGER PRIMARY KEY AUTOINCREMENT, channel_id INTEGER NOT NULL, share_percent REAL NOT NULL CHECK(share_percent BETWEEN 0 AND 100),
@@ -229,6 +236,8 @@ if (!db.prepare("SELECT 1 FROM pragma_table_info('soap_sync_runs') WHERE name='t
 ensureAdUnitIdDimension(db);
 if (!db.prepare("SELECT 1 FROM pragma_table_info('users') WHERE name='is_super_admin'").get()) db.exec('ALTER TABLE users ADD COLUMN is_super_admin INTEGER NOT NULL DEFAULT 0');
 if (!db.prepare("SELECT 1 FROM pragma_table_info('users') WHERE name='sidebar_permissions'").get()) db.exec('ALTER TABLE users ADD COLUMN sidebar_permissions TEXT');
+if (!db.prepare("SELECT 1 FROM pragma_table_info('channels') WHERE name='internal_only'").get()) db.exec('ALTER TABLE channels ADD COLUMN internal_only INTEGER NOT NULL DEFAULT 0');
+db.exec('CREATE INDEX IF NOT EXISTS idx_gam_channel_assignments_date ON gam_channel_assignments(soap_account_id,effective_from DESC)');
 db.exec("UPDATE users SET is_super_admin=1 WHERE id=(SELECT id FROM users WHERE role='admin' AND status='active' ORDER BY CASE WHEN lower(email)='eddyappcone.kr@gmail.com' THEN 0 ELSE 1 END,id LIMIT 1) AND NOT EXISTS (SELECT 1 FROM users WHERE role='admin' AND status='active' AND is_super_admin=1)");
 db.exec('CREATE INDEX IF NOT EXISTS idx_revenue_ad_unit_id ON revenue_facts(ad_unit_id, report_date)');
 db.exec("INSERT OR IGNORE INTO channel_share_versions(channel_id,share_percent,effective_from,created_by) SELECT id,share_percent,'1900-01-01','migration' FROM channels");
@@ -904,31 +913,33 @@ app.post('/api/admin/domain-share-rules', requireAuth, requireAdmin, (req,res) =
 app.put('/api/admin/domain-share-rules/:id', requireAuth, requireAdmin, (req,res) => { const id=Number(req.params.id),upstreamAccountId=Number(req.body?.upstreamAccountId),channelId=Number(req.body?.channelId),domain=normalizedDomain(req.body?.domain),share=Number(req.body?.sharePercent),effectiveFrom=String(req.body?.effectiveFrom||new Date().toISOString().slice(0,10)); if(!Number.isSafeInteger(id)||!Number.isSafeInteger(upstreamAccountId)||!Number.isSafeInteger(channelId)||!Number.isFinite(share)||share<0||share>100||!validDate(effectiveFrom)||!db.prepare('SELECT id FROM upstream_accounts WHERE id=?').get(upstreamAccountId)||!db.prepare('SELECT id FROM channels WHERE id=?').get(channelId))return res.status(400).json({ok:false,error:'invalid_domain_share_rule'}); const before=db.prepare('SELECT * FROM channel_domain_share_rules WHERE id=?').get(id); if(!before)return res.status(404).json({ok:false,error:'domain_share_rule_not_found'}); try { db.prepare('UPDATE channel_domain_share_rules SET upstream_account_id=?,channel_id=?,domain=?,share_percent=?,effective_from=? WHERE id=?').run(upstreamAccountId,channelId,domain,share,effectiveFrom,id); audit(req.user.email,'domain_share_rule.update','domain_share_rule',id,JSON.stringify({before,upstreamAccountId,channelId,domain,share,effectiveFrom}),req.ip); res.json({ok:true}); } catch { res.status(409).json({ok:false,error:'domain_share_rule_exists'}); } });
 
 app.get('/api/admin/channels', requireAuth, requireAdmin, (_req, res) => {
-  const items = db.prepare(`SELECT c.id,c.name,c.email,c.share_percent sharePercent,c.status,c.created_at createdAt,
+  const items = db.prepare(`SELECT c.id,c.name,CASE WHEN c.internal_only=1 THEN '' ELSE c.email END email,c.internal_only internalOnly,c.share_percent sharePercent,c.status,c.created_at createdAt,
     (SELECT COUNT(*) FROM channel_domains d WHERE d.channel_id=c.id) domainCount,
     CASE WHEN c.api_secret_hash IS NULL THEN 0 ELSE 1 END apiConfigured FROM channels c ORDER BY c.id DESC`).all();
   res.json({ ok: true, items });
 });
 app.post('/api/admin/channels', requireAuth, requireAdmin, (req, res) => {
   const name = String(req.body?.name || '').trim(), email = normalizeEmail(req.body?.email), password = String(req.body?.password || ''), share = Number(req.body?.sharePercent);
-  if (!name || !email || password.length < 10 || !Number.isFinite(share) || share < 0 || share > 100) return res.status(400).json({ ok: false, error: 'invalid_channel' });
+  if (!name || (!email && password) || (email && password.length < 10) || !Number.isFinite(share) || share < 0 || share > 100) return res.status(400).json({ ok: false, error: 'invalid_channel' });
+  const internalOnly = !email;
   const tx = () => transaction(() => {
     const secret = `adx_${crypto.randomBytes(24).toString('base64url')}`;
-    const result = db.prepare('INSERT INTO channels(name,email,share_percent,status,api_secret_hash,api_secret_ciphertext) VALUES(?,?,?,?,?,?)').run(name, email, share, req.body?.status === 'disabled' ? 'disabled' : 'active', sha256(secret), encryptCredential({ secret }));
+    const storedEmail = internalOnly ? 'internal-' + crypto.randomBytes(16).toString('hex') + '@adx.invalid' : email;
+    const result = db.prepare('INSERT INTO channels(name,email,share_percent,status,api_secret_hash,api_secret_ciphertext,internal_only) VALUES(?,?,?,?,?,?,?)').run(name, storedEmail, share, req.body?.status === 'disabled' ? 'disabled' : 'active', internalOnly ? null : sha256(secret), internalOnly ? null : encryptCredential({ secret }), internalOnly ? 1 : 0);
     db.prepare("INSERT INTO channel_share_versions(channel_id,share_percent,effective_from,created_by) VALUES(?,?,?,?)").run(result.lastInsertRowid, share, '1900-01-01', req.user.email);
-    db.prepare("INSERT INTO users(email,name,password_hash,role,channel_id,status) VALUES(?,?,?,'channel',?,?)").run(email, name, passwordHash(password), result.lastInsertRowid, req.body?.status === 'disabled' ? 'disabled' : 'active');
-    return { id: Number(result.lastInsertRowid), secret };
+    if (!internalOnly) db.prepare("INSERT INTO users(email,name,password_hash,role,channel_id,status) VALUES(?,?,?,'channel',?,?)").run(email, name, passwordHash(password), result.lastInsertRowid, req.body?.status === 'disabled' ? 'disabled' : 'active');
+    return { id: Number(result.lastInsertRowid), secret: internalOnly ? null : secret };
   });
-  try { const created = tx(); audit(req.user.email, 'channel.create', 'channel', created.id, JSON.stringify({ name, email, share }), req.ip); res.status(201).json({ ok: true, channel: db.prepare('SELECT id,name,email,share_percent sharePercent,status FROM channels WHERE id=?').get(created.id), secret: created.secret }); }
+  try { const created = tx(); audit(req.user.email, 'channel.create', 'channel', created.id, JSON.stringify({ name, internalOnly, share }), req.ip); res.status(201).json({ ok: true, channel: db.prepare("SELECT id,name,CASE WHEN internal_only=1 THEN '' ELSE email END email,internal_only internalOnly,share_percent sharePercent,status FROM channels WHERE id=?").get(created.id), ...(created.secret ? { secret: created.secret } : {}) }); }
   catch (error) { res.status(error.code === 'ERR_SQLITE_CONSTRAINT_UNIQUE' ? 409 : 500).json({ ok: false, error: error.code === 'ERR_SQLITE_CONSTRAINT_UNIQUE' ? 'email_exists' : 'save_failed' }); }
 });
 app.put('/api/admin/channels/:id', requireAuth, requireAdmin, (req, res) => {
   const id = Number(req.params.id), name = String(req.body?.name || '').trim(), share = Number(req.body?.sharePercent), status = req.body?.status === 'disabled' ? 'disabled' : 'active', effectiveFrom = String(req.body?.effectiveFrom || new Date().toISOString().slice(0,10));
   if (!Number.isSafeInteger(id) || !name || !Number.isFinite(share) || share < 0 || share > 100) return res.status(400).json({ ok: false, error: 'invalid_channel' });
   if (!validDate(effectiveFrom)) return res.status(400).json({ ok: false, error: 'invalid_effective_date' });
-  const before = db.prepare('SELECT id,name,email,share_percent sharePercent,status FROM channels WHERE id=?').get(id);
+  const before = db.prepare("SELECT id,name,CASE WHEN internal_only=1 THEN '' ELSE email END email,internal_only internalOnly,share_percent sharePercent,status FROM channels WHERE id=?").get(id);
   if (!before) return res.status(404).json({ ok: false, error: 'channel_not_found' });
-  const after = transaction(() => { db.prepare("UPDATE channels SET name=?,share_percent=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(name, share, status, id); db.prepare("UPDATE users SET name=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE channel_id=? AND role='channel'").run(name, status, id); db.prepare("INSERT INTO channel_share_versions(channel_id,share_percent,effective_from,created_by) VALUES(?,?,?,?) ON CONFLICT(channel_id,effective_from) DO UPDATE SET share_percent=excluded.share_percent,created_by=excluded.created_by").run(id, share, effectiveFrom, req.user.email); return db.prepare('SELECT id,name,email,share_percent sharePercent,status FROM channels WHERE id=?').get(id); });
+  const after = transaction(() => { db.prepare("UPDATE channels SET name=?,share_percent=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(name, share, status, id); db.prepare("UPDATE users SET name=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE channel_id=? AND role='channel'").run(name, status, id); db.prepare("INSERT INTO channel_share_versions(channel_id,share_percent,effective_from,created_by) VALUES(?,?,?,?) ON CONFLICT(channel_id,effective_from) DO UPDATE SET share_percent=excluded.share_percent,created_by=excluded.created_by").run(id, share, effectiveFrom, req.user.email); return db.prepare("SELECT id,name,CASE WHEN internal_only=1 THEN '' ELSE email END email,internal_only internalOnly,share_percent sharePercent,status FROM channels WHERE id=?").get(id); });
   audit(req.user.email, 'channel.update', 'channel', id, JSON.stringify({ before, after }), req.ip);
   res.json({ ok: true, channel: after });
 });

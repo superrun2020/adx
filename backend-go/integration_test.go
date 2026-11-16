@@ -128,4 +128,28 @@ func TestMockGamSyncWritesFactsAndRun(t *testing.T) {
 	if !a.exists("SELECT id FROM soap_sync_runs WHERE status='success' AND rows_written=1") {
 		t.Fatal("missing successful sync run")
 	}
+	for _, statement := range []string{
+		"INSERT INTO channels(id,name,email,share_percent) VALUES(2,'Rinser','rinser@example.test',75)",
+		"INSERT INTO channel_share_versions(channel_id,share_percent,effective_from,created_by) VALUES(2,75,'1900-01-01','test')",
+		"INSERT INTO gam_channel_assignments(soap_account_id,channel_id,effective_from,created_by) VALUES(1,1,'1900-01-01','test'),(1,2,'2026-11-01','test')",
+		"UPDATE soap_accounts SET rest_channel_id=2 WHERE id=1",
+	} {
+		if _, err := a.db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	account, err = a.gamAccount(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = a.executeGam(context.Background(), account, "2026-11-01", "2026-11-01", true); err != nil {
+		t.Fatal(err)
+	}
+	var channelID, count int64
+	if err = a.db.QueryRow("SELECT channel_id,COUNT(*) FROM revenue_facts").Scan(&channelID, &count); err != nil {
+		t.Fatal(err)
+	}
+	if channelID != 2 || count != 1 || a.exists("SELECT 1 FROM dashboard_rest_daily WHERE channel_id=1 AND report_date='2026-11-01'") {
+		t.Fatalf("resync duplicated or left stale channel data: channel=%d count=%d", channelID, count)
+	}
 }
