@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const gamAccountColumns = "id,name,network_code networkCode,account_email accountEmail,advertiser,bd,advertiser_share_percent advertiserSharePercent,operation_status operationStatus,enabled,notes,CASE WHEN length(credential_ciphertext)>0 THEN 1 ELSE 0 END credentialConfigured,status,last_test_at lastTestAt,last_test_status lastTestStatus,last_test_summary lastTestSummary,rest_report_name reportName,rest_channel_id channelId,rest_upstream_account_id upstreamAccountId,rest_money_divisor moneyDivisor,rest_sync_enabled syncEnabled,rest_last_preview_at lastPreviewAt,rest_last_preview_rows lastPreviewRows,rest_network_timezone timeZone,created_at createdAt"
+const gamAccountColumns = "id,name,network_code networkCode,account_email accountEmail,advertiser,bd,advertiser_share_percent advertiserSharePercent,operation_status operationStatus,enabled,notes,CASE WHEN length(credential_ciphertext)>0 THEN 1 ELSE 0 END credentialConfigured,status,last_test_at lastTestAt,last_test_status lastTestStatus,last_test_summary lastTestSummary,rest_report_name reportName,rest_channel_id channelId,rest_upstream_account_id upstreamAccountId,rest_money_divisor moneyDivisor,rest_sync_enabled syncEnabled,rest_last_preview_at lastPreviewAt,rest_last_preview_rows lastPreviewRows,rest_network_timezone timeZone,channel_locked_to_account channelLocked,CASE WHEN rest_report_name<>'' AND rest_upstream_account_id IS NOT NULL THEN 1 ELSE 0 END reportConfigured,created_at createdAt"
 
 type gamMetadata struct {
 	email, advertiser, bd, operation, notes string
@@ -67,7 +67,7 @@ func (a *app) publicGamAccount(id int64) map[string]any {
 func (a *app) gamAccounts(w http.ResponseWriter, r *http.Request) {
 	columns := gamAccountColumns
 	if !currentUser(r).canView("gam") {
-		columns = "id,name,network_code networkCode,status,enabled,rest_channel_id channelId,rest_network_timezone timeZone"
+		columns = "id,name,network_code networkCode,status,enabled,rest_channel_id channelId,rest_network_timezone timeZone,channel_locked_to_account channelLocked,CASE WHEN rest_report_name<>'' AND rest_upstream_account_id IS NOT NULL THEN 1 ELSE 0 END reportConfigured"
 	}
 	a.sendItems(w, "SELECT "+columns+" FROM soap_accounts ORDER BY id DESC")
 }

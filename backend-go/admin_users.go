@@ -1,13 +1,15 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 )
 
 func (a *app) channels(w http.ResponseWriter, r *http.Request) {
-	a.sendItems(w, "SELECT c.id,c.name,CASE WHEN c.internal_only=1 THEN '' ELSE c.email END email,c.internal_only internalOnly,c.share_percent sharePercent,c.status,c.created_at createdAt,(SELECT COUNT(*) FROM channel_domains d WHERE d.channel_id=c.id) domainCount,CASE WHEN c.api_secret_hash IS NULL THEN 0 ELSE 1 END apiConfigured FROM channels c ORDER BY c.id DESC")
+	a.sendItems(w, "SELECT c.id,c.name,CASE WHEN c.internal_only=1 THEN '' ELSE c.email END email,c.internal_only internalOnly,c.share_percent sharePercent,c.status,c.created_at createdAt,(SELECT COUNT(*) FROM channel_domains d WHERE d.channel_id=c.id) domainCount,COALESCE((SELECT json_group_array(s.id) FROM soap_accounts s WHERE s.rest_channel_id=c.id),'[]') gamAccountIds,CASE WHEN c.api_secret_hash IS NULL THEN 0 ELSE 1 END apiConfigured FROM channels c ORDER BY c.id DESC")
 }
 
 func (a *app) createChannel(w http.ResponseWriter, r *http.Request) {
@@ -21,6 +23,25 @@ func (a *app) createChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_channel")
 		return
 	}
+	effective := fieldString(input, "effectiveFrom")
+	if effective == "" {
+		effective = dateToday()
+	}
+	if !validDate(effective) {
+		writeError(w, 400, "invalid_effective_date")
+		return
+	}
+	accountIDs, _, accountErr := selectedChannelAccounts(input)
+	if accountErr != nil {
+		writeError(w, 400, accountErr.Error())
+		return
+	}
+	unlock, accountErr := a.lockChannelAccounts(accountIDs)
+	if accountErr != nil {
+		writeError(w, 409, accountErr.Error())
+		return
+	}
+	defer unlock()
 	internalOnly := email == ""
 	if internalOnly {
 		identifier, err := newSecret("internal-", 16)
@@ -83,11 +104,25 @@ func (a *app) createChannel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	affected, err := assignChannelAccounts(tx, id, accountIDs, effective, currentUser(r).Email)
+	if err != nil {
+		if errors.Is(err, errInvalidChannelAccount) {
+			writeError(w, 400, err.Error())
+		} else if errors.Is(err, errConflictingChannelFacts) {
+			writeError(w, 409, err.Error())
+		} else {
+			serverError(w, err)
+		}
+		return
+	}
 	if err = tx.Commit(); err != nil {
 		serverError(w, err)
 		return
 	}
 	a.audit(currentUser(r).Email, "channel.create", "channel", id, marshalText(map[string]any{"name": name, "internalOnly": internalOnly, "share": share}), clientIP(r))
+	if len(accountIDs) > 0 {
+		a.refreshChannelAssignments(affected, effective)
+	}
 	item, _ := a.one("SELECT id,name,CASE WHEN internal_only=1 THEN '' ELSE email END email,internal_only internalOnly,share_percent sharePercent,status FROM channels WHERE id=?", id)
 	response := map[string]any{"ok": true, "channel": item}
 	if !internalOnly {
@@ -125,6 +160,17 @@ func (a *app) updateChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "channel_not_found")
 		return
 	}
+	accountIDs, _, accountErr := selectedChannelAccounts(input)
+	if accountErr != nil {
+		writeError(w, 400, accountErr.Error())
+		return
+	}
+	unlock, accountErr := a.lockChannelAccounts(accountIDs)
+	if accountErr != nil {
+		writeError(w, 409, accountErr.Error())
+		return
+	}
+	defer unlock()
 	tx, err := a.db.Begin()
 	if err != nil {
 		serverError(w, err)
@@ -143,13 +189,30 @@ func (a *app) updateChannel(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err)
 		return
 	}
+	affected, err := assignChannelAccounts(tx, id, accountIDs, effective, currentUser(r).Email)
+	if err != nil {
+		if errors.Is(err, errInvalidChannelAccount) {
+			writeError(w, 400, err.Error())
+		} else if errors.Is(err, errConflictingChannelFacts) {
+			writeError(w, 409, err.Error())
+		} else {
+			serverError(w, err)
+		}
+		return
+	}
 	if err = tx.Commit(); err != nil {
 		serverError(w, err)
 		return
 	}
 	after, _ := a.one("SELECT id,name,CASE WHEN internal_only=1 THEN '' ELSE email END email,internal_only internalOnly,share_percent sharePercent,status FROM channels WHERE id=?", id)
 	a.audit(currentUser(r).Email, "channel.update", "channel", id, marshalText(map[string]any{"before": before, "after": after}), clientIP(r))
-	a.refreshDailySafely(0, "", "")
+	if len(accountIDs) > 0 {
+		a.refreshChannelAssignments(affected, effective)
+	}
+	var lastDate sql.NullString
+	if err = a.db.QueryRow("SELECT MAX(report_date) FROM revenue_facts WHERE channel_id=? AND report_date>=?", id, effective).Scan(&lastDate); err == nil && lastDate.Valid {
+		a.refreshDailySafely(id, effective, lastDate.String)
+	}
 	writeJSON(w, 200, map[string]any{"ok": true, "channel": after})
 }
 

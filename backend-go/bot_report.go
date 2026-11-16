@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -59,7 +60,7 @@ func (a *app) botReportAccountTotals(date, source string) (map[string]any, error
 }
 
 func (a *app) botReportTotalsAt(now time.Time) (map[string]any, error) {
-	accounts, err := queryMaps(a.db, "SELECT name,network_code,rest_network_timezone FROM soap_accounts WHERE status='active' AND rest_sync_enabled=1 AND enabled=1 ORDER BY id")
+	accounts, err := queryMaps(a.db, "SELECT id,name,network_code,rest_channel_id,rest_network_timezone FROM soap_accounts WHERE status='active' AND rest_sync_enabled=1 AND enabled=1 ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -75,6 +76,14 @@ func (a *app) botReportTotalsAt(now time.Time) (map[string]any, error) {
 		if dateErr != nil {
 			return nil, dateErr
 		}
+		channelID, channelErr := a.gamChannelForDate(intMap(account, "id"), intMap(account, "rest_channel_id"), date)
+		if channelErr != nil {
+			return nil, channelErr
+		}
+		channelName := "未关联渠道"
+		if err := a.db.QueryRow("SELECT name FROM channels WHERE id=?", channelID).Scan(&channelName); err != nil && err != sql.ErrNoRows {
+			return nil, err
+		}
 		code := importString(account["network_code"])
 		row, queryErr := a.botReportAccountTotals(date, "gam-rest:"+code+":%")
 		if queryErr != nil {
@@ -86,7 +95,7 @@ func (a *app) botReportTotalsAt(now time.Time) (map[string]any, error) {
 		if last := importString(row["lastImport"]); last > importString(result["lastImport"]) {
 			result["lastImport"] = last
 		}
-		items = append(items, map[string]any{"name": account["name"], "networkCode": code,
+		items = append(items, map[string]any{"name": account["name"], "networkCode": code, "channelName": channelName,
 			"timeZone": zone, "date": date, "rows": numberValue(row["rows"]),
 			"revenue": numberValue(row["grossRevenue"]),
 			"profit":  numberValue(row["upstreamRevenue"])*0.85 - numberValue(row["channelRevenue"])})
@@ -113,8 +122,8 @@ func botReportMessage(date string, now time.Time, totals map[string]any) string 
 		}
 	}
 	for _, account := range totals["accounts"].([]map[string]any) {
-		lines = append(lines, fmt.Sprintf("账号：%s（Network %s） · %s（%s） · 流水 $%.2f · 利润 $%.2f",
-			importString(account["name"]), importString(account["networkCode"]), importString(account["date"]),
+		lines = append(lines, fmt.Sprintf("账号：%s（Network %s） · 渠道：%s · %s（%s） · 流水 $%.2f · 利润 $%.2f",
+			importString(account["name"]), importString(account["networkCode"]), importString(account["channelName"]), importString(account["date"]),
 			importString(account["timeZone"]), numberValue(account["revenue"]), numberValue(account["profit"])))
 	}
 	lines = append(lines, "当天数值为截至统计时间的快照；GAM 后续修订以数据报告为准。")

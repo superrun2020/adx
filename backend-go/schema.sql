@@ -95,7 +95,7 @@ CREATE TABLE IF NOT EXISTS soap_accounts (
   status TEXT NOT NULL DEFAULT 'untested', last_test_at TEXT, last_test_status TEXT,
   last_test_summary TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-, rest_report_name TEXT NOT NULL DEFAULT '', rest_channel_id INTEGER, rest_upstream_account_id INTEGER, rest_money_divisor INTEGER, rest_sync_enabled INTEGER NOT NULL DEFAULT 0, rest_last_preview_at TEXT, rest_last_preview_rows INTEGER NOT NULL DEFAULT 0, rest_network_timezone TEXT NOT NULL DEFAULT '');
+, rest_report_name TEXT NOT NULL DEFAULT '', rest_channel_id INTEGER, rest_upstream_account_id INTEGER, rest_money_divisor INTEGER, rest_sync_enabled INTEGER NOT NULL DEFAULT 0, rest_last_preview_at TEXT, rest_last_preview_rows INTEGER NOT NULL DEFAULT 0, rest_network_timezone TEXT NOT NULL DEFAULT '', channel_locked_to_account INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS soap_sync_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, soap_account_id INTEGER NOT NULL, channel_id INTEGER,
   window_start TEXT NOT NULL, window_end TEXT NOT NULL, status TEXT NOT NULL,

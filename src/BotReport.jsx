@@ -77,7 +77,7 @@ export default function BotReport() {
         <div style={{marginTop:16}}><Text strong>各 GAM 账号当地日期</Text>
           <NumericSortableTable size="small" rowKey="networkCode" style={{marginTop:8}}
             dataSource={preview?.accounts || []} numericKeys={['rows','revenue','profit']}
-            columns={[{title:'账号',dataIndex:'name'},{title:'当地日期',dataIndex:'date'},
+            columns={[{title:'账号',dataIndex:'name'},{title:'渠道',dataIndex:'channelName'},{title:'当地日期',dataIndex:'date'},
               {title:'时区',dataIndex:'timeZone'},{title:'明细',dataIndex:'rows',align:'right'},
               {title:'流水',dataIndex:'revenue',align:'right',render:money},
               {title:'利润',dataIndex:'profit',align:'right',render:money}]}

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { registerGamRoutes } from './gam-routes.mjs';
 import { createGamSync } from './gam-sync.mjs';
+import { parseChannelAccountIds, assignChannelAccounts } from './channel-accounts.mjs';
 import { registerRegressionMonitor } from './regression-monitor.mjs';
 import { registerBotReport } from './bot-report.mjs';
 import { ensureAdUnitIdDimension } from './revenue-schema.mjs';
@@ -237,6 +238,7 @@ ensureAdUnitIdDimension(db);
 if (!db.prepare("SELECT 1 FROM pragma_table_info('users') WHERE name='is_super_admin'").get()) db.exec('ALTER TABLE users ADD COLUMN is_super_admin INTEGER NOT NULL DEFAULT 0');
 if (!db.prepare("SELECT 1 FROM pragma_table_info('users') WHERE name='sidebar_permissions'").get()) db.exec('ALTER TABLE users ADD COLUMN sidebar_permissions TEXT');
 if (!db.prepare("SELECT 1 FROM pragma_table_info('channels') WHERE name='internal_only'").get()) db.exec('ALTER TABLE channels ADD COLUMN internal_only INTEGER NOT NULL DEFAULT 0');
+if (!db.prepare("SELECT 1 FROM pragma_table_info('soap_accounts') WHERE name='channel_locked_to_account'").get()) db.exec('ALTER TABLE soap_accounts ADD COLUMN channel_locked_to_account INTEGER NOT NULL DEFAULT 0');
 db.exec('CREATE INDEX IF NOT EXISTS idx_gam_channel_assignments_date ON gam_channel_assignments(soap_account_id,effective_from DESC)');
 db.exec("UPDATE users SET is_super_admin=1 WHERE id=(SELECT id FROM users WHERE role='admin' AND status='active' ORDER BY CASE WHEN lower(email)='eddyappcone.kr@gmail.com' THEN 0 ELSE 1 END,id LIMIT 1) AND NOT EXISTS (SELECT 1 FROM users WHERE role='admin' AND status='active' AND is_super_admin=1)");
 db.exec('CREATE INDEX IF NOT EXISTS idx_revenue_ad_unit_id ON revenue_facts(ad_unit_id, report_date)');
@@ -915,12 +917,18 @@ app.put('/api/admin/domain-share-rules/:id', requireAuth, requireAdmin, (req,res
 app.get('/api/admin/channels', requireAuth, requireAdmin, (_req, res) => {
   const items = db.prepare(`SELECT c.id,c.name,CASE WHEN c.internal_only=1 THEN '' ELSE c.email END email,c.internal_only internalOnly,c.share_percent sharePercent,c.status,c.created_at createdAt,
     (SELECT COUNT(*) FROM channel_domains d WHERE d.channel_id=c.id) domainCount,
+    COALESCE((SELECT json_group_array(s.id) FROM soap_accounts s WHERE s.rest_channel_id=c.id),'[]') gamAccountIds,
     CASE WHEN c.api_secret_hash IS NULL THEN 0 ELSE 1 END apiConfigured FROM channels c ORDER BY c.id DESC`).all();
   res.json({ ok: true, items });
 });
 app.post('/api/admin/channels', requireAuth, requireAdmin, (req, res) => {
   const name = String(req.body?.name || '').trim(), email = normalizeEmail(req.body?.email), password = String(req.body?.password || ''), share = Number(req.body?.sharePercent);
   if (!name || (!email && password) || (email && password.length < 10) || !Number.isFinite(share) || share < 0 || share > 100) return res.status(400).json({ ok: false, error: 'invalid_channel' });
+  const effectiveFrom = String(req.body?.effectiveFrom || new Date().toISOString().slice(0, 10));
+  if (!validDate(effectiveFrom)) return res.status(400).json({ ok:false, error:'invalid_effective_date' });
+  let accountIds;
+  try { accountIds = parseChannelAccountIds(req.body?.gamAccountIds); }
+  catch (error) { return res.status(400).json({ ok:false, error:error.message }); }
   const internalOnly = !email;
   const tx = () => transaction(() => {
     const secret = `adx_${crypto.randomBytes(24).toString('base64url')}`;
@@ -928,10 +936,20 @@ app.post('/api/admin/channels', requireAuth, requireAdmin, (req, res) => {
     const result = db.prepare('INSERT INTO channels(name,email,share_percent,status,api_secret_hash,api_secret_ciphertext,internal_only) VALUES(?,?,?,?,?,?,?)').run(name, storedEmail, share, req.body?.status === 'disabled' ? 'disabled' : 'active', internalOnly ? null : sha256(secret), internalOnly ? null : encryptCredential({ secret }), internalOnly ? 1 : 0);
     db.prepare("INSERT INTO channel_share_versions(channel_id,share_percent,effective_from,created_by) VALUES(?,?,?,?)").run(result.lastInsertRowid, share, '1900-01-01', req.user.email);
     if (!internalOnly) db.prepare("INSERT INTO users(email,name,password_hash,role,channel_id,status) VALUES(?,?,?,'channel',?,?)").run(email, name, passwordHash(password), result.lastInsertRowid, req.body?.status === 'disabled' ? 'disabled' : 'active');
-    return { id: Number(result.lastInsertRowid), secret: internalOnly ? null : secret };
+    const affected = assignChannelAccounts(db, Number(result.lastInsertRowid), accountIds, effectiveFrom, req.user.email);
+    return { id: Number(result.lastInsertRowid), secret: internalOnly ? null : secret, affected };
   });
-  try { const created = tx(); audit(req.user.email, 'channel.create', 'channel', created.id, JSON.stringify({ name, internalOnly, share }), req.ip); res.status(201).json({ ok: true, channel: db.prepare("SELECT id,name,CASE WHEN internal_only=1 THEN '' ELSE email END email,internal_only internalOnly,share_percent sharePercent,status FROM channels WHERE id=?").get(created.id), ...(created.secret ? { secret: created.secret } : {}) }); }
-  catch (error) { res.status(error.code === 'ERR_SQLITE_CONSTRAINT_UNIQUE' ? 409 : 500).json({ ok: false, error: error.code === 'ERR_SQLITE_CONSTRAINT_UNIQUE' ? 'email_exists' : 'save_failed' }); }
+  try {
+    const created = tx();
+    audit(req.user.email, 'channel.create', 'channel', created.id, JSON.stringify({ name, internalOnly, share, accountIds, effectiveFrom }), req.ip);
+    for (const [id, end] of created.affected) refreshDashboardDaily(id, effectiveFrom, end);
+    if (accountIds.length && !created.affected.size) invalidateReportCache();
+    res.status(201).json({ ok: true, channel: db.prepare("SELECT id,name,CASE WHEN internal_only=1 THEN '' ELSE email END email,internal_only internalOnly,share_percent sharePercent,status FROM channels WHERE id=?").get(created.id), ...(created.secret ? { secret: created.secret } : {}) });
+  } catch (error) {
+    const conflict = error.code === 'ERR_SQLITE_CONSTRAINT_UNIQUE' || error.message === 'conflicting_channel_facts';
+    const bad = error.message === 'invalid_channel_account';
+    res.status(bad ? 400 : conflict ? 409 : 500).json({ ok:false, error:bad || conflict ? error.message : 'save_failed' });
+  }
 });
 app.put('/api/admin/channels/:id', requireAuth, requireAdmin, (req, res) => {
   const id = Number(req.params.id), name = String(req.body?.name || '').trim(), share = Number(req.body?.sharePercent), status = req.body?.status === 'disabled' ? 'disabled' : 'active', effectiveFrom = String(req.body?.effectiveFrom || new Date().toISOString().slice(0,10));
@@ -939,9 +957,29 @@ app.put('/api/admin/channels/:id', requireAuth, requireAdmin, (req, res) => {
   if (!validDate(effectiveFrom)) return res.status(400).json({ ok: false, error: 'invalid_effective_date' });
   const before = db.prepare("SELECT id,name,CASE WHEN internal_only=1 THEN '' ELSE email END email,internal_only internalOnly,share_percent sharePercent,status FROM channels WHERE id=?").get(id);
   if (!before) return res.status(404).json({ ok: false, error: 'channel_not_found' });
-  const after = transaction(() => { db.prepare("UPDATE channels SET name=?,share_percent=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(name, share, status, id); db.prepare("UPDATE users SET name=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE channel_id=? AND role='channel'").run(name, status, id); db.prepare("INSERT INTO channel_share_versions(channel_id,share_percent,effective_from,created_by) VALUES(?,?,?,?) ON CONFLICT(channel_id,effective_from) DO UPDATE SET share_percent=excluded.share_percent,created_by=excluded.created_by").run(id, share, effectiveFrom, req.user.email); return db.prepare("SELECT id,name,CASE WHEN internal_only=1 THEN '' ELSE email END email,internal_only internalOnly,share_percent sharePercent,status FROM channels WHERE id=?").get(id); });
-  audit(req.user.email, 'channel.update', 'channel', id, JSON.stringify({ before, after }), req.ip);
-  res.json({ ok: true, channel: after });
+  let accountIds;
+  try { accountIds = parseChannelAccountIds(req.body?.gamAccountIds); }
+  catch (error) { return res.status(400).json({ ok:false, error:error.message }); }
+  try {
+    let affected;
+    const after = transaction(() => {
+      db.prepare("UPDATE channels SET name=?,share_percent=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(name, share, status, id);
+      db.prepare("UPDATE users SET name=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE channel_id=? AND role='channel'").run(name, status, id);
+      db.prepare("INSERT INTO channel_share_versions(channel_id,share_percent,effective_from,created_by) VALUES(?,?,?,?) ON CONFLICT(channel_id,effective_from) DO UPDATE SET share_percent=excluded.share_percent,created_by=excluded.created_by").run(id, share, effectiveFrom, req.user.email);
+      affected = assignChannelAccounts(db, id, accountIds, effectiveFrom, req.user.email);
+      return db.prepare("SELECT id,name,CASE WHEN internal_only=1 THEN '' ELSE email END email,internal_only internalOnly,share_percent sharePercent,status FROM channels WHERE id=?").get(id);
+    });
+    audit(req.user.email, 'channel.update', 'channel', id, JSON.stringify({ before, after, accountIds, effectiveFrom }), req.ip);
+    for (const [channel, end] of affected) refreshDashboardDaily(channel, effectiveFrom, end);
+    const lastDate = db.prepare('SELECT MAX(report_date) lastDate FROM revenue_facts WHERE channel_id=? AND report_date>=?').get(id, effectiveFrom)?.lastDate;
+    if (lastDate) refreshDashboardDaily(id, effectiveFrom, lastDate);
+    else if (accountIds.length) invalidateReportCache();
+    res.json({ ok:true, channel:after });
+  } catch (error) {
+    const bad = error.message === 'invalid_channel_account';
+    const conflict = error.message === 'conflicting_channel_facts';
+    res.status(bad ? 400 : conflict ? 409 : 500).json({ ok:false, error:bad || conflict ? error.message : 'save_failed' });
+  }
 });
 app.post('/api/admin/channels/:id/password', requireAuth, requireAdmin, (req, res) => {
   const id = Number(req.params.id), password = String(req.body?.password || ''); if (password.length < 10) return res.status(400).json({ ok: false, error: 'weak_password' });

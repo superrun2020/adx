@@ -6,9 +6,11 @@ import { botReportDate, registerBotReport } from '../server/bot-report.mjs';
 test('daily bot report uses REST profit, validates webhook and sends once', async () => {
   const db = new DatabaseSync(':memory:');
   db.exec("CREATE TABLE revenue_facts(report_date TEXT,revenue REAL,source_file TEXT,imported_at TEXT);");
-  db.exec("CREATE TABLE soap_accounts(id INTEGER PRIMARY KEY,name TEXT,network_code TEXT,rest_network_timezone TEXT,status TEXT,rest_sync_enabled INTEGER,enabled INTEGER);");
-  db.exec("INSERT INTO soap_accounts VALUES(1,'Shanghai GAM','123','Asia/Shanghai','active',1,1);");
-  db.exec("INSERT INTO soap_accounts VALUES(2,'Kiritimati GAM','456','Pacific/Kiritimati','active',1,1);");
+  db.exec("CREATE TABLE soap_accounts(id INTEGER PRIMARY KEY,name TEXT,network_code TEXT,rest_network_timezone TEXT,status TEXT,rest_sync_enabled INTEGER,enabled INTEGER,rest_channel_id INTEGER);");
+  db.exec("CREATE TABLE channels(id INTEGER PRIMARY KEY,name TEXT); CREATE TABLE gam_channel_assignments(soap_account_id INTEGER,channel_id INTEGER,effective_from TEXT)");
+  db.exec("INSERT INTO channels VALUES(1,'Zhao'),(2,'Rinser'); INSERT INTO gam_channel_assignments VALUES(1,1,'1900-01-01'),(1,2,'2026-11-10')");
+  db.exec("INSERT INTO soap_accounts VALUES(1,'Shanghai GAM','123','Asia/Shanghai','active',1,1,2);");
+  db.exec("INSERT INTO soap_accounts VALUES(2,'Kiritimati GAM','456','Pacific/Kiritimati','active',1,1,2);");
   db.exec("INSERT INTO revenue_facts VALUES('2026-11-10',100,'gam-rest:123:2026-11-10','2026-11-10 15:30:00');");
   db.exec("INSERT INTO revenue_facts VALUES('2026-11-11',50,'gam-rest:456:2026-11-11','2026-11-10 15:30:00');");
   db.exec("INSERT INTO revenue_facts VALUES('2026-11-10',50,'manual-import','2026-11-10 15:30:00');");
@@ -37,6 +39,7 @@ test('daily bot report uses REST profit, validates webhook and sends once', asyn
   assert.equal(preview.date,'2026-11-10');
   assert.equal(preview.rows,2); assert.equal(preview.revenue,150); assert.equal(preview.profit,42);
   assert.deepEqual(preview.accounts.map(account => account.date),['2026-11-10','2026-11-11']);
+  assert.deepEqual(preview.accounts.map(account => account.channelName),['Rinser','Rinser']);
   assert.equal(botReportDate(before),'');
   assert.equal(botReportDate(due),'2026-11-10');
   assert.equal(botReportDate(new Date('2026-11-10T16:05:00Z')),'2026-11-10');
@@ -45,6 +48,7 @@ test('daily bot report uses REST profit, validates webhook and sends once', asyn
   assert.match(sentText,/流水（GAM REST 原始收入）：\$150\.00/);
   assert.match(sentText,/利润（上游分成后收入 × 85% − 渠道结算）：\$42\.00/);
   assert.match(sentText,/2026-11-11（Pacific\/Kiritimati）/);
+  assert.match(sentText,/渠道：Rinser/);
   assert.equal(db.prepare("SELECT status FROM bot_report_deliveries WHERE report_date='2026-11-10'").get().status,'sent');
   assert.equal((await invoke('POST','/api/admin/bot-report/test')).statusCode,200);
   assert.equal(sends,2);

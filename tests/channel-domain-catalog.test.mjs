@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { channelGAMDomains, resolveChannelAssignment } from '../src/channel-domain-catalog.mjs';
+
+test('account-bound channels own every site despite older per-domain assignments', () => {
+  const assigned = resolveChannelAssignment({ channelId: 2, channelLocked: 1 },
+    { channelId: 1, channelName: 'Zhao' }, { channelId: 1, channelName: 'Zhao' }, new Map([[2, 'Rinser']]));
+  assert.deepEqual(assigned, { channelId: 2, channelName: 'Rinser', assignmentSource: '账号关联' });
+});
 import { allowedAdminRequest } from '../server/admin-permissions.mjs';
 
 const account = { id: 1, name: 'GAM A', networkCode: '123456', status: 'active', channelId: 7 };

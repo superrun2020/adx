@@ -116,6 +116,10 @@ func (a *app) executeGam(ctx context.Context, account map[string]any, start, end
 		return nil, errors.New("gam_account_busy")
 	}
 	defer a.unlockGam(id)
+	account, err := a.gamAccount(id)
+	if err != nil {
+		return nil, err
+	}
 	begun := time.Now()
 	timings := map[string]int64{}
 	checkpoint := func(stage string) { timings[stage] = time.Since(begun).Milliseconds() }

@@ -62,3 +62,57 @@ func TestGamChannelAssignmentsRespectCutoverDate(t *testing.T) {
 		t.Fatalf("historical channel=%d error=%v", channel, err)
 	}
 }
+
+func TestChannelCreationBindsAccountLinksAndCurrentFacts(t *testing.T) {
+	a := testApp(t)
+	for _, statement := range []string{
+		"INSERT INTO channels(id,name,email,share_percent) VALUES(1,'Zhao','zhao@example.test',70)",
+		"INSERT INTO channel_share_versions(channel_id,share_percent,effective_from,created_by) VALUES(1,70,'1900-01-01','test')",
+		"INSERT INTO soap_accounts(id,name,network_code,credential_ciphertext,status,enabled,rest_report_name,rest_channel_id,rest_upstream_account_id,rest_money_divisor,created_by) VALUES(1,'GAM','123456','cipher','active',1,'networks/123456/reports/11',1,1,1,'test')",
+		"INSERT INTO upstream_accounts(id,account_key,name,soap_account_id,status) VALUES(1,'upstream','Upstream',1,'active')",
+		"INSERT INTO revenue_facts(channel_id,report_date,url,domain,account,source_file,revenue) VALUES(1,'2026-11-15','https://site.test','site.test','upstream','gam-rest:123456:old',10),(1,'2026-11-16','https://site.test','site.test','upstream','gam-rest:123456:new',20)",
+		"INSERT INTO link_metadata(network_code,domain,channel_id,updated_by) VALUES('123456','site.test',1,'test')",
+		"INSERT INTO channel_domains(channel_id,domain) VALUES(1,'site.test')",
+	} {
+		if _, err := a.db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := a.db.Exec("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,1,datetime('now','+1 day'))", sha256Hex("test-session")); err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(map[string]any{"name": "Rinser", "sharePercent": 70, "effectiveFrom": "2026-11-16", "gamAccountIds": []int64{1}})
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/channels", strings.NewReader(string(payload)))
+	request.Header.Set("Authorization", "Bearer test-session")
+	response := httptest.NewRecorder()
+	a.routes().ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var newID int64
+	if err := a.db.QueryRow("SELECT id FROM channels WHERE name='Rinser' AND share_percent=70 AND internal_only=1").Scan(&newID); err != nil {
+		t.Fatal(err)
+	}
+	if !a.exists("SELECT 1 FROM soap_accounts WHERE id=1 AND rest_channel_id=? AND channel_locked_to_account=1", newID) {
+		t.Fatal("account not linked")
+	}
+	if !a.exists("SELECT 1 FROM revenue_facts WHERE report_date='2026-11-15' AND channel_id=1") || !a.exists("SELECT 1 FROM revenue_facts WHERE report_date='2026-11-16' AND channel_id=?", newID) {
+		t.Fatal("fact ownership dates wrong")
+	}
+	if !a.exists("SELECT 1 FROM link_metadata WHERE network_code='123456' AND domain='site.test' AND channel_id=?", newID) {
+		t.Fatal("link metadata not linked")
+	}
+	if !a.exists("SELECT 1 FROM gam_channel_assignments WHERE soap_account_id=1 AND channel_id=1 AND effective_from='1900-01-01'") || !a.exists("SELECT 1 FROM gam_channel_assignments WHERE soap_account_id=1 AND channel_id=? AND effective_from='2026-11-16'", newID) {
+		t.Fatal("history missing")
+	}
+	if a.exists("SELECT 1 FROM dashboard_rest_daily WHERE channel_id=1 AND report_date='2026-11-16'") || !a.exists("SELECT 1 FROM dashboard_rest_daily WHERE channel_id=? AND report_date='2026-11-16'", newID) {
+		t.Fatal("dashboard not refreshed")
+	}
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/admin/channels", nil)
+	listRequest.Header.Set("Authorization", "Bearer test-session")
+	listResponse := httptest.NewRecorder()
+	a.routes().ServeHTTP(listResponse, listRequest)
+	if listResponse.Code != http.StatusOK || !strings.Contains(listResponse.Body.String(), "gamAccountIds") || !strings.Contains(listResponse.Body.String(), "[1]") {
+		t.Fatalf("channel account listing missing: status=%d body=%s", listResponse.Code, listResponse.Body.String())
+	}
+}

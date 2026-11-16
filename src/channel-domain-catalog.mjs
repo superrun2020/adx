@@ -1,6 +1,10 @@
 import { catalogLinksWithManual } from './link-catalog.mjs';
 
 export function resolveChannelAssignment(account, metadata, fallback, channelNames = new Map()) {
+  if (Number(account?.channelLocked) && Number(account?.channelId)) {
+    const channelId = Number(account.channelId);
+    return { channelId, channelName: channelNames.get(channelId) || '', assignmentSource: '账号关联' };
+  }
   const channelId = Number(metadata?.channelId || fallback?.channelId || account?.channelId || 0);
   if (!channelId) return { channelId: null, channelName: '', assignmentSource: '' };
   const assignmentSource = metadata?.channelId ? '链接管理' : fallback?.channelId ? '域名归属' : '账号同步映射';

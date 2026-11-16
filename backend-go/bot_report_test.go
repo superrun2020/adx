@@ -10,8 +10,8 @@ import (
 func TestBotReportUsesRealRestRevenueAndSendsOnce(t *testing.T) {
 	a := testApp(t)
 	for _, statement := range []string{
-		"INSERT INTO soap_accounts(id,name,network_code,credential_ciphertext,created_by,status,rest_sync_enabled,rest_network_timezone) VALUES(1,'Shanghai GAM','123','test','admin','active',1,'Asia/Shanghai')",
-		"INSERT INTO soap_accounts(id,name,network_code,credential_ciphertext,created_by,status,rest_sync_enabled,rest_network_timezone) VALUES(2,'Kiritimati GAM','456','test','admin','active',1,'Pacific/Kiritimati')",
+		"INSERT INTO soap_accounts(id,name,network_code,credential_ciphertext,created_by,status,rest_sync_enabled,rest_network_timezone,rest_channel_id) VALUES(1,'Shanghai GAM','123','test','admin','active',1,'Asia/Shanghai',1)",
+		"INSERT INTO soap_accounts(id,name,network_code,credential_ciphertext,created_by,status,rest_sync_enabled,rest_network_timezone,rest_channel_id) VALUES(2,'Kiritimati GAM','456','test','admin','active',1,'Pacific/Kiritimati',1)",
 		"INSERT INTO channels(id,name,email,share_percent) VALUES(1,'Test','channel@example.test',50)",
 		"INSERT INTO channel_share_versions(channel_id,share_percent,effective_from,created_by) VALUES(1,50,'1900-01-01','test')",
 		"INSERT INTO upstream_accounts(id,account_key,name,share_percent,status) VALUES(1,'acct','Account',80,'active')",
@@ -43,6 +43,9 @@ func TestBotReportUsesRealRestRevenueAndSendsOnce(t *testing.T) {
 	accounts := preview["accounts"].([]map[string]any)
 	if accounts[0]["date"] != "2026-11-10" || accounts[1]["date"] != "2026-11-11" {
 		t.Fatalf("account dates=%+v", accounts)
+	}
+	if accounts[0]["channelName"] != "Test" {
+		t.Fatalf("channel=%+v", accounts[0])
 	}
 	if date, due := botReportDate(before); due || date != "" {
 		t.Fatalf("before schedule: %s %v", date, due)
