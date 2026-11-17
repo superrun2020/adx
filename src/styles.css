@@ -94,4 +94,5 @@
 .report-detail-table td.report-detail-metric{padding-right:24px!important;text-align:right}
 .report-detail-table .report-detail-metric .numeric-sort-header{position:relative;justify-content:flex-end;padding-right:18px}
 .report-detail-table .report-detail-metric .numeric-sort-actions{position:absolute;right:0;top:50%;transform:translateY(-50%)}
+.report-explorer .report-metric-value{display:inline-block;min-width:7ch;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 @media(max-width:850px){.report-detail-table td.report-detail-metric{padding-right:21px!important}}

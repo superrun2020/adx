@@ -49,7 +49,8 @@ function metricColumns(selected, admin, sort, onSort) {
     const render = key.toLowerCase().includes('rate') || key.endsWith('Percent') ? pct
       : ['revenue','ecpm','grossProfit'].some(part => key.toLowerCase().includes(part.toLowerCase())) ? money : number;
     return { title:<NumericSortHeader label={label} direction={sort?.key === key ? sort.direction : ''}
-      onSort={direction => onSort({ key, direction })}/>, dataIndex:key, width:125, align:'right', render };
+      onSort={direction => onSort({ key, direction })}/>, dataIndex:key, width:125, align:'right',
+      className:'report-detail-metric', render:value => <span className="report-metric-value">{render(value)}</span> };
   });
 }
 
