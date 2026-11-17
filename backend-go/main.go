@@ -20,6 +20,7 @@ import (
 )
 
 type app struct {
+	catalogCache   catalogReadCache
 	db             *sql.DB
 	root           string
 	adminHost      string
@@ -178,8 +179,8 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("POST /api/admin/gam-accounts/{id}/ad-units/batch-archive", a.auth("admin", gamRoute(a.archiveGamAdUnits)))
 	mux.HandleFunc("POST /api/admin/gam-accounts/{id}/ad-units/batch-activate", a.auth("admin", gamRoute(a.activateGamAdUnits)))
 	mux.HandleFunc("GET /api/admin/gam-accounts/{id}/ad-unit-sizes", a.auth("admin", gamRoute(a.listGamAccountAdUnitSizes)))
-	mux.HandleFunc("GET /api/admin/gam-accounts/{id}/sites", a.auth("admin", gamRoute(a.listGamAccountSites)))
-	mux.HandleFunc("GET /api/admin/gam-accounts/{id}/site-domains", a.auth("admin", gamRoute(a.gamAccountSiteDomains)))
+	mux.HandleFunc("GET /api/admin/gam-accounts/{id}/sites", a.auth("admin", gamRoute(a.cachedCatalog(a.listGamAccountSites))))
+	mux.HandleFunc("GET /api/admin/gam-accounts/{id}/site-domains", a.auth("admin", gamRoute(a.cachedCatalog(a.gamAccountSiteDomains))))
 	mux.HandleFunc("GET /api/admin/link-metadata", a.auth("admin", gamRoute(a.listLinkMetadata)))
 	mux.HandleFunc("POST /api/admin/link-metadata", a.auth("admin", gamRoute(a.createLinkMetadata)))
 	mux.HandleFunc("PUT /api/admin/link-metadata", a.auth("admin", gamRoute(a.updateLinkMetadata)))

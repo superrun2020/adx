@@ -5,7 +5,8 @@ import { catalogLinksWithManual, hostname } from './link-catalog.mjs';
 import { resolveChannelAssignment } from './channel-domain-catalog.mjs';
 
 const { Title, Text } = Typography;
-let lastSnapshot = null;
+import { readCached, rememberRead } from './readCache.js';
+const snapshotPath = '/ui/link-catalog';
 
 async function api(path, signal, options = {}) {
   const response = await fetch(path, { credentials: 'include', signal, ...options });
@@ -14,13 +15,13 @@ async function api(path, signal, options = {}) {
   return payload;
 }
 
-async function allSites(accountId, signal) {
+async function allSites(accountId, signal, force = false) {
   const sites = [], seen = new Set();
   let pageToken = '';
   do {
     if (seen.has(pageToken)) throw new Error('GAM 站点分页重复');
     seen.add(pageToken);
-    const query = pageToken ? '?pageToken=' + encodeURIComponent(pageToken) : '';
+    const query = '?' + new URLSearchParams({ ...(pageToken ? {pageToken} : {}), ...(force ? {refresh:'1'} : {}) });
     const result = await api('/api/admin/gam-accounts/' + accountId + '/sites' + query, signal);
     sites.push(...(result.items || []));
     pageToken = result.nextPageToken || '';
@@ -60,7 +61,8 @@ const errors = {
   invalid_gam_site_domain: 'GAM 站点已变化，请刷新列表后重试'
 };
 
-export default function LinkManager() {
+export default function LinkManager({ user }) {
+  const lastSnapshot = readCached(user, snapshotPath)?.data?.snapshot;
   const [accounts, setAccounts] = useState(lastSnapshot?.accounts || []);
   const [rows, setRows] = useState(lastSnapshot?.rows || []);
   const [channels, setChannels] = useState(lastSnapshot?.channels || []);
@@ -76,7 +78,8 @@ export default function LinkManager() {
   const [form] = Form.useForm();
   const controller = useRef(null);
 
-  const load = async () => {
+  const load = async (force = false) => {
+    force = force === true;
     controller.current?.abort();
     const current = new AbortController();
     controller.current = current;
@@ -91,7 +94,14 @@ export default function LinkManager() {
       setAccounts(allAccounts);
       setChannels(channelOptions);
       setProgress([0, allAccounts.length]);
+      const previous = readCached(user, snapshotPath)?.data?.snapshot;
       const sitesByAccount = {}, reportedByAccount = {}, failures = [];
+      for (const account of allAccounts) {
+        const prior = previous?.accounts?.find(item => item.id === account.id);
+        if (account.status !== 'active' || prior?.networkCode !== account.networkCode) continue;
+        if (previous?.sites?.[account.id]) sitesByAccount[account.id] = previous.sites[account.id];
+        if (previous?.reported?.[account.id]) reportedByAccount[account.id] = previous.reported[account.id];
+      }
       let next = 0, done = 0;
       const publish = () => {
         if (current.signal.aborted) return;
@@ -106,8 +116,8 @@ export default function LinkManager() {
           if (account.status !== 'active') failures.push(account.name + '：账号未连接，无法读取 GAM Sites');
           else {
             const [sites, reported] = await Promise.allSettled([
-              allSites(account.id, current.signal),
-              api('/api/admin/gam-accounts/' + account.id + '/site-domains', current.signal)
+              allSites(account.id, current.signal, force),
+              api('/api/admin/gam-accounts/' + account.id + '/site-domains' + (force ? '?refresh=1' : ''), current.signal)
             ]);
             if (sites.status === 'fulfilled') sitesByAccount[account.id] = sites.value;
             else if (!current.signal.aborted) failures.push(account.name + '：GAM Sites 读取失败（' + String(sites.reason?.message || sites.reason) + '）');
@@ -121,8 +131,9 @@ export default function LinkManager() {
       await Promise.all(Array.from({ length: Math.min(3, allAccounts.length) }, worker));
       if (!current.signal.aborted) {
         const stamp = new Date().toLocaleString('zh-CN');
-        lastSnapshot = { accounts: allAccounts, rows: buildRows(allAccounts, sitesByAccount, reportedByAccount, metadata, assignments, channelOptions),
+        const snapshot = { sites: sitesByAccount, reported: reportedByAccount, accounts: allAccounts, rows: buildRows(allAccounts, sitesByAccount, reportedByAccount, metadata, assignments, channelOptions),
           channels: channelOptions, issues: [...failures], lastLoaded: stamp };
+        rememberRead(user, snapshotPath, {ok:true, snapshot});
         setLastLoaded(stamp);
       }
     } catch (error) {
@@ -191,7 +202,7 @@ export default function LinkManager() {
 
   return <Space direction="vertical" size={16} className="page-stack link-manager">
     <div className="page-heading"><div><Title level={2}>链接管理</Title><Text type="secondary">统一管理 Ad Manager 账号的主域名、子域名及链接信息</Text></div>
-      <Space><Button icon={<ReloadOutlined/>} loading={busy} onClick={load}>刷新 GAM 链接</Button>
+      <Space><Button icon={<ReloadOutlined/>} loading={busy} onClick={() => load(true)}>刷新 GAM 链接</Button>
         <Button type="primary" icon={<PlusOutlined/>} onClick={openCreate}>新增链接</Button></Space></div>
     <Alert type="info" showIcon message="GAM 网站与报表子域名"
       description="GAM Sites 中登记的网站直接显示；对应账号 REST 报表 SITE 维度出现的子域名也会列出，并标为“GAM 报表”。报表子域名不代表已在 GAM Sites 单独过审；新增链接只记录到本站目录。"/>
