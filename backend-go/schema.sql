@@ -45,6 +45,11 @@ CREATE TABLE IF NOT EXISTS gam_channel_assignments (
   FOREIGN KEY(soap_account_id) REFERENCES soap_accounts(id) ON DELETE CASCADE,
   FOREIGN KEY(channel_id) REFERENCES channels(id)
 );
+CREATE TABLE IF NOT EXISTS gam_domain_channel_assignments (
+  root_domain TEXT NOT NULL COLLATE NOCASE, channel_id INTEGER NOT NULL, effective_from TEXT NOT NULL,
+  created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(root_domain,effective_from), FOREIGN KEY(channel_id) REFERENCES channels(id)
+);
 CREATE TABLE IF NOT EXISTS dashboard_daily (report_date TEXT NOT NULL, channel_id INTEGER NOT NULL, domain TEXT NOT NULL, requests INTEGER NOT NULL, matched_requests INTEGER NOT NULL, impressions INTEGER NOT NULL, clicks INTEGER NOT NULL, revenue REAL NOT NULL, settled_revenue REAL NOT NULL, PRIMARY KEY(report_date,channel_id,domain)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS dashboard_rest_daily (report_date TEXT NOT NULL, channel_id INTEGER NOT NULL, network_code TEXT NOT NULL, domain TEXT NOT NULL, requests INTEGER NOT NULL, matched_requests INTEGER NOT NULL, impressions INTEGER NOT NULL, clicks INTEGER NOT NULL, revenue REAL NOT NULL, settled_revenue REAL NOT NULL, PRIMARY KEY(report_date,channel_id,network_code,domain)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS gam_ad_unit_creations (
@@ -193,3 +198,4 @@ CREATE INDEX IF NOT EXISTS idx_revenue_domain ON revenue_facts(domain, report_da
 CREATE INDEX IF NOT EXISTS idx_revenue_source_domain ON revenue_facts(source_file, domain);
 CREATE INDEX IF NOT EXISTS idx_revenue_scope_date ON revenue_facts(channel_id, report_date);
 CREATE INDEX IF NOT EXISTS idx_gam_channel_assignments_date ON gam_channel_assignments(soap_account_id,effective_from DESC);
+CREATE INDEX IF NOT EXISTS idx_gam_domain_channel_assignments_date ON gam_domain_channel_assignments(effective_from DESC);

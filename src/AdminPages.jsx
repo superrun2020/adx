@@ -152,7 +152,7 @@ function Channels({ user }) {
         api('/api/admin/gam-accounts',{signal:controller.signal}),
         api('/api/admin/link-metadata',{signal:controller.signal})
       ]);
-      const accounts=gam.items || [], metadata=links.items || [], assignments=links.assignments || [];
+      const accounts=gam.items || [], metadata=links.items || [], assignments=links.assignments || [], domainAssignments=links.domainAssignments || [];
       setGamAccounts(accounts);
       const previous=cacheKey ? channelDomainCache.get(cacheKey) : null;
       const previousAccounts=new Map((previous?.accounts || []).map(account=>[account.id,account]));
@@ -165,9 +165,9 @@ function Channels({ user }) {
       let next=0;
       const publish=()=>{
         if(controller.signal.aborted)return;
-        const domains=channelGAMDomains(accounts,sites,reported,metadata,assignments);
+        const domains=channelGAMDomains(accounts,sites,reported,metadata,assignments,domainAssignments);
         setDomainsByChannel(domains); setDomainIssues([...issues]);
-        if(cacheKey)channelDomainCache.set(cacheKey,{accounts,sites:{...sites},reported:{...reported},metadata,assignments,domains});
+        if(cacheKey)channelDomainCache.set(cacheKey,{accounts,sites:{...sites},reported:{...reported},metadata,assignments,domainAssignments,domains});
       };
       publish();
       const activeAccounts=accounts.filter(account=>account.status==='active');

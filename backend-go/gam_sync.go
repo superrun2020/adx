@@ -190,9 +190,14 @@ func (a *app) executeGam(ctx context.Context, account map[string]any, start, end
 	if err != nil {
 		return nil, err
 	}
+	domainAssignments, err := a.gamDomainChannelAssignments(end)
+	if err != nil {
+		return nil, err
+	}
 	affected := map[int64]bool{channelID: true}
 	for _, fact := range facts {
-		assigned := channelForGamDate(assignments, importString(fact["reportDate"]))
+		date := importString(fact["reportDate"])
+		assigned := channelForGamDomainDate(domainAssignments, date, importString(fact["domain"]), channelForGamDate(assignments, date))
 		fact["channelId"] = assigned
 		affected[assigned] = true
 	}

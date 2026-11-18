@@ -64,16 +64,26 @@ export function resolveAdUnitDomain(unit, creation) {
     source: stored ? '本站创建记录' : codeDomain ? 'GAM 代码' : 'GAM 名称' };
 }
 
+export function domainMatchesTarget(domain, target) {
+  const host = siteDomain(domain), root = siteDomain(target);
+  return Boolean(host && root && (host === root || host.endsWith('.' + root)));
+}
+
+function matchesAnyTarget(domain, targets) {
+  return targets instanceof Set ? [...targets].some(root => domainMatchesTarget(domain, root))
+    : domainMatchesTarget(domain, targets);
+}
+
 export function archivableDomainUnit(unit, target, creation) {
   if (!unit?.parentAdUnit || !unit.accountEnabled || !['ACTIVE', 'INACTIVE'].includes(unit.status)) return false;
   const domain = resolveAdUnitDomain(unit, creation).domain;
-  return Boolean(domain) && (target instanceof Set ? target.has(domain) : domain === siteDomain(target));
+  return Boolean(domain) && matchesAnyTarget(domain, target);
 }
 
 export function activatableDomainUnit(unit, target, creation) {
   if (!unit?.parentAdUnit || !unit.accountEnabled || !['ARCHIVED', 'INACTIVE'].includes(unit.status)) return false;
   const domain = resolveAdUnitDomain(unit, creation).domain;
-  return Boolean(domain) && (target instanceof Set ? target.has(domain) : domain === siteDomain(target));
+  return Boolean(domain) && matchesAnyTarget(domain, target);
 }
 
 export function parseDomainLines(input) {

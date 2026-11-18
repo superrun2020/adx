@@ -3,7 +3,7 @@ import { Alert, Button, Card, Checkbox, Col, Collapse, DatePicker, Empty, Input,
 import { PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { batchUnitTemplates, belongsToSite, gamBrowserSizes, prepareGamUnitItems, siteDomain } from './gam-unit-plan.mjs';
-import { activatableDomainUnit, archivableDomainUnit, bulkUnitSignature, indexCreationRecords, parseDomainLines, resolveAdUnitDomain, scanGamUnits, unitActionBatches } from './gam-unit-domains.mjs';
+import { activatableDomainUnit, archivableDomainUnit, bulkUnitSignature, domainMatchesTarget, indexCreationRecords, parseDomainLines, resolveAdUnitDomain, scanGamUnits, unitActionBatches } from './gam-unit-domains.mjs';
 
 const { Text, Title } = Typography;
 const bannerSizes = ['320x50', '336x280', '250x250', '300x250'];
@@ -374,7 +374,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
       .map(row => ({ ...row, ...resolveAdUnitDomain(row,
         byResource.get(String(row.networkCode) + ':' + row.name)) }));
     const counts = Object.fromEntries(targets.map(domain => [domain, 0]));
-    for (const row of rows) counts[row.domain] += 1;
+    for (const row of rows) for (const target of targets) if (domainMatchesTarget(row.domain, target)) counts[target] += 1;
     return { action, targets, rows, counts, scanned: allUnits.length };
   };
   const openBulk = action => {
@@ -504,7 +504,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
       okButtonProps={{ danger: bulkAction === 'archive', disabled: !bulkPreview?.rows.length || bulkBusy || archiving || batchActivating }}>
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
         <Alert type="info" showIcon message="每行一个完整主域名或子域名，支持一次匹配多条"
-          description={'从所有可用 GAM 账号完整扫描' + (bulkAction === 'archive' ? '未归档' : '已归档或停用') + '广告单元，按本站创建记录或 GAM 代码/名称中的完整域名精确匹配。输入主域名只匹配该主域名的广告单元，不会自动包含子域名；无法确认归属的单元不会' + (bulkAction === 'archive' ? '归档' : '激活') + '；操作前会重新核对 GAM 状态。'}/>
+          description={'从所有可用 GAM 账号完整扫描' + (bulkAction === 'archive' ? '未归档' : '已归档或停用') + '广告单元，按本站创建记录或 GAM 代码/名称中的完整域名匹配。输入主域名会包含该主域名及所有子域名；无法确认归属的单元不会' + (bulkAction === 'archive' ? '归档' : '激活') + '；操作前会重新核对 GAM 状态。'}/>
         <Space align="start" wrap>
           <Input.TextArea style={{ width: 420 }} rows={5} placeholder={'每行一个完整域名，例如：\nexample.com\nnews.example.com'} value={bulkInput}
             onChange={event => { setBulkInput(event.target.value); setBulkPreview(null); setBulkError(''); }}

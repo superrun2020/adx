@@ -1,11 +1,21 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { channelGAMDomains, resolveChannelAssignment } from '../src/channel-domain-catalog.mjs';
+import { channelGAMDomains, matchingDomainAssignment, resolveChannelAssignment } from '../src/channel-domain-catalog.mjs';
 
 test('account-bound channels own every site despite older per-domain assignments', () => {
   const assigned = resolveChannelAssignment({ channelId: 2, channelLocked: 1 },
     { channelId: 1, channelName: 'Zhao' }, { channelId: 1, channelName: 'Zhao' }, new Map([[2, 'Rinser']]));
   assert.deepEqual(assigned, { channelId: 2, channelName: 'Rinser', assignmentSource: '账号关联' });
+});
+
+test('effective root-domain ownership overrides account lock for every child', () => {
+  const rules = [{ rootDomain: 'youxiglobal.xyz', channelId: 1, channelName: '赵飞', effectiveFrom: '2026-11-18' }];
+  assert.equal(matchingDomainAssignment('news.youxiglobal.xyz', rules, '2026-11-17'), undefined);
+  assert.equal(matchingDomainAssignment('news.youxiglobal.xyz', rules, '2026-11-18'), rules[0]);
+  assert.equal(matchingDomainAssignment('fake-youxiglobal.xyz', rules, '2026-11-18'), undefined);
+  const owner = resolveChannelAssignment({ channelId: 2, channelLocked: 1 }, null, null,
+    new Map([[1, '赵飞'], [2, 'Rinser']]), rules[0]);
+  assert.deepEqual(owner, { channelId: 1, channelName: '赵飞', assignmentSource: '域名专属归属' });
 });
 import { allowedAdminRequest } from '../server/admin-permissions.mjs';
 

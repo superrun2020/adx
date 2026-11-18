@@ -921,23 +921,49 @@ func (a *app) deliverRegressionAlerts(ctx context.Context, account map[string]an
 	if err != nil || !config.Enabled || config.Ciphertext == "" {
 		return
 	}
-	channelName := "未关联渠道"
-	windowChannel, err := a.gamChannelForDate(intMap(account, "id"), intMap(account, "rest_channel_id"), window.End)
+	accountID := intMap(account, "id")
+	windowChannel, err := a.gamChannelForDate(accountID, intMap(account, "rest_channel_id"), window.End)
 	if err != nil {
-		log.Printf("regression_channel_assignment_failed account=%d error=%v", intMap(account, "id"), err)
+		log.Printf("regression_channel_assignment_failed account=%d error=%v", accountID, err)
 		return
 	}
 	var currentChannel sql.NullInt64
-	if err := a.db.QueryRowContext(ctx, "SELECT rest_channel_id FROM soap_accounts WHERE id=?", intMap(account, "id")).Scan(&currentChannel); err != nil {
-		log.Printf("regression_current_channel_failed account=%d error=%v", intMap(account, "id"), err)
+	if err := a.db.QueryRowContext(ctx, "SELECT rest_channel_id FROM soap_accounts WHERE id=?", accountID).Scan(&currentChannel); err != nil {
+		log.Printf("regression_current_channel_failed account=%d error=%v", accountID, err)
 		return
 	}
-	if !currentChannel.Valid || windowChannel == 0 || windowChannel != currentChannel.Int64 {
-		for _, alert := range alerts {
-			if _, updateErr := a.db.ExecContext(ctx, "UPDATE regression_events SET alert_status='ownership_suppressed',alert_error='账号已转归其他渠道' WHERE id=? AND alert_status IN ('pending','failed')", alert.ID); updateErr != nil {
+	zone := importString(account["rest_network_timezone"])
+	location, zoneErr := time.LoadLocation(zone)
+	if zoneErr != nil {
+		location = time.UTC
+		zone = "UTC"
+	}
+	today := time.Now().In(location).Format("2006-01-02")
+	if today < window.End {
+		today = window.End
+	}
+	domainAssignments, err := a.gamDomainChannelAssignments(today)
+	if err != nil {
+		log.Printf("regression_domain_assignment_failed account=%d error=%v", accountID, err)
+		return
+	}
+	byChannel := map[int64][]regressionAlert{}
+	for _, alert := range alerts {
+		owner := channelForGamDomainDate(domainAssignments, window.End, alert.Domain, windowChannel)
+		currentOwner := channelForGamDomainDate(domainAssignments, today, alert.Domain, currentChannel.Int64)
+		if !currentChannel.Valid || owner == 0 || owner != currentOwner {
+			reason := "域名已转归其他渠道"
+			if !currentChannel.Valid || windowChannel != currentChannel.Int64 {
+				reason = "账号已转归其他渠道"
+			}
+			if _, updateErr := a.db.ExecContext(ctx, "UPDATE regression_events SET alert_status='ownership_suppressed',alert_error=? WHERE id=? AND alert_status IN ('pending','failed')", reason, alert.ID); updateErr != nil {
 				log.Printf("regression_owner_suppression_failed id=%d error=%v", alert.ID, updateErr)
 			}
+			continue
 		}
+		byChannel[owner] = append(byChannel[owner], alert)
+	}
+	if len(byChannel) == 0 {
 		return
 	}
 	credential, err := a.decryptCredential(config.Ciphertext)
@@ -946,39 +972,43 @@ func (a *app) deliverRegressionAlerts(ctx context.Context, account map[string]an
 		return
 	}
 	webhook, signingSecret := importString(credential["url"]), importString(credential["secret"])
-	if err := a.db.QueryRowContext(ctx, "SELECT name FROM channels WHERE id=?", windowChannel).Scan(&channelName); err != nil && err != sql.ErrNoRows {
-		log.Printf("regression_channel_lookup_failed account=%d error=%v", intMap(account, "id"), err)
-	}
-	zone := importString(account["rest_network_timezone"])
-	location, zoneErr := time.LoadLocation(zone)
-	if zoneErr != nil {
-		location = time.UTC
-		zone = "UTC"
-	}
 	sentAt := time.Now().In(location).Format("2006-01-02 15:04")
 	cadenceName := map[string]string{"day": "单日快照", "three_days": "近 3 天", "week": "近 7 天", "month": "近 30 天"}[window.Cadence]
-	for begin := 0; begin < len(alerts); begin += 20 {
-		end := begin + 20
-		if end > len(alerts) {
-			end = len(alerts)
+	channelIDs := make([]int64, 0, len(byChannel))
+	for channelID := range byChannel {
+		channelIDs = append(channelIDs, channelID)
+	}
+	sort.Slice(channelIDs, func(i, j int) bool { return channelIDs[i] < channelIDs[j] })
+	for _, channelID := range channelIDs {
+		channelName := "未关联渠道"
+		if err := a.db.QueryRowContext(ctx, "SELECT name FROM channels WHERE id=?", channelID).Scan(&channelName); err != nil && err != sql.ErrNoRows {
+			log.Printf("regression_channel_lookup_failed account=%d error=%v", accountID, err)
+			continue
 		}
-		batch := alerts[begin:end]
-		err = postFeishu(ctx, webhook, signingSecret, regressionAlertMessage(account, channelName, zone, sentAt, window, cadenceName, batch))
-		status, detail := "sent", ""
-		if err != nil {
-			status, detail = "failed", err.Error()
-			if len(detail) > 500 {
-				detail = detail[:500]
+		group := byChannel[channelID]
+		for begin := 0; begin < len(group); begin += 20 {
+			end := begin + 20
+			if end > len(group) {
+				end = len(group)
 			}
-		}
-		for _, alert := range batch {
-			_, updateErr := a.db.Exec("UPDATE regression_events SET alert_status=?,alert_error=?,notified_at=CASE WHEN ?='sent' THEN CURRENT_TIMESTAMP ELSE NULL END,send_attempts=send_attempts+1,last_attempt_at=CURRENT_TIMESTAMP WHERE id=?", status, detail, status, alert.ID)
-			if updateErr != nil {
-				log.Printf("regression_alert_status_failed id=%d error=%v", alert.ID, updateErr)
+			batch := group[begin:end]
+			err = postFeishu(ctx, webhook, signingSecret, regressionAlertMessage(account, channelName, zone, sentAt, window, cadenceName, batch))
+			status, detail := "sent", ""
+			if err != nil {
+				status, detail = "failed", err.Error()
+				if len(detail) > 500 {
+					detail = detail[:500]
+				}
 			}
-		}
-		if err != nil {
-			log.Printf("regression_feishu_failed account=%d cadence=%s error=%v", intMap(account, "id"), window.Cadence, err)
+			for _, alert := range batch {
+				_, updateErr := a.db.Exec("UPDATE regression_events SET alert_status=?,alert_error=?,notified_at=CASE WHEN ?='sent' THEN CURRENT_TIMESTAMP ELSE NULL END,send_attempts=send_attempts+1,last_attempt_at=CURRENT_TIMESTAMP WHERE id=?", status, detail, status, alert.ID)
+				if updateErr != nil {
+					log.Printf("regression_alert_status_failed id=%d error=%v", alert.ID, updateErr)
+				}
+			}
+			if err != nil {
+				log.Printf("regression_feishu_failed account=%d cadence=%s error=%v", accountID, window.Cadence, err)
+			}
 		}
 	}
 }

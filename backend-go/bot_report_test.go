@@ -74,3 +74,26 @@ func TestBotReportUsesRealRestRevenueAndSendsOnce(t *testing.T) {
 		t.Fatalf("delivery status=%s error=%v", status, err)
 	}
 }
+
+func TestBotReportNamesEachActualDomainChannel(t *testing.T) {
+	a := testApp(t)
+	for _, statement := range []string{
+		"INSERT INTO channels(id,name,email,share_percent) VALUES(1,'Zhao','zhao@example.test',70),(2,'Rinser','rinser@example.test',70)",
+		"INSERT INTO soap_accounts(id,name,network_code,credential_ciphertext,created_by,status,rest_sync_enabled,rest_network_timezone,rest_channel_id) VALUES(1,'GAM','123','test','admin','active',1,'Asia/Shanghai',2)",
+		"INSERT INTO upstream_accounts(id,account_key,name,share_percent,status) VALUES(1,'acct','Account',100,'active')",
+		"INSERT INTO revenue_facts(channel_id,report_date,url,domain,account,ad_unit,ad_unit_id,revenue,source_file) VALUES(1,'2026-11-18','https://news.youxiglobal.xyz','news.youxiglobal.xyz','acct','unit','1',10,'gam-rest:123:today'),(2,'2026-11-18','https://other.test','other.test','acct','unit','2',20,'gam-rest:123:today')",
+	} {
+		if _, err := a.db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Date(2026, 11, 18, 14, 0, 0, 0, time.UTC)
+	totals, err := a.botReportTotalsAt(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accounts := totals["accounts"].([]map[string]any)
+	if len(accounts) != 2 || accounts[0]["channelName"] != "Zhao" || accounts[1]["channelName"] != "Rinser" {
+		t.Fatalf("channel split=%+v", accounts)
+	}
+}

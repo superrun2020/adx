@@ -63,6 +63,58 @@ func TestGamChannelAssignmentsRespectCutoverDate(t *testing.T) {
 	}
 }
 
+func TestGamDomainAssignmentIncludesChildrenAndRespectsDate(t *testing.T) {
+	assignments := []gamDomainChannelAssignment{
+		{RootDomain: "youxiglobal.xyz", Date: "2026-11-18", ChannelID: 1},
+		{RootDomain: "news.youxiglobal.xyz", Date: "2026-11-19", ChannelID: 3},
+	}
+	for _, item := range []struct {
+		date, domain string
+		want         int64
+	}{
+		{"2026-11-17", "news.youxiglobal.xyz", 2},
+		{"2026-11-18", "youxiglobal.xyz", 1},
+		{"2026-11-18", "deep.news.youxiglobal.xyz", 1},
+		{"2026-11-19", "deep.news.youxiglobal.xyz", 3},
+		{"2026-11-19", "fake-youxiglobal.xyz", 2},
+		{"2026-11-19", "youxiglobal.xyz.evil.net", 2},
+	} {
+		if got := channelForGamDomainDate(assignments, item.date, item.domain, 2); got != item.want {
+			t.Errorf("%s %s: channel=%d want=%d", item.date, item.domain, got, item.want)
+		}
+	}
+}
+
+func TestAccountReassignmentPreservesDomainOwner(t *testing.T) {
+	a := testApp(t)
+	for _, statement := range []string{
+		"INSERT INTO channels(id,name,email) VALUES(1,'Zhao','zhao@example.test'),(2,'Rinser','rinser@example.test'),(3,'Next','next@example.test')",
+		"INSERT INTO soap_accounts(id,name,network_code,credential_ciphertext,status,enabled,rest_report_name,rest_channel_id,rest_upstream_account_id,created_by) VALUES(1,'GAM','123456','cipher','active',1,'networks/123456/reports/11',2,1,'test')",
+		"INSERT INTO upstream_accounts(id,account_key,name,soap_account_id,status) VALUES(1,'upstream','Upstream',1,'active')",
+		"INSERT INTO gam_domain_channel_assignments(root_domain,channel_id,effective_from,created_by) VALUES('youxiglobal.xyz',1,'2026-11-18','test')",
+		"INSERT INTO revenue_facts(channel_id,report_date,url,domain,account,source_file,revenue) VALUES(1,'2026-11-18','https://news.youxiglobal.xyz','news.youxiglobal.xyz','upstream','gam-rest:123456:today',10),(2,'2026-11-18','https://other.test','other.test','upstream','gam-rest:123456:today',20)",
+	} {
+		if _, err := a.db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tx, err := a.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := assignChannelAccounts(tx, 3, []int64{1}, "2026-11-18", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if !a.exists("SELECT 1 FROM revenue_facts WHERE domain='news.youxiglobal.xyz' AND channel_id=1") ||
+		!a.exists("SELECT 1 FROM revenue_facts WHERE domain='other.test' AND channel_id=3") {
+		t.Fatal("account reassignment changed domain-specific ownership")
+	}
+}
+
 func TestChannelCreationBindsAccountLinksAndCurrentFacts(t *testing.T) {
 	a := testApp(t)
 	for _, statement := range []string{

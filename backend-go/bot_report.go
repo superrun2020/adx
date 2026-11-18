@@ -59,6 +59,13 @@ func (a *app) botReportAccountTotals(date, source string) (map[string]any, error
 		"WHERE rf.report_date=? AND rf.source_file LIKE ?", date, source)
 }
 
+func (a *app) botReportAccountChannelTotals(date, source string) ([]map[string]any, error) {
+	return queryMaps(a.db, "SELECT rf.channel_id channelId,COUNT(*) rows,COALESCE(SUM(rf.revenue),0) grossRevenue,"+
+		"COALESCE(SUM(rf.revenue*("+upstreamShareSQL("rf")+")/100.0),0) upstreamRevenue,"+
+		"COALESCE(SUM("+settledRevenueSQL("rf")+"),0) channelRevenue FROM revenue_facts rf "+
+		"WHERE rf.report_date=? AND rf.source_file LIKE ? GROUP BY rf.channel_id ORDER BY rf.channel_id", date, source)
+}
+
 func (a *app) botReportTotalsAt(now time.Time) (map[string]any, error) {
 	accounts, err := queryMaps(a.db, "SELECT id,name,network_code,rest_channel_id,rest_network_timezone FROM soap_accounts WHERE status='active' AND rest_sync_enabled=1 AND enabled=1 ORDER BY id")
 	if err != nil {
@@ -80,12 +87,9 @@ func (a *app) botReportTotalsAt(now time.Time) (map[string]any, error) {
 		if channelErr != nil {
 			return nil, channelErr
 		}
-		channelName := "未关联渠道"
-		if err := a.db.QueryRow("SELECT name FROM channels WHERE id=?", channelID).Scan(&channelName); err != nil && err != sql.ErrNoRows {
-			return nil, err
-		}
 		code := importString(account["network_code"])
-		row, queryErr := a.botReportAccountTotals(date, "gam-rest:"+code+":%")
+		source := "gam-rest:" + code + ":%"
+		row, queryErr := a.botReportAccountTotals(date, source)
 		if queryErr != nil {
 			return nil, queryErr
 		}
@@ -95,10 +99,24 @@ func (a *app) botReportTotalsAt(now time.Time) (map[string]any, error) {
 		if last := importString(row["lastImport"]); last > importString(result["lastImport"]) {
 			result["lastImport"] = last
 		}
-		items = append(items, map[string]any{"name": account["name"], "networkCode": code, "channelName": channelName,
-			"timeZone": zone, "date": date, "rows": numberValue(row["rows"]),
-			"revenue": numberValue(row["grossRevenue"]),
-			"profit":  numberValue(row["upstreamRevenue"])*0.85 - numberValue(row["channelRevenue"])})
+		channelRows, queryErr := a.botReportAccountChannelTotals(date, source)
+		if queryErr != nil {
+			return nil, queryErr
+		}
+		if len(channelRows) == 0 {
+			channelRows = []map[string]any{{"channelId": channelID}}
+		}
+		for _, channelRow := range channelRows {
+			owner := intMap(channelRow, "channelId")
+			channelName := "未关联渠道"
+			if err := a.db.QueryRow("SELECT name FROM channels WHERE id=?", owner).Scan(&channelName); err != nil && err != sql.ErrNoRows {
+				return nil, err
+			}
+			items = append(items, map[string]any{"name": account["name"], "networkCode": code, "channelName": channelName,
+				"timeZone": zone, "date": date, "rows": numberValue(channelRow["rows"]),
+				"revenue": numberValue(channelRow["grossRevenue"]),
+				"profit":  numberValue(channelRow["upstreamRevenue"])*0.85 - numberValue(channelRow["channelRevenue"])})
+		}
 	}
 	result["accounts"] = items
 	return result, nil

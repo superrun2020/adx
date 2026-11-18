@@ -25,7 +25,11 @@ func (a *app) listLinkMetadata(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "items": items, "channels": channels, "assignments": assignments})
+	domainAssignments, err := queryMaps(a.db, "SELECT d.root_domain rootDomain,d.channel_id channelId,c.name channelName,d.effective_from effectiveFrom FROM gam_domain_channel_assignments d JOIN channels c ON c.id=d.channel_id WHERE c.status='active' ORDER BY d.root_domain,d.effective_from")
+	if err != nil {
+		return err
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "items": items, "channels": channels, "assignments": assignments, "domainAssignments": domainAssignments})
 	return nil
 }
 

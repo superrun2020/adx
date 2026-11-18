@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Card, Col, Empty, Form, Input, Modal, Row, Select, Space, Statistic, Table, Tag, Typography, message } from 'antd';
 import { EditOutlined, LinkOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import { catalogLinksWithManual, hostname } from './link-catalog.mjs';
-import { resolveChannelAssignment } from './channel-domain-catalog.mjs';
+import { matchingDomainAssignment, resolveChannelAssignment } from './channel-domain-catalog.mjs';
 
 const { Title, Text } = Typography;
 import { readCached, rememberRead } from './readCache.js';
@@ -37,7 +37,7 @@ function monitors(value) {
   catch { return []; }
 }
 
-function buildRows(accounts, sitesByAccount, reportedByAccount, metadata, assignments, channels = []) {
+function buildRows(accounts, sitesByAccount, reportedByAccount, metadata, assignments, channels = [], domainAssignments = []) {
   const byKey = new Map(metadata.map(item => [item.networkCode + ':' + item.domain, item]));
   const assigned = new Map(assignments.map(item => [item.domain, item]));
   const channelNames = new Map(channels.map(item => [Number(item.id), item.name]));
@@ -46,7 +46,8 @@ function buildRows(accounts, sitesByAccount, reportedByAccount, metadata, assign
     return catalogLinksWithManual(account, sitesByAccount[account.id] || [], local.map(item => item.domain),
       reportedByAccount[account.id] || []).map(row => {
       const meta = byKey.get(row.networkCode + ':' + row.domain), fallback = assigned.get(row.domain);
-      const channel = resolveChannelAssignment(account, meta, fallback, channelNames);
+      const override = matchingDomainAssignment(row.domain, domainAssignments);
+      const channel = resolveChannelAssignment(account, meta, fallback, channelNames, override);
       return { ...row, isSaved: Boolean(meta), monitorDomains: monitors(meta?.monitorDomainsJson),
         ...channel, notes: meta?.notes || '' };
     });
@@ -90,6 +91,7 @@ export default function LinkManager({ user }) {
         api('/api/admin/gam-accounts', current.signal), api('/api/admin/link-metadata', current.signal)
       ]);
       const allAccounts = result.items || [], metadata = meta.items || [], assignments = meta.assignments || [];
+      const domainAssignments = meta.domainAssignments || [];
       const channelOptions = meta.channels || [];
       setAccounts(allAccounts);
       setChannels(channelOptions);
@@ -106,7 +108,7 @@ export default function LinkManager({ user }) {
       const publish = () => {
         if (current.signal.aborted) return;
         setProgress([done, allAccounts.length]);
-        setRows(buildRows(allAccounts, sitesByAccount, reportedByAccount, metadata, assignments, channelOptions));
+        setRows(buildRows(allAccounts, sitesByAccount, reportedByAccount, metadata, assignments, channelOptions, domainAssignments));
         setIssues([...failures]);
       };
       publish();
@@ -131,7 +133,7 @@ export default function LinkManager({ user }) {
       await Promise.all(Array.from({ length: Math.min(3, allAccounts.length) }, worker));
       if (!current.signal.aborted) {
         const stamp = new Date().toLocaleString('zh-CN');
-        const snapshot = { sites: sitesByAccount, reported: reportedByAccount, accounts: allAccounts, rows: buildRows(allAccounts, sitesByAccount, reportedByAccount, metadata, assignments, channelOptions),
+        const snapshot = { sites: sitesByAccount, reported: reportedByAccount, accounts: allAccounts, rows: buildRows(allAccounts, sitesByAccount, reportedByAccount, metadata, assignments, channelOptions, domainAssignments),
           channels: channelOptions, issues: [...failures], lastLoaded: stamp };
         rememberRead(user, snapshotPath, {ok:true, snapshot});
         setLastLoaded(stamp);

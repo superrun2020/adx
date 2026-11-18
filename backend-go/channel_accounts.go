@@ -99,14 +99,15 @@ func assignChannelAccounts(tx *sql.Tx, channelID int64, ids []int64, effective, 
 			var channels int
 			var lastDate sql.NullString
 			prefix := "gam-rest:" + network + ":%"
-			if err = tx.QueryRow("SELECT COUNT(DISTINCT channel_id),MAX(report_date) FROM revenue_facts WHERE account=? AND report_date>=? AND source_file LIKE ?", accountKey, effective, prefix).Scan(&channels, &lastDate); err != nil {
+			unassignedDomain := "NOT EXISTS (SELECT 1 FROM gam_domain_channel_assignments d WHERE d.effective_from<=revenue_facts.report_date AND (lower(revenue_facts.domain)=lower(d.root_domain) OR lower(revenue_facts.domain) LIKE '%.'||lower(d.root_domain)))"
+			if err = tx.QueryRow("SELECT COUNT(DISTINCT channel_id),MAX(report_date) FROM revenue_facts WHERE account=? AND report_date>=? AND source_file LIKE ? AND "+unassignedDomain, accountKey, effective, prefix).Scan(&channels, &lastDate); err != nil {
 				return nil, err
 			}
 			if channels > 1 {
 				return nil, errConflictingChannelFacts
 			}
 			if lastDate.Valid {
-				if _, err = tx.Exec("UPDATE revenue_facts SET channel_id=? WHERE account=? AND report_date>=? AND source_file LIKE ?", channelID, accountKey, effective, prefix); err != nil {
+				if _, err = tx.Exec("UPDATE revenue_facts SET channel_id=? WHERE account=? AND report_date>=? AND source_file LIKE ? AND "+unassignedDomain, channelID, accountKey, effective, prefix); err != nil {
 					return nil, err
 				}
 				if oldChannel.Valid && lastDate.String > affected[oldChannel.Int64] {
