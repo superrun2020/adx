@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { domainInUnit, domainMatchesTarget, indexCreationRecords, mainDomainOf, resolveAdUnitDomain,
-  activatableDomainUnit, archivableDomainUnit, bulkUnitSignature, parseDomainLines,
+  activatableDomainUnit, archivableDomainUnit, bulkUnitSignature, filterGamUnits, parseDomainLines,
   scanGamUnits, unitActionBatches } from '../src/gam-unit-domains.mjs';
 
 const unit = (code, name = code, status = 'ACTIVE') => ({
@@ -34,6 +34,22 @@ test('matches a main domain and its children without including lookalike hosts',
   assert.equal(archivableDomainUnit({ ...unit('at_c1_aut_lb-news.youxiglobal.xyz_inst'), parentAdUnit: '' }, target), false);
   assert.equal(archivableDomainUnit(unit('at_c1_aut_lb-news.youxiglobal.xyz_inst'), new Set([target, 'finance.youxiglobal.xyz'])), true);
   assert.equal(archivableDomainUnit(unit('at_c1_aut_lb-news.youxiglobal.xyz_inst'), new Set(['youxiglobal.xyz'])), true);
+});
+
+test('domain inventory keeps archived units and searches both name and code', () => {
+  const rows = [
+    { ...unit('261104-news.example.com-banner1'), domain: 'news.example.com' },
+    { ...unit('261104-finance.example.com-INT', 'Other label', 'ARCHIVED'), domain: 'finance.example.com' },
+    { ...unit('261104-example.com-ANC', 'Anchor', 'INACTIVE'), domain: 'example.com' },
+    { ...unit('261104-fakeexample.com-banner1'), domain: 'fakeexample.com' },
+    { ...unit('custom', 'Unknown'), domain: '' }
+  ];
+  assert.deepEqual(filterGamUnits(rows, { domain: 'example.com' }).map(row => row.status),
+    ['ACTIVE', 'ARCHIVED', 'INACTIVE']);
+  assert.deepEqual(filterGamUnits(rows, { domain: 'finance.example.com' }).map(row => row.status), ['ARCHIVED']);
+  assert.deepEqual(filterGamUnits(rows, { domain: 'example.com', name: '-int' }).map(row => row.displayName), ['Other label']);
+  assert.deepEqual(filterGamUnits(rows, { domain: 'example.com', status: 'ARCHIVED' }).map(row => row.adUnitCode),
+    ['261104-finance.example.com-INT']);
 });
 
 test('bulk activation matches exact main or child domains that GAM can reactivate', () => {

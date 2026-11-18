@@ -69,6 +69,15 @@ export function domainMatchesTarget(domain, target) {
   return Boolean(host && root && (host === root || host.endsWith('.' + root)));
 }
 
+export function filterGamUnits(units, { domain = '', name = '', status = '' } = {}) {
+  const target = siteDomain(domain);
+  const term = String(name).trim().toLowerCase();
+  return units.filter(unit => (!target || domainMatchesTarget(unit.domain, target)) &&
+    (!status || unit.status === status) &&
+    (!term || String(unit.displayName || '').toLowerCase().includes(term) ||
+      String(unit.adUnitCode || '').toLowerCase().includes(term)));
+}
+
 function matchesAnyTarget(domain, targets) {
   return targets instanceof Set ? [...targets].some(root => domainMatchesTarget(domain, root))
     : domainMatchesTarget(domain, targets);

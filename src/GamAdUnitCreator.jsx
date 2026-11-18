@@ -3,7 +3,7 @@ import { Alert, Button, Card, Checkbox, Col, Collapse, DatePicker, Empty, Input,
 import { PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { batchUnitTemplates, belongsToSite, gamBrowserSizes, prepareGamUnitItems, siteDomain } from './gam-unit-plan.mjs';
-import { activatableDomainUnit, archivableDomainUnit, bulkUnitSignature, domainMatchesTarget, indexCreationRecords, parseDomainLines, resolveAdUnitDomain, scanGamUnits, unitActionBatches } from './gam-unit-domains.mjs';
+import { activatableDomainUnit, archivableDomainUnit, bulkUnitSignature, domainMatchesTarget, filterGamUnits, indexCreationRecords, parseDomainLines, resolveAdUnitDomain, scanGamUnits, unitActionBatches } from './gam-unit-domains.mjs';
 
 const { Text, Title } = Typography;
 const bannerSizes = ['320x50', '336x280', '250x250', '300x250'];
@@ -98,6 +98,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
   const listAccounts = accounts.filter(item => item.status === 'active');
   const accountListKey = listAccounts.map(item => item.id + ':' + item.networkCode).join(',');
   const [filterAccountId, setFilterAccountId] = useState(null), [filterName, setFilterName] = useState('');
+  const [filterDomain, setFilterDomain] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [queried, setQueried] = useState(false), [remoteUnits, setRemoteUnits] = useState([]);
   const [lastQuery, setLastQuery] = useState(null), [listBusy, setListBusy] = useState(false);
@@ -138,7 +139,8 @@ export default function GamAdUnitCreator({ accounts = [] }) {
   const creationByResource = useMemo(() => indexCreationRecords(domainMap), [domainMap]);
   const withDomain = row => ({ ...row, ...resolveAdUnitDomain(row,
     creationByResource.get(String(row.networkCode) + ':' + row.name)) });
-  const displayedUnits = useMemo(() => remoteUnits.map(withDomain), [remoteUnits, creationByResource]);
+  const displayedUnits = useMemo(() => filterGamUnits(remoteUnits.map(withDomain), lastQuery || {}),
+    [remoteUnits, creationByResource, lastQuery]);
   useEffect(() => {
     if (!open || !accountId) return;
     let current = true;
@@ -180,7 +182,10 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     return () => { current = false; };
   }, [open, accountId]);
 
-  const searchUnits = async (query = { accountId: filterAccountId, name: filterName, status: filterStatus }) => {
+  const searchUnits = async (query = { accountId: filterAccountId, name: filterName, domain: filterDomain, status: filterStatus }) => {
+    const domain = String(query.domain || '').trim();
+    if (domain && (!siteDomain(domain) || /\s/.test(domain))) return message.warning('请输入完整主域名或子域名');
+    query = { ...query, domain: domain ? siteDomain(domain) : '', name: String(query.name || '').trim() };
     const chosen = query.accountId ? listAccounts.filter(item => item.id === query.accountId) : listAccounts;
     if (!chosen.length) return message.warning('暂无可查询的 GAM 账号');
     const generation = ++listGeneration.current;
@@ -189,7 +194,8 @@ export default function GamAdUnitCreator({ accounts = [] }) {
       let pageToken = '', count = 0;
       const seen = new Set();
       do {
-        const params = new URLSearchParams({ search: query.name.trim(), statuses: query.status || '' });
+        // Scan every GAM page, then match both display name and code locally.
+        const params = new URLSearchParams({ statuses: query.status || '' });
         if (pageToken) params.set('pageToken', pageToken);
         const result = await api('/api/admin/gam-accounts/' + account.id + '/ad-units?' + params);
         if (generation !== listGeneration.current) return;
@@ -250,7 +256,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
       const rows = mode === 'single' ? [{ status: 'created', code: items[0].code, domain: items[0].domain, item: result.item }]
         : (result.results || []).map(row => ({ ...row, domain: items[row.index]?.domain || '' }));
       setResults(rows); setOpen(false); await loadCreations();
-      if (!lastQuery?.accountId || lastQuery.accountId === accountId) await searchUnits(lastQuery || { accountId: null, name: '', status: '' });
+      if (!lastQuery?.accountId || lastQuery.accountId === accountId) await searchUnits(lastQuery || { accountId: null, name: '', domain: '', status: '' });
       const failures = rows.filter(row => row.status === 'failed').length;
       if (failures) message.warning('已创建 ' + (rows.length - failures) + ' 个，失败 ' + failures + ' 个；请查看下方逐条错误');
       else message.success('已同步 ' + rows.length + ' 个广告单元到 GAM');
@@ -292,7 +298,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
       await api('/api/admin/gam-accounts/' + row.gamAccountId + '/ad-units/' + row.name.split('/').at(-1),
         { method: 'PATCH', body: JSON.stringify(changes) });
       setEditing(null); message.success('已同步修改到 GAM');
-      await searchUnits(lastQuery || { accountId: null, name: '', status: '' });
+      await searchUnits(lastQuery || { accountId: null, name: '', domain: '', status: '' });
       await loadCreations().catch(() => {});
     } catch (error) { message.error('修改失败：' + duplicateMessage(error.message)); }
     finally { setSavingEdit(false); }
@@ -310,7 +316,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
         ? batches[index][1].length : 0), 0);
       const failed = results.filter(result => result.status === 'rejected').map(result => result.reason.message);
       setSelectedUnits([]);
-      await searchUnits(lastQuery || { accountId: null, name: '', status: '' });
+      await searchUnits(lastQuery || { accountId: null, name: '', domain: '', status: '' });
       return { updated, failed };
     } finally {
       if (action === 'activate') setBatchActivating(false);
@@ -324,14 +330,12 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     if (failed.length) message.error('已归档 ' + updated + ' 个，部分失败：' + failed.join('；'));
     else message.success('已在 GAM 归档 ' + updated + ' 个广告单元');
   };
-  const scanActionUnits = async (accountsToScan, action) => {
-    const statuses = action === 'archive' ? ['ACTIVE,INACTIVE'] : ['ARCHIVED', 'INACTIVE'];
-    const groups = await Promise.all(statuses.map(status => scanGamUnits(accountsToScan, (account, pageToken) => {
-      const query = new URLSearchParams({ statuses: status });
+  const scanActionUnits = async accountsToScan => {
+    return scanGamUnits(accountsToScan, (account, pageToken) => {
+      const query = new URLSearchParams();
       if (pageToken) query.set('pageToken', pageToken);
       return api('/api/admin/gam-accounts/' + account.id + '/ad-units?' + query);
-    })));
-    return groups.flat();
+    });
   };
   const activateUnits = async names => {
     if (batchActivating) return;
@@ -341,11 +345,11 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     setBatchActivating(true);
     try {
       const accountsToCheck = activeAccounts.filter(account => rows.some(row => row.gamAccountId === account.id));
-      const current = await scanActionUnits(accountsToCheck, 'activate');
+      const current = await scanActionUnits(accountsToCheck);
       const byResource = new Map(current.map(row => [row.gamAccountId + ':' + row.name, row]));
       const fresh = rows.map(row => byResource.get(row.gamAccountId + ':' + row.name));
       if (fresh.some(row => !row || !row.parentAdUnit || !row.accountEnabled || !['ARCHIVED', 'INACTIVE'].includes(row.status))) {
-        await searchUnits(lastQuery || { accountId: null, name: '', status: '' });
+        await searchUnits(lastQuery || { accountId: null, name: '', domain: '', status: '' });
         return message.warning('GAM 状态已变化，请核对更新后的广告单元并重新选择。');
       }
       const { updated, failed } = await updateUnitRows(fresh, 'activate');
@@ -363,19 +367,20 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     const targetSet = new Set(targets);
     const [mapping, allUnits] = await Promise.all([
       api('/api/admin/gam-ad-units/domain-map'),
-      scanActionUnits(activeAccounts, action)
+      scanActionUnits(activeAccounts)
     ]);
     const records = mapping.items || [];
     setDomainMap(records);
     const byResource = indexCreationRecords(records);
     const eligible = action === 'archive' ? archivableDomainUnit : activatableDomainUnit;
-    const rows = allUnits.filter(row => eligible(row, targetSet,
-      byResource.get(String(row.networkCode) + ':' + row.name)))
-      .map(row => ({ ...row, ...resolveAdUnitDomain(row,
-        byResource.get(String(row.networkCode) + ':' + row.name)) }));
+    const matched = allUnits.map(row => ({ ...row, ...resolveAdUnitDomain(row,
+      byResource.get(String(row.networkCode) + ':' + row.name)) }))
+      .filter(row => row.domain && [...targetSet].some(target => domainMatchesTarget(row.domain, target)));
+    const rows = matched.filter(row => eligible(row, targetSet,
+      byResource.get(String(row.networkCode) + ':' + row.name)));
     const counts = Object.fromEntries(targets.map(domain => [domain, 0]));
-    for (const row of rows) for (const target of targets) if (domainMatchesTarget(row.domain, target)) counts[target] += 1;
-    return { action, targets, rows, counts, scanned: allUnits.length };
+    for (const row of matched) for (const target of targets) if (domainMatchesTarget(row.domain, target)) counts[target] += 1;
+    return { action, targets, rows, matched, counts, scanned: allUnits.length };
   };
   const openBulk = action => {
     setBulkAction(action); setBulkOpen(true); setBulkInput(''); setBulkPreview(null); setBulkError('');
@@ -389,7 +394,9 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     try {
       const preview = await findBulkMatches(targets, bulkAction);
       setBulkPreview(preview);
-      if (!preview.rows.length) setBulkError('未找到可确认归属且可' + (bulkAction === 'archive' ? '归档' : '激活') + '的广告单元；未执行任何操作。');
+      if (!preview.rows.length) setBulkError(preview.matched.length
+        ? '已找到 ' + preview.matched.length + ' 个对应域名的广告单元，但当前没有可' + (bulkAction === 'archive' ? '归档' : '激活') + '的单元；未执行任何操作。'
+        : '未找到可确认归属的广告单元；未执行任何操作。');
     } catch (error) { setBulkError('预览不完整，已停止：' + error.message); }
     finally { setBulkBusy(false); }
   };
@@ -463,10 +470,13 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     <Card><Space wrap>
       <Select showSearch optionFilterProp="label" style={{ width: 310 }} value={filterAccountId ?? 'all'}
         onChange={value => { const id = value === 'all' ? null : value; setFilterAccountId(id);
-          searchUnits({ accountId: id, name: filterName, status: filterStatus }); }} options={listAccountOptions}/>
-      <Input style={{ width: 280 }} placeholder="广告单元名称" value={filterName} onChange={event => setFilterName(event.target.value)} onPressEnter={() => searchUnits()}/>
+          searchUnits({ accountId: id, name: filterName, domain: filterDomain, status: filterStatus }); }} options={listAccountOptions}/>
+      <Input style={{ width: 250 }} placeholder="完整主域名或子域名" value={filterDomain} allowClear
+        onChange={event => setFilterDomain(event.target.value)} onPressEnter={() => searchUnits()}/>
+      <Input style={{ width: 240 }} placeholder="广告单元名称或代码" value={filterName} allowClear
+        onChange={event => setFilterName(event.target.value)} onPressEnter={() => searchUnits()}/>
       <Select style={{ width: 200 }} value={filterStatus} onChange={value => { setFilterStatus(value);
-        searchUnits({ accountId: filterAccountId, name: filterName, status: value }); }} options={[
+        searchUnits({ accountId: filterAccountId, name: filterName, domain: filterDomain, status: value }); }} options={[
         { value: '', label: '全部状态' }, { value: 'ACTIVE', label: '激活' },
         { value: 'INACTIVE', label: '停用' }, { value: 'ARCHIVED', label: '已归档' }
       ]}/>
@@ -482,8 +492,10 @@ export default function GamAdUnitCreator({ accounts = [] }) {
       <Button type="primary" ghost disabled={archiving || batchActivating} onClick={() => openBulk('activate')}>
         按域名批量激活</Button>
     </Space></Card>
+    {lastQuery?.domain && <Alert type="info" showIcon message={'域名：' + lastQuery.domain + ' · 主域名包含其子域名'}
+      description="已扫描所选 GAM 账号的全部分页和状态；按 GAM 名称、代码或本站创建记录确认归属。无法确认域名的单元仍可在清空域名筛选后查看。"/>}
     {listError && <Alert type="warning" showIcon message={listError} action={<Button size="small" onClick={() => searchUnits(lastQuery)}>重试</Button>}/>}
-    <Card title="GAM 已存在的广告单元" extra={<Text type="secondary">{listBusy ? '正在加载…' : '共 ' + remoteUnits.length + ' 个'} · 归档后停止投放，历史报表保留</Text>} bodyStyle={{ padding: 0 }}>
+    <Card title="GAM 已存在的广告单元" extra={<Text type="secondary">{listBusy ? '正在加载…' : '匹配 ' + displayedUnits.length + ' 个（扫描 ' + remoteUnits.length + ' 个，已归档 ' + displayedUnits.filter(row => row.status === 'ARCHIVED').length + ' 个）'} · 历史报表保留</Text>} bodyStyle={{ padding: 0 }}>
       <Table rowKey="name" loading={listBusy && !remoteUnits.length} dataSource={displayedUnits} columns={remoteColumns}
         rowSelection={{ selectedRowKeys: selectedUnits, onChange: setSelectedUnits,
           getCheckboxProps: row => ({ disabled: !row.parentAdUnit || !row.accountEnabled ||
@@ -504,7 +516,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
       okButtonProps={{ danger: bulkAction === 'archive', disabled: !bulkPreview?.rows.length || bulkBusy || archiving || batchActivating }}>
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
         <Alert type="info" showIcon message="每行一个完整主域名或子域名，支持一次匹配多条"
-          description={'从所有可用 GAM 账号完整扫描' + (bulkAction === 'archive' ? '未归档' : '已归档或停用') + '广告单元，按本站创建记录或 GAM 代码/名称中的完整域名匹配。输入主域名会包含该主域名及所有子域名；无法确认归属的单元不会' + (bulkAction === 'archive' ? '归档' : '激活') + '；操作前会重新核对 GAM 状态。'}/>
+          description={'从所有可用 GAM 账号扫描全部状态的广告单元，按本站创建记录或 GAM 代码/名称中的完整域名匹配。输入主域名会包含该主域名及所有子域名，预览同时显示已归档与可操作数量；无法确认归属的单元不会' + (bulkAction === 'archive' ? '归档' : '激活') + '；操作前会重新核对 GAM 状态。'}/>
         <Space align="start" wrap>
           <Input.TextArea style={{ width: 420 }} rows={5} placeholder={'每行一个完整域名，例如：\nexample.com\nnews.example.com'} value={bulkInput}
             onChange={event => { setBulkInput(event.target.value); setBulkPreview(null); setBulkError(''); }}
@@ -513,12 +525,12 @@ export default function GamAdUnitCreator({ accounts = [] }) {
         </Space>
         {bulkError && <Alert type="warning" showIcon message={bulkError}/>}
         {bulkPreview && <>
-          <Text>输入 <strong>{bulkPreview.targets.length}</strong> 个域名 · 已扫描 {bulkPreview.scanned} 个单元 · 精确命中 <strong>{bulkPreview.rows.length}</strong> 个
-            {bulkPreview.rows.length > 0 && ' · 涉及 ' + new Set(bulkPreview.rows.map(row => row.gamAccountId)).size + ' 个 GAM 账号'}</Text>
+          <Text>输入 <strong>{bulkPreview.targets.length}</strong> 个域名 · 已扫描 {bulkPreview.scanned} 个单元 · 匹配 <strong>{bulkPreview.matched.length}</strong> 个（已归档 {bulkPreview.matched.filter(row => row.status === 'ARCHIVED').length} 个） · 本次可{bulkAction === 'archive' ? '归档' : '激活'} <strong>{bulkPreview.rows.length}</strong> 个
+            {bulkPreview.matched.length > 0 && ' · 涉及 ' + new Set(bulkPreview.matched.map(row => row.gamAccountId)).size + ' 个 GAM 账号'}</Text>
           <div style={{ maxHeight: 125, overflowY: 'auto' }}>{bulkPreview.targets.map(domain =>
             <Tag key={domain} color={bulkPreview.counts[domain] ? 'blue' : 'default'} style={{ marginBottom: 6 }}>
               {domain} · {bulkPreview.counts[domain]} 个</Tag>)}</div>
-          <Table size="small" rowKey="name" dataSource={bulkPreview.rows} pagination={{ pageSize: 10 }} scroll={{ x: 1000 }}
+          <Table size="small" rowKey="name" dataSource={bulkPreview.matched} pagination={{ pageSize: 10 }} scroll={{ x: 1000 }}
             columns={remoteColumns.filter(col => ['accountName', 'displayName', 'adUnitCode', 'mainDomain', 'subdomain', 'status'].includes(col.dataIndex))}/>
         </>}
       </Space>
