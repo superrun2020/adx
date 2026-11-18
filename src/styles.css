@@ -88,11 +88,14 @@
   .report-detail-table .ant-table-tbody>tr>td{padding:8px 3px!important;font-size:11px}
 }
 
-/* Align numeric labels with their values; reserve a separate lane for sort arrows. */
+/* Keep numeric headers aligned with values; sort arrows have their own lane. */
 .report-detail-table .report-detail-dimension{text-align:left}
-.report-detail-table th.report-detail-metric{text-align:right}
-.report-detail-table td.report-detail-metric{padding-right:24px!important;text-align:right}
-.report-detail-table .report-detail-metric .numeric-sort-header{position:relative;justify-content:flex-end;padding-right:18px}
-.report-detail-table .report-detail-metric .numeric-sort-actions{position:absolute;right:0;top:50%;transform:translateY(-50%)}
+.ant-table-wrapper .ant-table-thead>tr>th.numeric-sort-column{padding-right:8px!important;text-align:right}
+.ant-table-wrapper .ant-table-tbody>tr>td.numeric-sort-column{padding-right:24px!important;text-align:right;font-variant-numeric:tabular-nums}
+.numeric-sort-column .numeric-sort-header{position:relative;display:flex;width:100%;max-width:100%;min-width:0;align-items:center;justify-content:flex-end;padding-right:16px}
+.numeric-sort-column .numeric-sort-actions{position:absolute;right:0;top:50%;transform:translateY(-50%);flex-shrink:0}
 .report-explorer .report-metric-value{display:inline-block;min-width:7ch;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
-@media(max-width:850px){.report-detail-table td.report-detail-metric{padding-right:21px!important}}
+@media(max-width:850px){
+  .report-detail-table .ant-table-thead>tr>th.numeric-sort-column{padding-right:3px!important}
+  .report-detail-table .ant-table-tbody>tr>td.numeric-sort-column{padding-right:19px!important}
+}

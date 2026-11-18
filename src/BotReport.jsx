@@ -75,7 +75,7 @@ export default function BotReport() {
           : <Text type="secondary">今天暂无已同步的 GAM REST 明细，暂不把空白误报为 0。</Text>}
         <div style={{marginTop:16}}><Text type="secondary">已同步明细：{preview?.rows ?? '—'} 条；最近入库（UTC）：{preview?.lastImport || '—'}</Text></div>
         <div style={{marginTop:16}}><Text strong>各 GAM 账号当地日期</Text>
-          <NumericSortableTable size="small" rowKey="networkCode" style={{marginTop:8}}
+          <NumericSortableTable size="small" rowKey={row => row.networkCode + ':' + row.channelName + ':' + row.date} style={{marginTop:8}}
             dataSource={preview?.accounts || []} numericKeys={['rows','revenue','profit']}
             columns={[{title:'账号',dataIndex:'name'},{title:'渠道',dataIndex:'channelName'},{title:'当地日期',dataIndex:'date'},
               {title:'时区',dataIndex:'timeZone'},{title:'明细',dataIndex:'rows',align:'right'},

@@ -50,7 +50,7 @@ function metricColumns(selected, admin, sort, onSort) {
       : ['revenue','ecpm','grossProfit'].some(part => key.toLowerCase().includes(part.toLowerCase())) ? money : number;
     return { title:<NumericSortHeader label={label} direction={sort?.key === key ? sort.direction : ''}
       onSort={direction => onSort({ key, direction })}/>, dataIndex:key, width:125, align:'right',
-      className:'report-detail-metric', render:value => <span className="report-metric-value">{render(value)}</span> };
+      className:'numeric-sort-column report-detail-metric', render:value => <span className="report-metric-value">{render(value)}</span> };
   });
 }
 
@@ -157,7 +157,7 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
   const detailWeight = columns.reduce((total,column) => total + detailColumnWeight(column), 0);
   const detailColumns = columns.map(column => ({...column,
     width:(detailColumnWeight(column) / detailWeight * 100) + '%',
-    className:selectedDimensions.includes(column.dataIndex) ? 'report-detail-dimension' : 'report-detail-metric'
+    className:selectedDimensions.includes(column.dataIndex) ? 'report-detail-dimension' : column.className
   }));
   const dailyColumns = [{title:'日期',dataIndex:'date',width:130,fixed:'left'},
     ...dimensionColumns(dailyBreakdown ? [dailyBreakdown] : []),

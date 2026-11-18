@@ -115,10 +115,10 @@ function DashboardTopLinks({ user, refreshKey }) {
     { title:'链接', dataIndex:'url', ellipsis:true, render:value => <strong className="rank-url" title={value}>{value || '—'}</strong> },
     { title:<NumericSortHeader label="展示" direction={sorts[period]?.key === 'impressions' ? sorts[period].direction : ''}
       onSort={direction => setSorts(previous => ({ ...previous, [period]: { key:'impressions', direction } }))}/>,
-      dataIndex:'impressions', align:'right', width:110, render:number },
+      dataIndex:'impressions', align:'right', className:'numeric-sort-column', width:110, render:number },
     { title:<NumericSortHeader label="收益" direction={sorts[period]?.key === 'revenue' ? sorts[period].direction : ''}
       onSort={direction => setSorts(previous => ({ ...previous, [period]: { key:'revenue', direction } }))}/>,
-      dataIndex:'revenue', align:'right', width:120, render:value => <strong>{money(value)}</strong> }
+      dataIndex:'revenue', align:'right', className:'numeric-sort-column', width:120, render:value => <strong>{money(value)}</strong> }
   ];
   const sortedRows = (period, rows) => {
     const ranked = (rows || []).map((row, index) => ({ ...row, rank:index + 1 }));

@@ -108,7 +108,7 @@ export default function RegressionMonitor() {
     { title: numericTitle('点击数变化','clicksDelta'), dataIndex: 'clicksDelta', width: 110, align: 'right', render: value => signed(value) },
     { title: '来源', width: 90, render: () => <Tag color="purple">GAM REST</Tag> },
     { title: '飞书通知', dataIndex: 'alertStatus', width: 145, render: (value, row) => <Tag title={row.alertError || ''} color={value === 'sent' ? 'green' : value === 'failed' ? 'red' : value === 'pending' ? 'blue' : 'default'}>{({sent:'已发送',failed:'发送失败',pending:'待发送',disabled:'未启用',duplicate:'已去重',paused_suppressed:'停投影响，未推送',ownership_suppressed:'渠道已转移，未推送',not_triggered:'未触发'})[value] || value}</Tag> }
-  ];
+  ].map(column => column.align === 'right' ? { ...column, className: [column.className, 'numeric-sort-column'].filter(Boolean).join(' ') } : column);
   const latest = runs.find(run => run.status === 'success');
   return <Space direction="vertical" size={16} className="page-stack regression-monitor">
     <div className="page-heading"><div><Title level={2}>数据回退监测</Title><Text type="secondary">比较真实 GAM REST 报表，按账号时区计算日期；登录可直接查看最近监测结果</Text></div>

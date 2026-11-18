@@ -45,7 +45,7 @@ export default function DiagnosticReport({ range, accounts = [] }) {
   const numericColumn = (title, key, render) => ({ title:<NumericSortHeader label={title}
     direction={sort?.key === key ? sort.direction : ''}
     onSort={direction => { setSort({ key, direction }); setPage(1); }}/>,
-    dataIndex:key, align:'right', render });
+    dataIndex:key, align:'right', className:'numeric-sort-column', render });
   const columns = [
     { title:kinds.find(item => item.value === kind)?.label || '分类', dataIndex:'category', width:210 },
     numericColumn('展示次数','impressions',number),

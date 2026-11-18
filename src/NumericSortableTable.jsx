@@ -13,6 +13,8 @@ export default function NumericSortableTable({ columns, dataSource = [], numeric
   const keys = new Set(numericKeys);
   const sortableColumns = columns.map(column => keys.has(column.dataIndex) ? {
     ...column,
+    align: 'right',
+    className: [column.className, 'numeric-sort-column'].filter(Boolean).join(' '),
     title: <NumericSortHeader label={column.title}
       direction={sort?.key === column.dataIndex ? sort.direction : ''}
       onSort={direction => setSort({ key: column.dataIndex, direction })}/>
