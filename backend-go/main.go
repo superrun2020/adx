@@ -168,6 +168,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /api/admin/gam-sync/runs", a.auth("admin", a.gamSyncRuns))
 	mux.HandleFunc("GET /api/admin/regression/settings", a.auth("admin", a.regressionSettings))
 	mux.HandleFunc("PUT /api/admin/regression/settings", a.auth("admin", gamRoute(a.updateRegressionSettings)))
+	mux.HandleFunc("POST /api/admin/regression/test", a.auth("admin", a.testRegressionAlert))
 	mux.HandleFunc("GET /api/admin/regression/events", a.auth("admin", a.regressionEvents))
 	mux.HandleFunc("GET /api/admin/regression/runs", a.auth("admin", a.regressionRuns))
 	mux.HandleFunc("GET /api/admin/bot-report/settings", a.auth("admin", a.botReportSettings))

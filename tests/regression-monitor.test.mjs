@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { regressionWindow, regressionCycleWindow, alertQualified, firstDropDate, regressionAlertMessage, pausedAdUnitIds, excludePausedRevenue, registerRegressionMonitor } from '../server/regression-monitor.mjs';
+import { regressionWindow, regressionCycleWindow, alertQualified, firstDropDate, regressionAlertMessage, regressionTestMessage, pausedAdUnitIds, excludePausedRevenue, registerRegressionMonitor } from '../server/regression-monitor.mjs';
 
 test('regression windows use each GAM account timezone and equal-length periods', () => {
   const instant = new Date('2026-11-04T01:30:00Z');
@@ -59,9 +59,13 @@ test('Feishu alert text identifies confirmed and unlocated data dates', () => {
     after: { revenue: 90, requests: 95, impressions: 85, clicks: 10 } };
   const message = regressionAlertMessage(account, '赵飞', 'Asia/Shanghai', '2026-11-09 16:30', window, [alert]);
   assert.equal(message, [
-    '【AdX 收入下降】', '账号：GAM Test（123456）', '渠道：赵飞', '域名：news.example.com',
+    '【AdX 收入下降】', '账号：GAM Test（123456）', '域名：news.example.com', '渠道：赵飞',
     '数据日：2026-11-09', '收入：$100.00 → $90.00，少 $10.00（10.00%）', '发现：2026-11-09 16:29（Asia/Shanghai）'
   ].join('\n'));
+  const grouped = regressionAlertMessage(account, '赵飞', 'Asia/Shanghai', '2026-11-09 16:30', window,
+    [alert, { ...alert, domain: 'finance.example.com' }]);
+  assert.equal(grouped.match(/渠道：赵飞/g).length, 2);
+  assert.match(grouped, /域名：finance\.example\.com\n渠道：赵飞/);
   const unknown = regressionAlertMessage(account, '赵飞', 'Asia/Shanghai', '2026-11-09 16:30', window,
     [{ ...alert, dropStartDate: null }]);
   assert.match(unknown, /数据日：2026-11-09/);
@@ -71,6 +75,9 @@ test('Feishu alert text identifies confirmed and unlocated data dates', () => {
   assert.match(multi, /区间：2026-11-07 至 2026-11-09（对比 2026-11-04 至 2026-11-06）/);
   assert.match(multi, /发现：2026-11-09 16:29（Asia\/Singapore）/);
   assert.match(multi, /少 \$10\.00/);
+  const sample = regressionTestMessage(new Date('2026-11-09T08:30:00Z'));
+  assert.match(sample, /手动测试｜以下均为示例数据/);
+  assert.equal(sample.match(/渠道：示例渠道/g).length, 2);
 });
 
 test('drop start is the earliest confirmed same-date decrease only', () => {
@@ -95,7 +102,7 @@ test('completed three-day comparison runs once and Feishu retries its original a
   db.exec("CREATE TABLE soap_accounts(id INTEGER PRIMARY KEY,name TEXT,network_code TEXT,rest_network_timezone TEXT,rest_channel_id INTEGER); CREATE TABLE channels(id INTEGER PRIMARY KEY,name TEXT); CREATE TABLE gam_channel_assignments(soap_account_id INTEGER,channel_id INTEGER,effective_from TEXT); CREATE TABLE upstream_accounts(id INTEGER PRIMARY KEY,soap_account_id INTEGER,account_key TEXT,status TEXT); CREATE TABLE audit_logs(id INTEGER PRIMARY KEY,action TEXT,target_id TEXT,detail TEXT,created_at TEXT); CREATE TABLE revenue_facts(channel_id INTEGER,account TEXT,report_date TEXT,domain TEXT,ad_unit_id TEXT DEFAULT '',source_file TEXT,revenue REAL,requests INTEGER,impressions INTEGER,clicks INTEGER)");
   db.exec("INSERT INTO soap_accounts(id,name,network_code,rest_network_timezone,rest_channel_id) VALUES(1,'GAM','123','Asia/Tokyo',1); INSERT INTO channels(id,name) VALUES(1,'Publisher'); INSERT INTO upstream_accounts(id,soap_account_id,account_key,status) VALUES(1,1,'upstream','active')");
   const routes = new Map();
-  const app = { get: (path, ...handlers) => routes.set(path, handlers.at(-1)), put() {} };
+  const app = { get: (path, ...handlers) => routes.set(path, handlers.at(-1)), put() {}, post: (path, ...handlers) => routes.set(path, handlers.at(-1)) };
   const transaction = fn => { db.exec('BEGIN'); try { const result = fn(); db.exec('COMMIT'); return result; } catch (error) { db.exec('ROLLBACK'); throw error; } };
   const monitor = registerRegressionMonitor(app, { db, requireAuth: () => {}, requireAdmin: () => {}, encryptCredential: () => '', decryptCredential: () => ({}), transaction, gamSync: { execute: async () => ({ rows: 1 }) }, audit: () => {} });
   const account = { id: 1, name: 'GAM', network_code: '123', rest_channel_id: 1, rest_upstream_account_id: 1, rest_network_timezone: 'Asia/Tokyo' };
@@ -157,7 +164,7 @@ test('transferred account never retries old-channel Feishu alerts', async () => 
   db.exec("CREATE TABLE soap_accounts(id INTEGER PRIMARY KEY,name TEXT,network_code TEXT,rest_network_timezone TEXT,rest_channel_id INTEGER); CREATE TABLE channels(id INTEGER PRIMARY KEY,name TEXT); CREATE TABLE gam_channel_assignments(soap_account_id INTEGER,channel_id INTEGER,effective_from TEXT); CREATE TABLE upstream_accounts(id INTEGER PRIMARY KEY,soap_account_id INTEGER,account_key TEXT,status TEXT); CREATE TABLE audit_logs(id INTEGER PRIMARY KEY,action TEXT,target_id TEXT,detail TEXT,created_at TEXT); CREATE TABLE revenue_facts(channel_id INTEGER,account TEXT,report_date TEXT,domain TEXT,ad_unit_id TEXT DEFAULT '',source_file TEXT,revenue REAL,requests INTEGER,impressions INTEGER,clicks INTEGER)");
   db.exec("INSERT INTO soap_accounts(id,name,network_code,rest_network_timezone,rest_channel_id) VALUES(1,'GAM','123','Asia/Shanghai',2); INSERT INTO channels(id,name) VALUES(1,'Old'),(2,'New'); INSERT INTO gam_channel_assignments(soap_account_id,channel_id,effective_from) VALUES(1,1,'1900-01-01'),(1,2,'2026-11-16'); INSERT INTO upstream_accounts(id,soap_account_id,account_key,status) VALUES(1,1,'upstream','active')");
   const routes = new Map();
-  const app = { get: (path, ...handlers) => routes.set(path, handlers.at(-1)), put() {} };
+  const app = { get: (path, ...handlers) => routes.set(path, handlers.at(-1)), put() {}, post: (path, ...handlers) => routes.set(path, handlers.at(-1)) };
   const transaction = fn => { db.exec('BEGIN'); try { const value = fn(); db.exec('COMMIT'); return value; } catch (error) { db.exec('ROLLBACK'); throw error; } };
   const monitor = registerRegressionMonitor(app, { db, requireAuth: () => {}, requireAdmin: () => {}, encryptCredential: () => '',
     decryptCredential: () => { throw new Error('old owner must not decrypt webhook'); }, transaction,

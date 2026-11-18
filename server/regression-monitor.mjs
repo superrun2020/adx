@@ -110,10 +110,10 @@ function storedDetectionTime(value, timeZone) {
 }
 
 export function regressionAlertMessage(account, channelName, timeZone, sentAt, window, alerts) {
-  const lines = ['【AdX 收入下降】', '账号：' + account.name + '（' + account.network_code + '）', '渠道：' + channelName];
+  const lines = ['【AdX 收入下降】', '账号：' + account.name + '（' + account.network_code + '）'];
   for (const row of alerts) {
-    if (lines.length > 3) lines.push('');
-    lines.push('域名：' + row.domain,
+    if (lines.length > 2) lines.push('');
+    lines.push('域名：' + row.domain, '渠道：' + channelName,
       window.cadence === 'day' ? '数据日：' + window.start : '区间：' + window.start + ' 至 ' + window.end + '（对比 ' + window.baselineStart + ' 至 ' + window.baselineEnd + '）',
       '收入：$' + row.before.revenue.toFixed(2) + ' → $' + row.after.revenue.toFixed(2) +
       '，少 $' + (row.before.revenue - row.after.revenue).toFixed(2) + '（' + ((row.before.revenue - row.after.revenue) * 100 / row.before.revenue).toFixed(2) + '%）' +
@@ -122,6 +122,17 @@ export function regressionAlertMessage(account, channelName, timeZone, sentAt, w
     lines.push('发现：' + storedDetectionTime(row.detectedAtUtc, timeZone) + '（' + timeZone + '）');
   }
   return lines.join('\n');
+}
+
+export function regressionTestMessage(instant = new Date()) {
+  const timeZone = 'Asia/Shanghai', date = localDate(timeZone, 0, instant);
+  const detectedAtUtc = instant.toISOString().slice(0, 19).replace('T', ' ');
+  const sample = (domain, before, after) => ({ domain, detectedAtUtc,
+    before: { revenue: before }, after: { revenue: after } });
+  return '【手动测试｜以下均为示例数据，不代表真实告警】\n' +
+    regressionAlertMessage({ name:'示例账号', network_code:'000000' }, '示例渠道', timeZone,
+      accountTimestamp(timeZone, instant), { cadence:'day', start:date, end:date },
+      [sample('news.example.com', 100, 70), sample('finance.example.com', 80, 60)]);
 }
 
 export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, encryptCredential, decryptCredential, transaction, gamSync, audit }) {
@@ -177,6 +188,29 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
     audit(req.user.email, 'regression.settings_update', 'regression_settings', 1,
       JSON.stringify({ feishuEnabled: input.feishuEnabled, minRevenue, minDropPercent: minPercent, webhookConfigured: !!saved.url }), req.ip);
     res.json({ ok: true, settings: publicSettings(settings()) });
+  });
+
+  app.post('/api/admin/regression/test', requireAuth, requireAdmin, async (req, res) => {
+    const config = settings();
+    if (!config.webhook_ciphertext) return res.status(400).json({ ok:false, error:'regression_webhook_required' });
+    try {
+      const { url, secret } = decryptCredential(config.webhook_ciphertext);
+      if (!validWebhook(url)) throw new Error('invalid_feishu_webhook');
+      const payload = { msg_type:'text', content:{ text:regressionTestMessage() } };
+      if (secret) {
+        const timestamp = String(Math.floor(Date.now()/1000));
+        payload.timestamp = timestamp;
+        payload.sign = crypto.createHmac('sha256', timestamp + '\n' + secret).update('').digest('base64');
+      }
+      const response = await fetch(url, { method:'POST', headers:{ 'Content-Type':'application/json' },
+        body:JSON.stringify(payload), redirect:'manual', signal:AbortSignal.timeout(10_000) });
+      if (!response.ok || (await response.json()).code !== 0) throw new Error('feishu_rejected_message');
+      audit(req.user.email, 'regression.test', 'regression_settings', 1, '', req.ip);
+      res.json({ ok:true });
+    } catch (error) {
+      console.error('regression_test_failed', error.message);
+      res.status(502).json({ ok:false, error:'regression_test_send_failed' });
+    }
   });
 
   app.get('/api/admin/regression/events', requireAuth, requireAdmin, (req, res) => {

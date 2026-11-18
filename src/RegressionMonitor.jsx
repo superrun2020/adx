@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from 'antd';
-import { ReloadOutlined, SettingOutlined } from '@ant-design/icons';
+import { ReloadOutlined, SendOutlined, SettingOutlined } from '@ant-design/icons';
 import ReportDateFilter from './ReportDateFilter.jsx';
 import NumericSortHeader from './NumericSortHeader.jsx';
 
@@ -26,6 +26,7 @@ export default function RegressionMonitor() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [modal, setModal] = useState(false);
   const [range, setRange] = useState(null);
   const [accountId, setAccountId] = useState(null);
@@ -80,6 +81,14 @@ export default function RegressionMonitor() {
     } catch (error) { message.error('保存失败：' + error.message); }
     finally { setSaving(false); }
   };
+  const sendTest = async () => {
+    setTesting(true);
+    try {
+      await api('/api/admin/regression/test', { method: 'POST' });
+      message.success('已发送示例告警到飞书；示例数据不会写入监测记录');
+    } catch (error) { message.error('测试告警发送失败：' + error.message); }
+    finally { setTesting(false); }
+  };
 
   const numericTitle = (label, key) => <NumericSortHeader label={label}
     direction={sort?.key === key ? sort.direction : ''}
@@ -103,7 +112,9 @@ export default function RegressionMonitor() {
   const latest = runs.find(run => run.status === 'success');
   return <Space direction="vertical" size={16} className="page-stack regression-monitor">
     <div className="page-heading"><div><Title level={2}>数据回退监测</Title><Text type="secondary">比较真实 GAM REST 报表，按账号时区计算日期；登录可直接查看最近监测结果</Text></div>
-      <Space><Button icon={<ReloadOutlined/>} loading={loading} onClick={() => { loadMeta(); loadEvents(); }}>刷新记录</Button><Button type="primary" icon={<SettingOutlined/>} onClick={openSettings}>通知条件设置</Button></Space></div>
+      <Space><Button icon={<ReloadOutlined/>} loading={loading} onClick={() => { loadMeta(); loadEvents(); }}>刷新记录</Button>
+        <Button icon={<SendOutlined/>} loading={testing} disabled={!settings?.webhookConfigured} onClick={sendTest}>发送测试告警</Button>
+        <Button type="primary" icon={<SettingOutlined/>} onClick={openSettings}>通知条件设置</Button></Space></div>
     <Alert showIcon type="info" message={
       '飞书条件：原收入 > ' + money(settings?.minRevenue ?? 50) + ' 且收入下降 ≥ ' + Number(settings?.minDropPercent ?? 2).toFixed(2) + '%；' + (settings?.feishuEnabled ? '通知已启用' : '通知未启用')
     } description="今天和昨天有数据时，分别每 15 分钟与各自的同日上次快照比较；3 天和 7 天仅在完整区间结束后各比较一次，下一完整区间再与刚结束的区间比较。近 30 天每 7 天重新拉取。已记录的广告单元停投影响会从区间收入中扣除；扣除后仍达到下降阈值，继续推送。"/>

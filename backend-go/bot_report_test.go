@@ -56,6 +56,7 @@ func TestBotReportUsesRealRestRevenueAndSendsOnce(t *testing.T) {
 		if webhook != "https://open.feishu.cn/open-apis/bot/v2/hook/test" || secret != "" ||
 			!strings.Contains(text, "流水（GAM REST 原始收入）：$150.00") ||
 			!strings.Contains(text, "利润（上游分成后收入 × 85% − 渠道结算）：$42.00") ||
+			!strings.Contains(text, "账号：Shanghai GAM（Network 123）\n渠道：Test\n数据日：2026-11-10（Asia/Shanghai）\n流水：$100.00\n利润：$28.00") ||
 			!strings.Contains(text, "2026-11-11（Pacific/Kiritimati）") {
 			t.Errorf("unexpected report content: %s", text)
 		}

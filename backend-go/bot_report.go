@@ -139,10 +139,13 @@ func botReportMessage(date string, now time.Time, totals map[string]any) string 
 			lines = append(lines, "最近入库（UTC）："+last)
 		}
 	}
-	for _, account := range totals["accounts"].([]map[string]any) {
-		lines = append(lines, fmt.Sprintf("账号：%s（Network %s） · 渠道：%s · %s（%s） · 流水 $%.2f · 利润 $%.2f",
-			importString(account["name"]), importString(account["networkCode"]), importString(account["channelName"]), importString(account["date"]),
-			importString(account["timeZone"]), numberValue(account["revenue"]), numberValue(account["profit"])))
+	for index, account := range totals["accounts"].([]map[string]any) {
+		lines = append(lines, "", fmt.Sprintf("账号明细 %d", index+1),
+			fmt.Sprintf("账号：%s（Network %s）", importString(account["name"]), importString(account["networkCode"])),
+			"渠道："+importString(account["channelName"]),
+			fmt.Sprintf("数据日：%s（%s）", importString(account["date"]), importString(account["timeZone"])),
+			fmt.Sprintf("流水：$%.2f", numberValue(account["revenue"])),
+			fmt.Sprintf("利润：$%.2f", numberValue(account["profit"])))
 	}
 	lines = append(lines, "当天数值为截至统计时间的快照；GAM 后续修订以数据报告为准。")
 	return strings.Join(lines, "\n")

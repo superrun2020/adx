@@ -233,6 +233,44 @@ func (a *app) updateRegressionSettings(w http.ResponseWriter, r *http.Request) e
 	return nil
 }
 
+func regressionTestMessage(now time.Time) string {
+	zone := "Asia/Shanghai"
+	location, _ := time.LoadLocation(zone)
+	date := now.In(location).Format("2006-01-02")
+	stamp := now.UTC().Format("2006-01-02 15:04:05")
+	account := map[string]any{"name": "示例账号", "network_code": "000000"}
+	alerts := []regressionAlert{
+		{Domain: "news.example.com", DetectedAtUTC: stamp, Old: regressionMeasure{Revenue: 100}, New: regressionMeasure{Revenue: 70}},
+		{Domain: "finance.example.com", DetectedAtUTC: stamp, Old: regressionMeasure{Revenue: 80}, New: regressionMeasure{Revenue: 60}},
+	}
+	window := regressionWindow{Cadence: "day", Start: date, End: date}
+	return "【手动测试｜以下均为示例数据，不代表真实告警】\n" +
+		regressionAlertMessage(account, "示例渠道", zone, now.In(location).Format("2006-01-02 15:04"), window, "单日快照", alerts)
+}
+
+func (a *app) testRegressionAlert(w http.ResponseWriter, r *http.Request) {
+	config, err := a.currentRegressionConfig()
+	if err != nil {
+		writeError(w, 500, "regression_settings_unavailable")
+		return
+	}
+	if config.Ciphertext == "" {
+		writeError(w, 400, "regression_webhook_required")
+		return
+	}
+	credential, err := a.decryptCredential(config.Ciphertext)
+	if err == nil {
+		err = postFeishu(r.Context(), importString(credential["url"]), importString(credential["secret"]), regressionTestMessage(time.Now()))
+	}
+	if err != nil {
+		log.Printf("regression_test_failed: %v", err)
+		writeError(w, 502, "regression_test_send_failed")
+		return
+	}
+	a.audit(currentUser(r).Email, "regression.test", "regression_settings", 1, "", clientIP(r))
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
 func (a *app) regressionEvents(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	start, end, cadence := q.Get("start"), q.Get("end"), q.Get("cadence")
@@ -1026,12 +1064,12 @@ func regressionDetectionTime(value, zone string) string {
 }
 
 func regressionAlertMessage(account map[string]any, channelName, zone, sentAt string, window regressionWindow, cadenceName string, alerts []regressionAlert) string {
-	lines := []string{"【AdX 收入下降】", fmt.Sprintf("账号：%s（%s）", importString(account["name"]), importString(account["network_code"])), "渠道：" + channelName}
+	lines := []string{"【AdX 收入下降】", fmt.Sprintf("账号：%s（%s）", importString(account["name"]), importString(account["network_code"]))}
 	for _, alert := range alerts {
-		if len(lines) > 3 {
+		if len(lines) > 2 {
 			lines = append(lines, "")
 		}
-		lines = append(lines, "域名："+alert.Domain)
+		lines = append(lines, "域名："+alert.Domain, "渠道："+channelName)
 		if window.Cadence == "day" {
 			lines = append(lines, "数据日："+window.Start)
 		} else {

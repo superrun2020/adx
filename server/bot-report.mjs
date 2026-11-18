@@ -33,9 +33,10 @@ function reportMessage(date, instant, totals) {
       '已同步明细：' + totals.rows + ' 条');
     if (totals.lastImport) lines.push('最近入库（UTC）：' + totals.lastImport);
   }
-  for (const account of totals.accounts) lines.push('账号：' + account.name + '（Network ' + account.networkCode + '） · 渠道：' + account.channelName + ' · ' +
-    account.date + '（' + account.timeZone + '） · 流水 $' + account.revenue.toFixed(2) +
-    ' · 利润 $' + account.profit.toFixed(2));
+  for (const [index, account] of totals.accounts.entries()) lines.push('', '账号明细 ' + (index + 1),
+    '账号：' + account.name + '（Network ' + account.networkCode + '）',
+    '渠道：' + account.channelName, '数据日：' + account.date + '（' + account.timeZone + '）',
+    '流水：$' + account.revenue.toFixed(2), '利润：$' + account.profit.toFixed(2));
   lines.push('当天数值为截至统计时间的快照；GAM 后续修订以数据报告为准。');
   return lines.join('\n');
 }
@@ -64,6 +65,10 @@ export function registerBotReport(app, { db, requireAuth, requireAdmin, encryptC
     'COALESCE(SUM(rf.revenue*(' + upstreamShareSql('rf') + ')/100.0),0) upstreamRevenue,' +
     'COALESCE(SUM(' + settledRevenueSql('rf') + '),0) channelRevenue,MAX(rf.imported_at) lastImport ' +
     'FROM revenue_facts rf WHERE rf.report_date=? AND rf.source_file LIKE ?').get(date, source);
+  const accountChannelTotalsFor = (date, source) => db.prepare('SELECT rf.channel_id channelId,COUNT(*) rows,COALESCE(SUM(rf.revenue),0) grossRevenue,' +
+    'COALESCE(SUM(rf.revenue*(' + upstreamShareSql('rf') + ')/100.0),0) upstreamRevenue,' +
+    'COALESCE(SUM(' + settledRevenueSql('rf') + '),0) channelRevenue ' +
+    'FROM revenue_facts rf WHERE rf.report_date=? AND rf.source_file LIKE ? GROUP BY rf.channel_id ORDER BY rf.channel_id').all(date, source);
   const totalsAt = (now = new Date()) => {
     const accounts = db.prepare("SELECT id,name,network_code,rest_channel_id,rest_network_timezone FROM soap_accounts WHERE status='active' AND rest_sync_enabled=1 AND enabled=1 ORDER BY id").all();
     const result = { rows:0, grossRevenue:0, upstreamRevenue:0, channelRevenue:0, lastImport:null, accounts:[] };
@@ -72,12 +77,15 @@ export function registerBotReport(app, { db, requireAuth, requireAdmin, encryptC
       try { new Intl.DateTimeFormat('en-US', { timeZone:zone }); } catch { zone = 'UTC'; }
       const date = localDate(zone, 0, now);
       const channelId = gamChannelForDate(db, account, date);
-      const channelName = db.prepare('SELECT name FROM channels WHERE id=?').get(channelId)?.name || '未关联渠道';
       const row = accountTotalsFor(date, 'gam-rest:' + account.network_code + ':%');
       for (const key of ['rows','grossRevenue','upstreamRevenue','channelRevenue']) result[key] += row[key];
       if (row.lastImport && (!result.lastImport || row.lastImport > result.lastImport)) result.lastImport = row.lastImport;
-      result.accounts.push({ name:account.name, networkCode:account.network_code, channelName, timeZone:zone, date,
-        rows:row.rows, revenue:row.grossRevenue, profit:row.upstreamRevenue * 0.85 - row.channelRevenue });
+      const channelRows = accountChannelTotalsFor(date, 'gam-rest:' + account.network_code + ':%');
+      if (!channelRows.length) channelRows.push({ channelId, rows:0, grossRevenue:0, upstreamRevenue:0, channelRevenue:0 });
+      for (const channelRow of channelRows) result.accounts.push({ name:account.name, networkCode:account.network_code,
+        channelName:db.prepare('SELECT name FROM channels WHERE id=?').get(channelRow.channelId)?.name || '未关联渠道',
+        timeZone:zone, date, rows:channelRow.rows, revenue:channelRow.grossRevenue,
+        profit:channelRow.upstreamRevenue * 0.85 - channelRow.channelRevenue });
     }
     return result;
   };

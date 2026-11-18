@@ -205,11 +205,17 @@ func TestRegressionAlertMessageIdentifiesSourceAndTime(t *testing.T) {
 	alert := regressionAlert{Domain: "news.example.com", DropStartDate: "2026-11-09", DetectedAtUTC: "2026-11-09 08:29:00", Old: regressionMeasure{Revenue: 100, Requests: 100, Impressions: 80, Clicks: 10}, New: regressionMeasure{Revenue: 90, Requests: 95, Impressions: 85, Clicks: 10}}
 	message := regressionAlertMessage(account, "赵飞", "Asia/Shanghai", "2026-11-09 16:30", window, "单日快照", []regressionAlert{alert})
 	expected := strings.Join([]string{
-		"【AdX 收入下降】", "账号：GAM Test（123456）", "渠道：赵飞", "域名：news.example.com",
+		"【AdX 收入下降】", "账号：GAM Test（123456）", "域名：news.example.com", "渠道：赵飞",
 		"数据日：2026-11-09", "收入：$100.00 → $90.00，少 $10.00（10.00%）", "发现：2026-11-09 16:29（Asia/Shanghai）",
 	}, "\n")
 	if message != expected {
 		t.Fatalf("unexpected alert message:\n%s", message)
+	}
+	second := alert
+	second.Domain = "finance.example.com"
+	grouped := regressionAlertMessage(account, "赵飞", "Asia/Shanghai", "2026-11-09 16:30", window, "单日快照", []regressionAlert{alert, second})
+	if strings.Count(grouped, "渠道：赵飞") != 2 || !strings.Contains(grouped, "域名：finance.example.com\n渠道：赵飞") {
+		t.Fatalf("each domain must show its channel: %s", grouped)
 	}
 	alert.DropStartDate = ""
 	unknown := regressionAlertMessage(account, "赵飞", "Asia/Shanghai", "2026-11-09 16:30", window, "单日快照", []regressionAlert{alert})
@@ -223,6 +229,18 @@ func TestRegressionAlertMessageIdentifiesSourceAndTime(t *testing.T) {
 		if !strings.Contains(multiText, part) {
 			t.Fatalf("multi-day alert missing %q: %s", part, multiText)
 		}
+	}
+}
+
+func TestRegressionTestMessageIsClearlySyntheticAndLabelsEveryChannel(t *testing.T) {
+	message := regressionTestMessage(time.Date(2026, 11, 18, 8, 30, 0, 0, time.UTC))
+	if !strings.HasPrefix(message, "【手动测试｜以下均为示例数据，不代表真实告警】\n") {
+		t.Fatalf("test alert is not visibly labeled: %s", message)
+	}
+	if strings.Count(message, "渠道：示例渠道") != 2 ||
+		!strings.Contains(message, "域名：news.example.com\n渠道：示例渠道") ||
+		!strings.Contains(message, "域名：finance.example.com\n渠道：示例渠道") {
+		t.Fatalf("test domains must each show their channel: %s", message)
 	}
 }
 
