@@ -109,7 +109,11 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 			source = "dashboard_daily"
 		}
 	}
-	summary, err := firstMap(a.db, "SELECT COALESCE(SUM(requests),0) requests,COALESCE(SUM(matched_requests),0) matched,COALESCE(SUM(impressions),0) impressions,COALESCE(SUM(clicks),0) clicks,COALESCE(SUM(revenue),0) revenue FROM "+source+" WHERE "+where, args...)
+	upstreamField := ""
+	if ready && u.Role == "admin" {
+		upstreamField = ",COALESCE(SUM(upstream_revenue),0) upstreamSettlement"
+	}
+	summary, err := firstMap(a.db, "SELECT COALESCE(SUM(requests),0) requests,COALESCE(SUM(matched_requests),0) matched,COALESCE(SUM(impressions),0) impressions,COALESCE(SUM(clicks),0) clicks,COALESCE(SUM(revenue),0) revenue"+upstreamField+" FROM "+source+" WHERE "+where, args...)
 	if err != nil {
 		a.dashboardFailure(w, err)
 		return
@@ -162,6 +166,17 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	if u.Role == "channel" {
 		summary["revenue"] = settled["value"]
+	} else {
+		if !ready {
+			grouped := "SELECT account,report_date,SUM(revenue) revenue FROM revenue_facts WHERE " + where + " GROUP BY account,report_date"
+			upstream, queryErr := firstMap(a.db, "SELECT COALESCE(SUM(rf.revenue*("+upstreamShareSQL("rf")+")/100.0),0) value FROM ("+grouped+") rf", args...)
+			if queryErr != nil {
+				a.dashboardFailure(w, queryErr)
+				return
+			}
+			summary["upstreamSettlement"] = upstream["value"]
+		}
+		summary["platformProfit"] = numberValue(summary["upstreamSettlement"]) - numberValue(settled["value"])
 	}
 	summary["channelRevenue"] = settled["value"]
 	if numberValue(summary["requests"]) > 0 {
@@ -180,11 +195,19 @@ func (a *app) dashboardFailure(w http.ResponseWriter, err error) {
 }
 
 func (a *app) initializeDashboardDaily() error {
-	_, err := a.db.Exec("CREATE TABLE IF NOT EXISTS dashboard_daily (report_date TEXT NOT NULL,channel_id INTEGER NOT NULL,domain TEXT NOT NULL,requests INTEGER NOT NULL,matched_requests INTEGER NOT NULL,impressions INTEGER NOT NULL,clicks INTEGER NOT NULL,revenue REAL NOT NULL,settled_revenue REAL NOT NULL,PRIMARY KEY(report_date,channel_id,domain)) WITHOUT ROWID")
+	_, err := a.db.Exec("CREATE TABLE IF NOT EXISTS dashboard_daily (report_date TEXT NOT NULL,channel_id INTEGER NOT NULL,domain TEXT NOT NULL,requests INTEGER NOT NULL,matched_requests INTEGER NOT NULL,impressions INTEGER NOT NULL,clicks INTEGER NOT NULL,revenue REAL NOT NULL,upstream_revenue REAL NOT NULL DEFAULT 0,settled_revenue REAL NOT NULL,PRIMARY KEY(report_date,channel_id,domain)) WITHOUT ROWID")
 	if err != nil {
 		return err
 	}
-	_, err = a.db.Exec("CREATE TABLE IF NOT EXISTS dashboard_rest_daily (report_date TEXT NOT NULL,channel_id INTEGER NOT NULL,network_code TEXT NOT NULL,domain TEXT NOT NULL,requests INTEGER NOT NULL,matched_requests INTEGER NOT NULL,impressions INTEGER NOT NULL,clicks INTEGER NOT NULL,revenue REAL NOT NULL,settled_revenue REAL NOT NULL,PRIMARY KEY(report_date,channel_id,network_code,domain)) WITHOUT ROWID")
+	_, err = a.db.Exec("CREATE TABLE IF NOT EXISTS dashboard_rest_daily (report_date TEXT NOT NULL,channel_id INTEGER NOT NULL,network_code TEXT NOT NULL,domain TEXT NOT NULL,requests INTEGER NOT NULL,matched_requests INTEGER NOT NULL,impressions INTEGER NOT NULL,clicks INTEGER NOT NULL,revenue REAL NOT NULL,upstream_revenue REAL NOT NULL DEFAULT 0,settled_revenue REAL NOT NULL,PRIMARY KEY(report_date,channel_id,network_code,domain)) WITHOUT ROWID")
+	if err != nil {
+		return err
+	}
+	legacyDaily, err := a.ensureDashboardUpstreamColumn("dashboard_daily")
+	if err != nil {
+		return err
+	}
+	legacyRest, err := a.ensureDashboardUpstreamColumn("dashboard_rest_daily")
 	if err != nil {
 		return err
 	}
@@ -195,7 +218,7 @@ func (a *app) initializeDashboardDaily() error {
 	if err := a.db.QueryRow("SELECT COUNT(*) FROM revenue_facts").Scan(&facts); err != nil {
 		return err
 	}
-	if daily == 0 && facts > 0 {
+	if (daily == 0 || legacyDaily) && facts > 0 {
 		if err := a.refreshDashboardDaily(0, "", ""); err != nil {
 			return err
 		}
@@ -209,11 +232,25 @@ func (a *app) initializeDashboardDaily() error {
 	if err := a.db.QueryRow("SELECT COUNT(*) FROM revenue_facts WHERE source_file LIKE 'gam-rest:%'").Scan(&restFacts); err != nil {
 		return err
 	}
-	if restDaily == 0 && restFacts > 0 {
+	if (restDaily == 0 || legacyRest) && restFacts > 0 {
 		return a.refreshDashboardRestDaily(0, "", "")
 	}
 	a.restDailyReady.Store(true)
 	return nil
+}
+
+func (a *app) ensureDashboardUpstreamColumn(table string) (bool, error) {
+	columns, err := queryMaps(a.db, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return false, err
+	}
+	for _, column := range columns {
+		if importString(column["name"]) == "upstream_revenue" {
+			return false, nil
+		}
+	}
+	_, err = a.db.Exec("ALTER TABLE " + table + " ADD COLUMN upstream_revenue REAL NOT NULL DEFAULT 0")
+	return err == nil, err
 }
 
 func (a *app) refreshDashboardDaily(channelID int64, start, end string) error {
@@ -250,17 +287,17 @@ func (a *app) refreshDashboardTable(table string, channelID int64, start, end st
 		}
 	}
 	domain := mappedDomainSQL("rf")
-	columns := "report_date,channel_id,domain,requests,matched_requests,impressions,clicks,revenue,settled_revenue"
+	columns := "report_date,channel_id,domain,requests,matched_requests,impressions,clicks,revenue,upstream_revenue,settled_revenue"
 	group := "rf.report_date,rf.channel_id," + domain
 	selectFields := "rf.report_date,rf.channel_id," + domain
 	if restOnly {
 		network := "CASE WHEN instr(substr(rf.source_file,10),':')>0 THEN substr(rf.source_file,10,instr(substr(rf.source_file,10),':')-1) ELSE substr(rf.source_file,10) END"
-		columns = "report_date,channel_id,network_code,domain,requests,matched_requests,impressions,clicks,revenue,settled_revenue"
+		columns = "report_date,channel_id,network_code,domain,requests,matched_requests,impressions,clicks,revenue,upstream_revenue,settled_revenue"
 		group = "rf.report_date,rf.channel_id," + network + "," + domain
 		selectFields = "rf.report_date,rf.channel_id," + network + "," + domain
 	}
 	query := "INSERT INTO " + table + "(" + columns + ") " +
-		"SELECT " + selectFields + ",SUM(rf.requests),SUM(rf.matched_requests),SUM(rf.impressions),SUM(rf.clicks),SUM(rf.revenue),SUM(" + settledRevenueSQL("rf") + ") FROM revenue_facts rf" + where +
+		"SELECT " + selectFields + ",SUM(rf.requests),SUM(rf.matched_requests),SUM(rf.impressions),SUM(rf.clicks),SUM(rf.revenue),SUM(rf.revenue*(" + upstreamShareSQL("rf") + ")/100.0),SUM(" + settledRevenueSQL("rf") + ") FROM revenue_facts rf" + where +
 		" GROUP BY " + group
 	if _, err = tx.Exec(query, args...); err != nil {
 		return err

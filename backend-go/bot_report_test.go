@@ -37,7 +37,8 @@ func TestBotReportUsesRealRestRevenueAndSendsOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	preview := botReportPreview("2026-11-10", totals)
-	if preview["revenue"] != float64(150) || preview["profit"] != float64(42) || preview["rows"] != float64(2) {
+	if preview["revenue"] != float64(150) || preview["upstreamSettlement"] != float64(120) ||
+		preview["channelRevenue"] != float64(60) || preview["profit"] != float64(60) || preview["rows"] != float64(2) {
 		t.Fatalf("preview=%+v", preview)
 	}
 	accounts := preview["accounts"].([]map[string]any)
@@ -55,8 +56,8 @@ func TestBotReportUsesRealRestRevenueAndSendsOnce(t *testing.T) {
 		sends++
 		if webhook != "https://open.feishu.cn/open-apis/bot/v2/hook/test" || secret != "" ||
 			!strings.Contains(text, "流水（GAM REST 原始收入）：$150.00") ||
-			!strings.Contains(text, "利润（上游分成后收入 × 85% − 渠道结算）：$42.00") ||
-			!strings.Contains(text, "账号：Shanghai GAM（Network 123）\n渠道：Test\n数据日：2026-11-10（Asia/Shanghai）\n流水：$100.00\n利润：$28.00") ||
+			!strings.Contains(text, "上游应结算：$120.00\n平台留存（上游应结算 − 渠道结算）：$60.00\n渠道结算：$60.00") ||
+			!strings.Contains(text, "账号：Shanghai GAM（Network 123）\n渠道：Test\n数据日：2026-11-10（Asia/Shanghai）\n流水：$100.00\n上游应结算：$80.00\n平台留存：$40.00\n渠道结算：$40.00") ||
 			!strings.Contains(text, "2026-11-11（Pacific/Kiritimati）") {
 			t.Errorf("unexpected report content: %s", text)
 		}

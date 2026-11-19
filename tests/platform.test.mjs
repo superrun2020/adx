@@ -162,6 +162,8 @@ test('administrator dashboard uses each channel share for settlement totals', as
   cookie = login.response.headers.get('set-cookie').split(';')[0];
   const dashboard = await request('/api/dashboard?start=2026-10-08&end=2026-10-08');
   assert.equal(dashboard.body.summary.revenue, 20);
+  assert.equal(dashboard.body.summary.upstreamSettlement, 20);
+  assert.equal(dashboard.body.summary.platformProfit, 5);
   assert.equal(dashboard.body.summary.channelRevenue, 15);
 });
 
@@ -179,6 +181,8 @@ test('REST dashboard settlement excludes legacy facts', async () => {
   assert.equal(refreshed.response.status, 201);
   const result = await request('/api/dashboard?start=2026-10-23&end=2026-10-23&source=rest');
   assert.equal(result.body.summary.revenue, 20);
+  assert.equal(result.body.summary.upstreamSettlement, 20);
+  assert.equal(result.body.summary.platformProfit, 5);
   assert.equal(result.body.summary.channelRevenue, 15);
   assert.equal(result.body.topUrls[0].url, 'rest.example.test');
 });
@@ -198,6 +202,7 @@ test('upstream account and ad unit rules calculate layered settlement and mapped
   assert.equal(report.body.items[0].revenue, 100);
   assert.equal(report.body.items[0].upstreamRevenue, 60);
   assert.equal(report.body.items[0].channelRevenue, 30);
+  assert.equal(report.body.items[0].grossProfit, 30);
 });
 
 test('REST account setup links upstream settlement without exposing credentials', async () => {

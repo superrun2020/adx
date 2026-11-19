@@ -79,7 +79,7 @@ func addAccountMetrics(row map[string]any) {
 	row["ecpm"] = ratio(revenue*1000, impressions)
 	row["upstreamEcpm"] = ratio(upstream*1000, impressions)
 	row["channelEcpm"] = ratio(channel*1000, impressions)
-	row["grossProfit"] = upstream*0.85 - channel
+	row["grossProfit"] = upstream - channel
 }
 
 func (a *app) reportAPIKeys(w http.ResponseWriter, r *http.Request) {

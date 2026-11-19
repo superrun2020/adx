@@ -84,8 +84,12 @@ class AppErrorBoundary extends React.Component {
 function MetricCards({ summary, admin }) {
   const pending = !summary;
   const items = [
-    [admin?'总流水（收入）':'渠道结算收入', pending ? '—' : money(summary.revenue), <DollarOutlined />],
-    ...(admin?[['渠道结算收益', pending ? '—' : money(summary.channelRevenue), <TeamOutlined />]]:[]),
+    [admin?'原始流水':'渠道结算收入', pending ? '—' : money(summary.revenue), <DollarOutlined />],
+    ...(admin?[
+      ['上游应结算金额', summary?.upstreamSettlement == null ? '—' : money(summary.upstreamSettlement), <DollarOutlined />],
+      ['平台留存金额', summary?.platformProfit == null ? '—' : money(summary.platformProfit), <DollarOutlined />],
+      ['渠道结算金额', pending ? '—' : money(summary.channelRevenue), <TeamOutlined />]
+    ]:[]),
     ['展示量', pending ? '—' : number(summary.impressions), <BarChartOutlined />],
     ['匹配率', pending ? '—' : Number(summary.matchRate || 0).toFixed(2) + '%', <SafetyOutlined />]
   ];
@@ -181,6 +185,7 @@ function Dashboard({ range, setRange, admin, user, initialDashboard }) {
     <div className="page-heading"><div><Title level={2}>经营总览</Title><Text type="secondary">收入、流量质量与渠道结算一屏掌握</Text>{showingCached && <Tag color="gold" style={{marginLeft:10}}>{loading ? '已显示缓存，正在更新' : '已显示缓存数据'}</Tag>}</div><Space wrap><ReportDateFilter value={range} onChange={setRange}/><Button icon={<ReloadOutlined />} loading={loading} onClick={() => { load(true); setHighlightRefresh(value => value + 1); }}>刷新</Button></Space></div>
     <Text type="secondary">所选区间：{range[0].format('YYYY-MM-DD')} 至 {range[1].format('YYYY-MM-DD')}</Text>
     <MetricCards summary={currentData?.summary} admin={admin} />
+    {admin && <Text type="secondary">对账链路：原始流水 → 上游应结算 → 平台留存（上游应结算减渠道结算）→ 渠道结算。结算金额按配置计算，不代表实际到账。</Text>}
     <DashboardTopLinks user={user} refreshKey={highlightRefresh}/>
     <Card title="所选区间每日收益趋势" extra={currentData?.lastSync ? '最近同步 ' + currentData.lastSync : '尚未同步'}><div className="chart"><PageErrorBoundary><RevenueChart data={currentData?.trend || []} formatMoney={money}/></PageErrorBoundary></div></Card>
   </Space>;

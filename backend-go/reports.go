@@ -291,7 +291,7 @@ func (a *app) serveReports(w http.ResponseWriter, r *http.Request, export bool) 
 	rateSQL := map[string]string{
 		"requests": "requests", "matchedRequests": "matchedRequests", "impressions": "impressions", "clicks": "clicks",
 		"revenue": visible, "upstreamRevenue": "upstreamRevenue", "channelRevenue": "channelRevenue",
-		"grossProfit": "upstreamRevenue*0.85-channelRevenue", "upstreamSharePercent": "upstreamSharePercent", "channelSharePercent": "channelSharePercent",
+		"grossProfit": "upstreamRevenue-channelRevenue", "upstreamSharePercent": "upstreamSharePercent", "channelSharePercent": "channelSharePercent",
 		"matchRate":      "CASE WHEN requests=0 THEN 0 ELSE matchedRequests*100.0/requests END",
 		"impressionRate": "CASE WHEN matchedRequests=0 THEN 0 ELSE impressions*100.0/matchedRequests END",
 		"clickRate":      "CASE WHEN impressions=0 THEN 0 ELSE clicks*100.0/impressions END",
@@ -385,7 +385,7 @@ func (a *app) serveReports(w http.ResponseWriter, r *http.Request, export bool) 
 		row["impressionRate"] = ratio(impressions*100, matched)
 		row["clickRate"] = ratio(clicks*100, impressions)
 		if isAdmin {
-			row["grossProfit"] = numberValue(row["upstreamRevenue"])*0.85 - numberValue(row["channelRevenue"])
+			row["grossProfit"] = numberValue(row["upstreamRevenue"]) - numberValue(row["channelRevenue"])
 		} else {
 			delete(row, "upstreamRevenue")
 			delete(row, "upstreamSharePercent")

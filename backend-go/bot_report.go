@@ -114,8 +114,10 @@ func (a *app) botReportTotalsAt(now time.Time) (map[string]any, error) {
 			}
 			items = append(items, map[string]any{"name": account["name"], "networkCode": code, "channelName": channelName,
 				"timeZone": zone, "date": date, "rows": numberValue(channelRow["rows"]),
-				"revenue": numberValue(channelRow["grossRevenue"]),
-				"profit":  numberValue(channelRow["upstreamRevenue"])*0.85 - numberValue(channelRow["channelRevenue"])})
+				"revenue":            numberValue(channelRow["grossRevenue"]),
+				"upstreamSettlement": numberValue(channelRow["upstreamRevenue"]),
+				"channelRevenue":     numberValue(channelRow["channelRevenue"]),
+				"profit":             numberValue(channelRow["upstreamRevenue"]) - numberValue(channelRow["channelRevenue"])})
 		}
 	}
 	result["accounts"] = items
@@ -131,9 +133,13 @@ func botReportMessage(date string, now time.Time, totals map[string]any) string 
 		lines = append(lines, "暂无已同步的 GAM REST 明细，流水和利润暂不可确认。")
 	} else {
 		gross := numberValue(totals["grossRevenue"])
-		profit := numberValue(totals["upstreamRevenue"])*0.85 - numberValue(totals["channelRevenue"])
+		upstream := numberValue(totals["upstreamRevenue"])
+		channel := numberValue(totals["channelRevenue"])
+		profit := upstream - channel
 		lines = append(lines, fmt.Sprintf("流水（GAM REST 原始收入）：$%.2f", gross),
-			fmt.Sprintf("利润（上游分成后收入 × 85%% − 渠道结算）：$%.2f", profit),
+			fmt.Sprintf("上游应结算：$%.2f", upstream),
+			fmt.Sprintf("平台留存（上游应结算 − 渠道结算）：$%.2f", profit),
+			fmt.Sprintf("渠道结算：$%.2f", channel),
 			fmt.Sprintf("已同步明细：%.0f 条", numberValue(totals["rows"])))
 		if last := importString(totals["lastImport"]); last != "" {
 			lines = append(lines, "最近入库（UTC）："+last)
@@ -145,9 +151,11 @@ func botReportMessage(date string, now time.Time, totals map[string]any) string 
 			"渠道："+importString(account["channelName"]),
 			fmt.Sprintf("数据日：%s（%s）", importString(account["date"]), importString(account["timeZone"])),
 			fmt.Sprintf("流水：$%.2f", numberValue(account["revenue"])),
-			fmt.Sprintf("利润：$%.2f", numberValue(account["profit"])))
+			fmt.Sprintf("上游应结算：$%.2f", numberValue(account["upstreamSettlement"])),
+			fmt.Sprintf("平台留存：$%.2f", numberValue(account["profit"])),
+			fmt.Sprintf("渠道结算：$%.2f", numberValue(account["channelRevenue"])))
 	}
-	lines = append(lines, "当天数值为截至统计时间的快照；GAM 后续修订以数据报告为准。")
+	lines = append(lines, "结算额按配置测算，非实际到账；当天数据为发送时快照，GAM 后续修订以数据报告为准。")
 	return strings.Join(lines, "\n")
 }
 
@@ -175,7 +183,9 @@ func botReportPreview(date string, totals map[string]any) map[string]any {
 	result := map[string]any{"date": date, "rows": rows, "lastImport": totals["lastImport"], "accounts": totals["accounts"]}
 	if rows > 0 {
 		result["revenue"] = numberValue(totals["grossRevenue"])
-		result["profit"] = numberValue(totals["upstreamRevenue"])*0.85 - numberValue(totals["channelRevenue"])
+		result["upstreamSettlement"] = numberValue(totals["upstreamRevenue"])
+		result["channelRevenue"] = numberValue(totals["channelRevenue"])
+		result["profit"] = numberValue(totals["upstreamRevenue"]) - numberValue(totals["channelRevenue"])
 	}
 	return result
 }

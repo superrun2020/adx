@@ -37,7 +37,8 @@ test('daily bot report uses REST profit, validates webhook and sends once', asyn
   const before = new Date('2026-11-10T15:44:00Z'), due = new Date('2026-11-10T15:45:00Z');
   const preview = report.previewFor(due);
   assert.equal(preview.date,'2026-11-10');
-  assert.equal(preview.rows,2); assert.equal(preview.revenue,150); assert.equal(preview.profit,42);
+  assert.equal(preview.rows,2); assert.equal(preview.revenue,150);
+  assert.equal(preview.upstreamSettlement,120); assert.equal(preview.channelRevenue,60); assert.equal(preview.profit,60);
   assert.deepEqual(preview.accounts.map(account => account.date),['2026-11-10','2026-11-11']);
   assert.deepEqual(preview.accounts.map(account => account.channelName),['Zhao','Rinser']);
   assert.equal(botReportDate(before),'');
@@ -46,10 +47,10 @@ test('daily bot report uses REST profit, validates webhook and sends once', asyn
   for (const instant of [before,due,new Date('2026-11-10T15:46:00Z'),new Date('2026-11-10T16:05:00Z')]) await report.runAt(instant);
   assert.equal(sends,1);
   assert.match(sentText,/流水（GAM REST 原始收入）：\$150\.00/);
-  assert.match(sentText,/利润（上游分成后收入 × 85% − 渠道结算）：\$42\.00/);
+  assert.match(sentText,/上游应结算：\$120\.00\n平台留存（上游应结算 − 渠道结算）：\$60\.00\n渠道结算：\$60\.00/);
   assert.match(sentText,/2026-11-11（Pacific\/Kiritimati）/);
-  assert.match(sentText,/账号：Shanghai GAM（Network 123）\n渠道：Zhao\n数据日：2026-11-10（Asia\/Shanghai）\n流水：\$100\.00\n利润：\$28\.00/);
-  assert.match(sentText,/账号：Kiritimati GAM（Network 456）\n渠道：Rinser\n数据日：2026-11-11（Pacific\/Kiritimati）\n流水：\$50\.00\n利润：\$14\.00/);
+  assert.match(sentText,/账号：Shanghai GAM（Network 123）\n渠道：Zhao\n数据日：2026-11-10（Asia\/Shanghai）\n流水：\$100\.00\n上游应结算：\$80\.00\n平台留存：\$40\.00\n渠道结算：\$40\.00/);
+  assert.match(sentText,/账号：Kiritimati GAM（Network 456）\n渠道：Rinser\n数据日：2026-11-11（Pacific\/Kiritimati）\n流水：\$50\.00\n上游应结算：\$40\.00\n平台留存：\$20\.00\n渠道结算：\$20\.00/);
   assert.equal(db.prepare("SELECT status FROM bot_report_deliveries WHERE report_date='2026-11-10'").get().status,'sent');
   assert.equal((await invoke('POST','/api/admin/bot-report/test')).statusCode,200);
   assert.equal(sends,2);

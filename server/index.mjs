@@ -246,8 +246,13 @@ db.exec("INSERT OR IGNORE INTO channel_share_versions(channel_id,share_percent,e
 db.exec("CREATE TABLE IF NOT EXISTS upstream_share_versions (id INTEGER PRIMARY KEY AUTOINCREMENT, upstream_account_id INTEGER NOT NULL, share_percent REAL NOT NULL CHECK(share_percent BETWEEN 0 AND 100), effective_from TEXT NOT NULL, created_by TEXT NOT NULL, UNIQUE(upstream_account_id,effective_from), FOREIGN KEY(upstream_account_id) REFERENCES upstream_accounts(id) ON DELETE CASCADE)");
 db.exec("INSERT OR IGNORE INTO upstream_share_versions(upstream_account_id,share_percent,effective_from,created_by) SELECT id,100,'1900-01-01','migration' FROM upstream_accounts");
 db.exec("INSERT OR IGNORE INTO upstream_share_versions(upstream_account_id,share_percent,effective_from,created_by) SELECT id,share_percent,'2026-10-11','migration' FROM upstream_accounts");
-db.exec('CREATE TABLE IF NOT EXISTS dashboard_daily (report_date TEXT NOT NULL, channel_id INTEGER NOT NULL, domain TEXT NOT NULL, requests INTEGER NOT NULL, matched_requests INTEGER NOT NULL, impressions INTEGER NOT NULL, clicks INTEGER NOT NULL, revenue REAL NOT NULL, settled_revenue REAL NOT NULL, PRIMARY KEY(report_date,channel_id,domain)) WITHOUT ROWID');
-db.exec('CREATE TABLE IF NOT EXISTS dashboard_rest_daily (report_date TEXT NOT NULL, channel_id INTEGER NOT NULL, network_code TEXT NOT NULL, domain TEXT NOT NULL, requests INTEGER NOT NULL, matched_requests INTEGER NOT NULL, impressions INTEGER NOT NULL, clicks INTEGER NOT NULL, revenue REAL NOT NULL, settled_revenue REAL NOT NULL, PRIMARY KEY(report_date,channel_id,network_code,domain)) WITHOUT ROWID');
+db.exec('CREATE TABLE IF NOT EXISTS dashboard_daily (report_date TEXT NOT NULL, channel_id INTEGER NOT NULL, domain TEXT NOT NULL, requests INTEGER NOT NULL, matched_requests INTEGER NOT NULL, impressions INTEGER NOT NULL, clicks INTEGER NOT NULL, revenue REAL NOT NULL, upstream_revenue REAL NOT NULL DEFAULT 0, settled_revenue REAL NOT NULL, PRIMARY KEY(report_date,channel_id,domain)) WITHOUT ROWID');
+db.exec('CREATE TABLE IF NOT EXISTS dashboard_rest_daily (report_date TEXT NOT NULL, channel_id INTEGER NOT NULL, network_code TEXT NOT NULL, domain TEXT NOT NULL, requests INTEGER NOT NULL, matched_requests INTEGER NOT NULL, impressions INTEGER NOT NULL, clicks INTEGER NOT NULL, revenue REAL NOT NULL, upstream_revenue REAL NOT NULL DEFAULT 0, settled_revenue REAL NOT NULL, PRIMARY KEY(report_date,channel_id,network_code,domain)) WITHOUT ROWID');
+const legacyDashboardColumns = ['dashboard_daily', 'dashboard_rest_daily'].map(table => {
+  if (db.prepare('PRAGMA table_info(' + table + ')').all().some(column => column.name === 'upstream_revenue')) return false;
+  db.exec('ALTER TABLE ' + table + ' ADD COLUMN upstream_revenue REAL NOT NULL DEFAULT 0');
+  return true;
+}).some(Boolean);
 db.exec("CREATE TABLE IF NOT EXISTS gam_diagnostic_reports (account_id INTEGER NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('device','browser','demand')),network_code TEXT NOT NULL,report_name TEXT NOT NULL DEFAULT '',last_synced_at TEXT,last_attempt_at TEXT,last_error TEXT NOT NULL DEFAULT '',PRIMARY KEY(account_id,kind),FOREIGN KEY(account_id) REFERENCES soap_accounts(id) ON DELETE CASCADE)");
 db.exec("CREATE TABLE IF NOT EXISTS gam_diagnostic_facts (account_id INTEGER NOT NULL,network_code TEXT NOT NULL,report_date TEXT NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('device','browser','demand')),category TEXT NOT NULL,impressions INTEGER NOT NULL DEFAULT 0,revenue REAL NOT NULL DEFAULT 0,measurable_impressions INTEGER NOT NULL DEFAULT 0,viewable_impressions INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_id,network_code,report_date,kind,category),FOREIGN KEY(account_id) REFERENCES soap_accounts(id) ON DELETE CASCADE) WITHOUT ROWID");
 db.exec('CREATE INDEX IF NOT EXISTS idx_gam_diagnostic_lookup ON gam_diagnostic_facts(report_date,kind,account_id)');
@@ -491,12 +496,12 @@ function refreshDashboardDaily(channelId, start, end) {
       else db.exec('DELETE FROM ' + table);
       const condition = where + (restOnly ? (where ? " AND " : "WHERE ") + "rf.source_file LIKE 'gam-rest:%'" : '');
       const network = "CASE WHEN instr(substr(rf.source_file,10),':')>0 THEN substr(rf.source_file,10,instr(substr(rf.source_file,10),':')-1) ELSE substr(rf.source_file,10) END";
-      const columns = restOnly ? 'report_date,channel_id,network_code,domain,requests,matched_requests,impressions,clicks,revenue,settled_revenue'
-        : 'report_date,channel_id,domain,requests,matched_requests,impressions,clicks,revenue,settled_revenue';
+      const columns = restOnly ? 'report_date,channel_id,network_code,domain,requests,matched_requests,impressions,clicks,revenue,upstream_revenue,settled_revenue'
+        : 'report_date,channel_id,domain,requests,matched_requests,impressions,clicks,revenue,upstream_revenue,settled_revenue';
       const dimensions = 'rf.report_date,rf.channel_id,' + (restOnly ? network + ',' : '') + domain;
       const insertSql = 'INSERT INTO ' + table + '(' + columns + ') '
         + 'SELECT ' + dimensions + ',SUM(rf.requests),SUM(rf.matched_requests),'
-        + 'SUM(rf.impressions),SUM(rf.clicks),SUM(rf.revenue),SUM(' + settled + ') '
+        + 'SUM(rf.impressions),SUM(rf.clicks),SUM(rf.revenue),SUM(rf.revenue*(' + upstreamShareSql('rf') + ')/100.0),SUM(' + settled + ') '
         + 'FROM revenue_facts rf ' + condition + ' GROUP BY ' + dimensions;
       db.prepare(insertSql).run(...params);
     }
@@ -505,7 +510,7 @@ function refreshDashboardDaily(channelId, start, end) {
   dashboardRestDailyReady = true;
   invalidateReportCache();
 }
-if ((!db.prepare('SELECT 1 FROM dashboard_daily LIMIT 1').get() || !db.prepare('SELECT 1 FROM dashboard_rest_daily LIMIT 1').get()) &&
+if ((legacyDashboardColumns || !db.prepare('SELECT 1 FROM dashboard_daily LIMIT 1').get() || !db.prepare('SELECT 1 FROM dashboard_rest_daily LIMIT 1').get()) &&
     db.prepare('SELECT 1 FROM revenue_facts LIMIT 1').get()) refreshDashboardDaily();
 
 app.get('/api/dashboard', requireAuth, cachedReport, (req, res) => {
@@ -514,7 +519,8 @@ app.get('/api/dashboard', requireAuth, cachedReport, (req, res) => {
   const restOnly = req.query.source === 'rest', ready = restOnly ? dashboardRestDailyReady : dashboardDailyReady;
   if (restOnly && !ready) where.sql += " AND source_file LIKE 'gam-rest:%'";
   const source = ready ? restOnly ? 'dashboard_rest_daily' : 'dashboard_daily' : 'revenue_facts';
-  const sums = db.prepare('SELECT COALESCE(SUM(requests),0) requests,COALESCE(SUM(matched_requests),0) matched,COALESCE(SUM(impressions),0) impressions,COALESCE(SUM(clicks),0) clicks,COALESCE(SUM(revenue),0) revenue FROM ' + source + ' WHERE ' + where.sql).get(...where.params);
+  const upstreamField = ready && req.user.role === 'admin' ? ',COALESCE(SUM(upstream_revenue),0) upstreamSettlement' : '';
+  const sums = db.prepare('SELECT COALESCE(SUM(requests),0) requests,COALESCE(SUM(matched_requests),0) matched,COALESCE(SUM(impressions),0) impressions,COALESCE(SUM(clicks),0) clicks,COALESCE(SUM(revenue),0) revenue' + upstreamField + ' FROM ' + source + ' WHERE ' + where.sql).get(...where.params);
   const factor = req.user.role === 'channel' ? (ready ? 'settled_revenue' : settledRevenueSql('revenue_facts')) : 'revenue';
   const domain = ready ? 'domain' : mappedDomainSql('revenue_facts');
   const trend = db.prepare('SELECT report_date date,ROUND(SUM(' + factor + '),6) revenue FROM ' + source + ' WHERE ' + where.sql + ' GROUP BY report_date ORDER BY report_date').all(...where.params);
@@ -524,7 +530,18 @@ app.get('/api/dashboard', requireAuth, cachedReport, (req, res) => {
   const settledRevenue = ready
     ? db.prepare('SELECT COALESCE(SUM(settled_revenue),0) value FROM ' + source + ' WHERE ' + where.sql).get(...where.params).value
     : db.prepare('SELECT COALESCE(SUM(' + settledRevenueSql('rf') + '),0) value FROM revenue_facts rf WHERE ' + settledWhere).get(...where.params).value;
-  res.json({ ok: true, summary: { ...sums, revenue: req.user.role === 'channel' ? settledRevenue : sums.revenue, channelRevenue: settledRevenue, matchRate: sums.requests ? sums.matched * 100 / sums.requests : 0 }, trend, topUrls, lastSync });
+  let upstreamSettlement = sums.upstreamSettlement;
+  if (req.user.role === 'admin' && !ready) {
+    const grouped = 'SELECT account,report_date,SUM(revenue) revenue FROM revenue_facts WHERE ' + where.sql + ' GROUP BY account,report_date';
+    upstreamSettlement = db.prepare('SELECT COALESCE(SUM(rf.revenue*(' + upstreamShareSql('rf') + ')/100.0),0) value FROM (' + grouped + ') rf').get(...where.params).value;
+  }
+  const summary = { ...sums, revenue: req.user.role === 'channel' ? settledRevenue : sums.revenue,
+    channelRevenue: settledRevenue, matchRate: sums.requests ? sums.matched * 100 / sums.requests : 0 };
+  if (req.user.role === 'admin') {
+    summary.upstreamSettlement = upstreamSettlement;
+    summary.platformProfit = upstreamSettlement - settledRevenue;
+  }
+  res.json({ ok: true, summary, trend, topUrls, lastSync });
 });
 
 function dateInNetworkZone(now, zone) {
@@ -581,7 +598,7 @@ const reportMetricMap = {
   clicks: 'clicks', revenue: 'revenue', matchRate: 'matchRate',
   impressionRate: 'impressionRate', clickRate: 'clickRate', ecpm: 'ecpm',
   upstreamRevenue: 'upstreamRevenue', channelRevenue: 'channelRevenue',
-  grossProfit: 'upstreamRevenue*0.85-channelRevenue',
+  grossProfit: 'upstreamRevenue-channelRevenue',
   upstreamSharePercent: 'upstreamSharePercent', channelSharePercent: 'channelSharePercent'
 };
 function serveReports(req, res, exportCsv = false) {
@@ -721,7 +738,7 @@ function serveReports(req, res, exportCsv = false) {
       upstreamRevenue: isAdmin ? row.upstreamRevenue : undefined,
       upstreamSharePercent: isAdmin ? row.upstreamSharePercent : undefined,
       channelSharePercent: isAdmin ? row.channelSharePercent : undefined,
-      grossProfit: isAdmin ? row.upstreamRevenue*0.85-row.channelRevenue : undefined };
+      grossProfit: isAdmin ? row.upstreamRevenue-row.channelRevenue : undefined };
   });
   if (exportCsv) {
     if (rows.length > 50000) return res.status(413).json({ ok:false, error:'report_export_too_large' });
@@ -825,7 +842,7 @@ app.get('/api/admin/reports/accounts', requireAuth, requireAdmin, cachedReport, 
       ecpm: Number(row.impressions) ? Number(row.revenue) * 1000 / Number(row.impressions) : 0,
       upstreamEcpm: Number(row.impressions) ? Number(row.upstreamRevenue) * 1000 / Number(row.impressions) : 0,
       channelEcpm: Number(row.impressions) ? Number(row.channelRevenue) * 1000 / Number(row.impressions) : 0,
-      grossProfit: Number(row.upstreamRevenue || 0) * 0.85 - Number(row.channelRevenue || 0)
+      grossProfit: Number(row.upstreamRevenue || 0) - Number(row.channelRevenue || 0)
     }))
   });
 });
@@ -880,7 +897,7 @@ app.get('/api/public/account/revenue', requireAccountReportKey, (req, res) => {
     ecpm: Number(row.impressions) ? Number(row.revenue) * 1000 / Number(row.impressions) : 0,
     upstreamEcpm: Number(row.impressions) ? Number(row.upstreamRevenue) * 1000 / Number(row.impressions) : 0,
     channelEcpm: Number(row.impressions) ? Number(row.channelRevenue) * 1000 / Number(row.impressions) : 0,
-    grossProfit: Number(row.upstreamRevenue || 0) * 0.85 - Number(row.channelRevenue || 0)
+    grossProfit: Number(row.upstreamRevenue || 0) - Number(row.channelRevenue || 0)
   })) });
 });
 

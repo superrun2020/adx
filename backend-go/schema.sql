@@ -50,8 +50,8 @@ CREATE TABLE IF NOT EXISTS gam_domain_channel_assignments (
   created_by TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY(root_domain,effective_from), FOREIGN KEY(channel_id) REFERENCES channels(id)
 );
-CREATE TABLE IF NOT EXISTS dashboard_daily (report_date TEXT NOT NULL, channel_id INTEGER NOT NULL, domain TEXT NOT NULL, requests INTEGER NOT NULL, matched_requests INTEGER NOT NULL, impressions INTEGER NOT NULL, clicks INTEGER NOT NULL, revenue REAL NOT NULL, settled_revenue REAL NOT NULL, PRIMARY KEY(report_date,channel_id,domain)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS dashboard_rest_daily (report_date TEXT NOT NULL, channel_id INTEGER NOT NULL, network_code TEXT NOT NULL, domain TEXT NOT NULL, requests INTEGER NOT NULL, matched_requests INTEGER NOT NULL, impressions INTEGER NOT NULL, clicks INTEGER NOT NULL, revenue REAL NOT NULL, settled_revenue REAL NOT NULL, PRIMARY KEY(report_date,channel_id,network_code,domain)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS dashboard_daily (report_date TEXT NOT NULL, channel_id INTEGER NOT NULL, domain TEXT NOT NULL, requests INTEGER NOT NULL, matched_requests INTEGER NOT NULL, impressions INTEGER NOT NULL, clicks INTEGER NOT NULL, revenue REAL NOT NULL, upstream_revenue REAL NOT NULL DEFAULT 0, settled_revenue REAL NOT NULL, PRIMARY KEY(report_date,channel_id,domain)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS dashboard_rest_daily (report_date TEXT NOT NULL, channel_id INTEGER NOT NULL, network_code TEXT NOT NULL, domain TEXT NOT NULL, requests INTEGER NOT NULL, matched_requests INTEGER NOT NULL, impressions INTEGER NOT NULL, clicks INTEGER NOT NULL, revenue REAL NOT NULL, upstream_revenue REAL NOT NULL DEFAULT 0, settled_revenue REAL NOT NULL, PRIMARY KEY(report_date,channel_id,network_code,domain)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS gam_ad_unit_creations (
   id INTEGER PRIMARY KEY AUTOINCREMENT, gam_account_id INTEGER NOT NULL, network_code TEXT NOT NULL,
   site_name TEXT NOT NULL, site_url TEXT NOT NULL, domain TEXT NOT NULL, parent_ad_unit TEXT NOT NULL,

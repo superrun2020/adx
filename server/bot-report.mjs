@@ -27,17 +27,22 @@ function reportMessage(date, instant, totals) {
     '统计时间：' + stamp + '（Asia/Shanghai）'];
   if (!totals.rows) lines.push('暂无已同步的 GAM REST 明细，流水和利润暂不可确认。');
   else {
-    const profit = totals.upstreamRevenue * 0.85 - totals.channelRevenue;
+    const profit = totals.upstreamRevenue - totals.channelRevenue;
     lines.push('流水（GAM REST 原始收入）：$' + totals.grossRevenue.toFixed(2),
-      '利润（上游分成后收入 × 85% − 渠道结算）：$' + profit.toFixed(2),
+      '上游应结算：$' + totals.upstreamRevenue.toFixed(2),
+      '平台留存（上游应结算 − 渠道结算）：$' + profit.toFixed(2),
+      '渠道结算：$' + totals.channelRevenue.toFixed(2),
       '已同步明细：' + totals.rows + ' 条');
     if (totals.lastImport) lines.push('最近入库（UTC）：' + totals.lastImport);
   }
   for (const [index, account] of totals.accounts.entries()) lines.push('', '账号明细 ' + (index + 1),
     '账号：' + account.name + '（Network ' + account.networkCode + '）',
     '渠道：' + account.channelName, '数据日：' + account.date + '（' + account.timeZone + '）',
-    '流水：$' + account.revenue.toFixed(2), '利润：$' + account.profit.toFixed(2));
-  lines.push('当天数值为截至统计时间的快照；GAM 后续修订以数据报告为准。');
+    '流水：$' + account.revenue.toFixed(2),
+    '上游应结算：$' + account.upstreamSettlement.toFixed(2),
+    '平台留存：$' + account.profit.toFixed(2),
+    '渠道结算：$' + account.channelRevenue.toFixed(2));
+  lines.push('结算额按配置测算，非实际到账；当天数据为发送时快照，GAM 后续修订以数据报告为准。');
   return lines.join('\n');
 }
 
@@ -85,7 +90,8 @@ export function registerBotReport(app, { db, requireAuth, requireAdmin, encryptC
       for (const channelRow of channelRows) result.accounts.push({ name:account.name, networkCode:account.network_code,
         channelName:db.prepare('SELECT name FROM channels WHERE id=?').get(channelRow.channelId)?.name || '未关联渠道',
         timeZone:zone, date, rows:channelRow.rows, revenue:channelRow.grossRevenue,
-        profit:channelRow.upstreamRevenue * 0.85 - channelRow.channelRevenue });
+        upstreamSettlement:channelRow.upstreamRevenue, channelRevenue:channelRow.channelRevenue,
+        profit:channelRow.upstreamRevenue - channelRow.channelRevenue });
     }
     return result;
   };
@@ -93,7 +99,8 @@ export function registerBotReport(app, { db, requireAuth, requireAdmin, encryptC
     const totals = totalsAt(instant);
     return { date:localDate('Asia/Shanghai', 0, instant), rows:totals.rows, lastImport:totals.lastImport,
       accounts:totals.accounts,
-      ...(totals.rows ? { revenue:totals.grossRevenue, profit:totals.upstreamRevenue * 0.85 - totals.channelRevenue } : {}) };
+      ...(totals.rows ? { revenue:totals.grossRevenue, upstreamSettlement:totals.upstreamRevenue,
+        channelRevenue:totals.channelRevenue, profit:totals.upstreamRevenue - totals.channelRevenue } : {}) };
   };
   const settings = () => {
     const row = config();

@@ -55,7 +55,7 @@ export default function BotReport() {
     <div className="page-heading"><div><Title level={2}>机器人汇报</Title><Text type="secondary">每天向飞书推送当天已同步的流水和利润</Text></div>
       <Button icon={<ReloadOutlined/>} loading={loading} onClick={load}>刷新</Button></div>
     <Alert type="info" showIcon message="每日 23:45（北京时间）自动汇报一次"
-      description="仅统计真实 GAM REST 已同步数据；流水为原始收入，利润沿用数据报告口径：上游分成后收入 × 85% − 渠道结算。当天数值是截至发送时的快照，服务器短时重启可在次日 06:00 前补发。"/>
+      description="仅统计真实 GAM REST 已同步数据；流水为原始收入，上游应结算按账户比例计算，平台留存为上游应结算减渠道结算。结算额非实际到账；当天数值是发送时快照，服务器短时重启可在次日 06:00 前补发。"/>
     {error && <Alert type="error" showIcon message="机器人汇报读取失败" description={error}/>}
     <Row gutter={[16,16]}>
       <Col xs={24} lg={12}><Card title="飞书机器人设置" loading={loading && !settings}>
@@ -71,18 +71,24 @@ export default function BotReport() {
         <Text type="secondary">机器人地址仅加密保存在服务器，页面不回显。</Text>
       </Card></Col>
       <Col xs={24} lg={12}><Card title={'今日数据预览 · ' + (preview?.date || '—')} loading={loading && !preview}>
-        {preview?.rows > 0 ? <Row gutter={[16,16]}><Col span={12}><Statistic title="流水（USD）" value={money(preview.revenue)}/></Col>
-          <Col span={12}><Statistic title="利润（USD）" value={money(preview.profit)}/></Col></Row>
+        {preview?.rows > 0 ? <Row gutter={[16,16]}>
+          <Col span={12}><Statistic title="流水（USD）" value={money(preview.revenue)}/></Col>
+          <Col span={12}><Statistic title="上游应结算（USD）" value={preview.upstreamSettlement == null ? '—' : money(preview.upstreamSettlement)}/></Col>
+          <Col span={12}><Statistic title="平台留存（USD）" value={money(preview.profit)}/></Col>
+          <Col span={12}><Statistic title="渠道结算（USD）" value={preview.channelRevenue == null ? '—' : money(preview.channelRevenue)}/></Col>
+        </Row>
           : <Text type="secondary">今天暂无已同步的 GAM REST 明细，暂不把空白误报为 0。</Text>}
         <div style={{marginTop:16}}><Text type="secondary">已同步明细：{preview?.rows ?? '—'} 条；最近入库（UTC）：{preview?.lastImport || '—'}</Text></div>
         <div style={{marginTop:16}}><Text strong>各 GAM 账号当地日期</Text>
           <NumericSortableTable size="small" rowKey={row => row.networkCode + ':' + row.channelName + ':' + row.date} style={{marginTop:8}}
-            dataSource={preview?.accounts || []} numericKeys={['rows','revenue','profit']}
+            dataSource={preview?.accounts || []} numericKeys={['rows','revenue','upstreamSettlement','profit','channelRevenue']}
             columns={[{title:'账号',dataIndex:'name'},{title:'渠道',dataIndex:'channelName'},{title:'当地日期',dataIndex:'date'},
               {title:'时区',dataIndex:'timeZone'},{title:'明细',dataIndex:'rows',align:'right'},
               {title:'流水',dataIndex:'revenue',align:'right',render:money},
+              {title:'上游应结算',dataIndex:'upstreamSettlement',align:'right',render:value => value == null ? '—' : money(value)},
+              {title:'渠道结算',dataIndex:'channelRevenue',align:'right',render:value => value == null ? '—' : money(value)},
               {title:'利润',dataIndex:'profit',align:'right',render:money}]}
-            scroll={{x:650}} pagination={false}/>
+            scroll={{x:900}} pagination={false}/>
         </div>
       </Card></Col>
     </Row>

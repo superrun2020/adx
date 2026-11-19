@@ -19,10 +19,18 @@ const coreMetrics = [
   ['impressionRate','展示率'], ['clickRate','点击率'], ['ecpm','eCPM']
 ];
 const adminMetrics = [
-  ['upstreamRevenue','上游分成后'], ['channelRevenue','渠道结算'],
-  ['grossProfit','毛利'], ['upstreamSharePercent','上游比例'],
+  ['upstreamRevenue','上游应结算金额'], ['grossProfit','平台留存'],
+  ['channelRevenue','渠道结算'], ['upstreamSharePercent','上游比例'],
   ['channelSharePercent','渠道比例']
 ];
+const reportMetrics = admin => admin
+  ? [['revenue','原始流水'], ...adminMetrics.slice(0, 3),
+      ...coreMetrics.filter(([key]) => key !== 'revenue'), ...adminMetrics.slice(3)]
+  : coreMetrics;
+const defaultMetrics = admin => admin
+  ? ['revenue','upstreamRevenue','grossProfit','channelRevenue',
+      'requests','impressions','clicks','ecpm']
+  : coreMetrics.map(([key]) => key);
 const money = value => '$' + Number(value || 0).toLocaleString('en-US', { minimumFractionDigits:2, maximumFractionDigits:2 });
 const number = value => Number(value || 0).toLocaleString('zh-CN');
 const pct = value => Number(value || 0).toFixed(2) + '%';
@@ -46,7 +54,7 @@ async function getJson(path) {
 }
 function metricColumns(selected, admin, sort, onSort) {
   return selected.map(key => {
-    const label = [...coreMetrics, ...(admin ? adminMetrics : [])].find(([id]) => id === key)?.[1] || key;
+    const label = reportMetrics(admin).find(([id]) => id === key)?.[1] || key;
     const render = key.toLowerCase().includes('rate') || key.endsWith('Percent') ? pct
       : ['revenue','ecpm','grossProfit'].some(part => key.toLowerCase().includes(part.toLowerCase())) ? money : number;
     return { title:<NumericSortHeader label={label} direction={sort?.key === key ? sort.direction : ''}
@@ -57,7 +65,7 @@ function metricColumns(selected, admin, sort, onSort) {
 
 export default function ReportExplorer({ range, setRange, admin, user }) {
   const [selectedDimensions, setSelectedDimensions] = useState(defaultDimensions);
-  const [selectedMetrics, setSelectedMetrics] = useState(coreMetrics.map(([key]) => key));
+  const [selectedMetrics, setSelectedMetrics] = useState(() => defaultMetrics(admin));
   const [filters, setFilters] = useState(defaultFilters), [applied, setApplied] = useState(defaultFilters);
   const [options, setOptions] = useState({ accounts:[], channels:[] });
   const [rows, setRows] = useState(() => readCached(user, defaultReportPath(range))?.data?.items || []);
@@ -77,7 +85,7 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
   const dailyBreakdownOptions = [{value:'',label:'仅按日期'},
     ...shownDimensions.filter(([key]) => !['date','hour'].includes(key))
       .map(([value,label]) => ({value,label:'日期 + ' + label}))];
-  const shownMetrics = [...coreMetrics, ...(admin ? adminMetrics : [])];
+  const shownMetrics = reportMetrics(admin);
   const setFilter = (key, value) => setFilters(current => ({ ...current, [key]:value ?? '' }));
   const params = (dims, pageNumber, size, extra = {}) => new URLSearchParams({
     start:range[0].format('YYYY-MM-DD'), end:range[1].format('YYYY-MM-DD'),
@@ -132,7 +140,7 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
     setApplied({ ...filters, domain:domains.join(',') }); setFilterOpen(false);
   };
   const reset = () => { setFilters(defaultFilters); setApplied(defaultFilters); setPage(1); setDailyPage(1); setSelectedDate(null);
-    setSelectedDimensions(defaultDimensions); setSelectedMetrics(coreMetrics.map(([key]) => key)); setSort(null); setDailySort(null); };
+    setSelectedDimensions(defaultDimensions); setSelectedMetrics(defaultMetrics(admin)); setSort(null); setDailySort(null); };
   const exportCsv = async () => {
     setExporting(true);
     try {
@@ -210,6 +218,7 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
     </Card>
     <Card className="report-results-card" title="收益明细" extra={<Space><Text type="secondary">{range[0].format('YYYY-MM-DD')} 至 {range[1].format('YYYY-MM-DD')} · 共 {number(total)} 组</Text>
       {selectedDate && <Button size="small" onClick={() => { setPage(1); setSelectedDate(null); }}>全部日期</Button>}</Space>}>
+      {admin && <Text type="secondary">原始流水 → 上游应结算 → 平台留存 → 渠道结算；结算金额按配置计算，并非实际到账。</Text>}
       <Table size="small" rowKey={(row,index) => String(page) + '-' + index} loading={loading && !cachedRows} dataSource={rows}
         className="report-detail-table" tableLayout="fixed" columns={detailColumns} pagination={{ current:page, pageSize, total, showSizeChanger:true, pageSizeOptions:[20,50,100,200],
           onChange:(next,size) => { setPage(next); setPageSize(size); } }}

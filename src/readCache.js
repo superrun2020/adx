@@ -1,4 +1,4 @@
-const prefix = 'adx:read-cache:v1:';
+const prefix = 'adx:read-cache:v2:';
 const maxEntries = 8;
 
 function keyFor(user) {
