@@ -48,6 +48,7 @@ test('daily bot report uses REST profit, validates webhook and sends once', asyn
   assert.equal(sends,1);
   assert.match(sentText,/流水（GAM REST 原始收入）：\$150\.00/);
   assert.match(sentText,/上游应结算：\$120\.00\n平台留存（上游应结算 − 渠道结算）：\$60\.00\n渠道结算：\$60\.00/);
+  assert.doesNotMatch(sentText,/已同步明细：|匹配率：|点击率：/);
   assert.match(sentText,/2026-11-11（Pacific\/Kiritimati）/);
   assert.match(sentText,/账号：Shanghai GAM（Network 123）\n渠道：Zhao\n数据日：2026-11-10（Asia\/Shanghai）\n流水：\$100\.00\n上游应结算：\$80\.00\n平台留存：\$40\.00\n渠道结算：\$40\.00/);
   assert.match(sentText,/账号：Kiritimati GAM（Network 456）\n渠道：Rinser\n数据日：2026-11-11（Pacific\/Kiritimati）\n流水：\$50\.00\n上游应结算：\$40\.00\n平台留存：\$20\.00\n渠道结算：\$20\.00/);

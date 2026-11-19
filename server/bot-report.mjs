@@ -31,9 +31,7 @@ function reportMessage(date, instant, totals) {
     lines.push('流水（GAM REST 原始收入）：$' + totals.grossRevenue.toFixed(2),
       '上游应结算：$' + totals.upstreamRevenue.toFixed(2),
       '平台留存（上游应结算 − 渠道结算）：$' + profit.toFixed(2),
-      '渠道结算：$' + totals.channelRevenue.toFixed(2),
-      '已同步明细：' + totals.rows + ' 条');
-    if (totals.lastImport) lines.push('最近入库（UTC）：' + totals.lastImport);
+      '渠道结算：$' + totals.channelRevenue.toFixed(2));
   }
   for (const [index, account] of totals.accounts.entries()) lines.push('', '账号明细 ' + (index + 1),
     '账号：' + account.name + '（Network ' + account.networkCode + '）',

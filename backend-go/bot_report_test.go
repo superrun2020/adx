@@ -58,7 +58,8 @@ func TestBotReportUsesRealRestRevenueAndSendsOnce(t *testing.T) {
 			!strings.Contains(text, "流水（GAM REST 原始收入）：$150.00") ||
 			!strings.Contains(text, "上游应结算：$120.00\n平台留存（上游应结算 − 渠道结算）：$60.00\n渠道结算：$60.00") ||
 			!strings.Contains(text, "账号：Shanghai GAM（Network 123）\n渠道：Test\n数据日：2026-11-10（Asia/Shanghai）\n流水：$100.00\n上游应结算：$80.00\n平台留存：$40.00\n渠道结算：$40.00") ||
-			!strings.Contains(text, "2026-11-11（Pacific/Kiritimati）") {
+			!strings.Contains(text, "2026-11-11（Pacific/Kiritimati）") ||
+			strings.Contains(text, "已同步明细：") || strings.Contains(text, "匹配率：") || strings.Contains(text, "点击率：") {
 			t.Errorf("unexpected report content: %s", text)
 		}
 		return nil

@@ -139,11 +139,7 @@ func botReportMessage(date string, now time.Time, totals map[string]any) string 
 		lines = append(lines, fmt.Sprintf("流水（GAM REST 原始收入）：$%.2f", gross),
 			fmt.Sprintf("上游应结算：$%.2f", upstream),
 			fmt.Sprintf("平台留存（上游应结算 − 渠道结算）：$%.2f", profit),
-			fmt.Sprintf("渠道结算：$%.2f", channel),
-			fmt.Sprintf("已同步明细：%.0f 条", numberValue(totals["rows"])))
-		if last := importString(totals["lastImport"]); last != "" {
-			lines = append(lines, "最近入库（UTC）："+last)
-		}
+			fmt.Sprintf("渠道结算：$%.2f", channel))
 	}
 	for index, account := range totals["accounts"].([]map[string]any) {
 		lines = append(lines, "", fmt.Sprintf("账号明细 %d", index+1),
