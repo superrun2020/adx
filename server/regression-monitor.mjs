@@ -9,6 +9,16 @@ const cadences = [
   { name: 'month', days: 30, interval: 168 * 3600_000 }
 ];
 
+export function regressionDispatchDue(instant = new Date()) {
+  const hour = Number(new Intl.DateTimeFormat('en-GB', { timeZone:'America/Los_Angeles',
+    hour:'2-digit', hourCycle:'h23' }).format(instant));
+  return hour === 1;
+}
+
+export function regressionWindowReadyToSend(timeZone, window, instant = new Date()) {
+  return regressionDispatchDue(instant) && window.end < localDate(timeZone, 0, instant);
+}
+
 export function regressionWindow(timeZone, cadence, instant = new Date()) {
   const item = cadences.find(row => row.name === cadence);
   if (!item) throw new Error('invalid_regression_cadence');
@@ -135,7 +145,7 @@ export function regressionTestMessage(instant = new Date()) {
       [sample('news.example.com', 100, 70), sample('finance.example.com', 80, 60)]);
 }
 
-export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, encryptCredential, decryptCredential, transaction, gamSync, audit }) {
+export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, encryptCredential, decryptCredential, transaction, gamSync, audit, now = () => new Date() }) {
   db.exec("CREATE TABLE IF NOT EXISTS regression_settings (id INTEGER PRIMARY KEY CHECK(id=1), feishu_enabled INTEGER NOT NULL DEFAULT 0, min_revenue REAL NOT NULL DEFAULT 50, min_drop_percent REAL NOT NULL DEFAULT 2, webhook_ciphertext TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
   db.exec("CREATE TABLE IF NOT EXISTS regression_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, soap_account_id INTEGER NOT NULL, cadence TEXT NOT NULL, period_start TEXT NOT NULL, period_end TEXT NOT NULL, baseline_start TEXT NOT NULL DEFAULT '', baseline_end TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(soap_account_id) REFERENCES soap_accounts(id) ON DELETE CASCADE)");
   db.exec("CREATE TABLE IF NOT EXISTS regression_snapshots (run_id INTEGER NOT NULL, domain TEXT NOT NULL, revenue REAL NOT NULL, requests INTEGER NOT NULL, impressions INTEGER NOT NULL, clicks INTEGER NOT NULL, PRIMARY KEY(run_id,domain), FOREIGN KEY(run_id) REFERENCES regression_runs(id) ON DELETE CASCADE)");
@@ -328,6 +338,7 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
   });
 
   const notify = async (account, window, alerts) => {
+    if (!regressionWindowReadyToSend(account.rest_network_timezone, window, now())) return;
     const config = settings();
     if (!config.feishu_enabled || !config.webhook_ciphertext) return;
     const windowChannel = gamChannelForDate(db, account, window.end);
@@ -364,15 +375,19 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
   };
 
   const retryPendingAlerts = async account => {
+    const instant = now();
+    if (!regressionDispatchDue(instant)) return;
+    const today = localDate(account.rest_network_timezone, 0, instant);
     const config = settings();
     if (!config.feishu_enabled || !config.webhook_ciphertext) return;
     const rows = db.prepare(`SELECT e.id,e.cadence,e.period_start,e.period_end,e.domain,e.old_revenue,e.new_revenue,e.old_requests,e.new_requests,e.old_impressions,e.new_impressions,e.old_clicks,e.new_clicks,e.drop_start_date,e.created_at,r.baseline_start,r.baseline_end,e.alert_old_revenue,e.alert_new_revenue
-      FROM regression_events e JOIN regression_runs r ON r.id=e.run_id WHERE e.soap_account_id=? AND e.alert_status IN ('pending','failed') AND e.send_attempts<5
+      FROM regression_events e JOIN regression_runs r ON r.id=e.run_id WHERE e.soap_account_id=? AND e.period_end<? AND e.alert_status IN ('pending','failed') AND e.send_attempts<5
       AND (e.last_attempt_at IS NULL OR e.last_attempt_at<=datetime('now','-15 minutes'))
-      ORDER BY e.id DESC LIMIT 100`).all(account.id);
+      ORDER BY e.id DESC LIMIT 100`).all(account.id, today);
     const groups = new Map();
     const seen = new Set();
     const pausedCache = new Map();
+    const freshCache = new Map();
     for (const row of rows) {
       const sent = db.prepare("SELECT 1 FROM regression_events WHERE soap_account_id=? AND cadence=? AND period_start=? AND period_end=? AND domain=? AND alert_status='sent' AND id<>? LIMIT 1")
         .get(account.id, row.cadence, row.period_start, row.period_end, row.domain, row.id);
@@ -390,17 +405,25 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
         after: { revenue: row.new_revenue, requests: row.new_requests, impressions: row.new_impressions, clicks: row.new_clicks } };
       const key = [row.cadence, row.period_start, row.period_end].join('|');
       const window = { cadence: row.cadence, start: row.period_start, end: row.period_end, baselineStart: row.baseline_start, baselineEnd: row.baseline_end };
-      if (row.alert_old_revenue != null && row.alert_new_revenue != null) {
-        alert.pauseExcluded = row.alert_old_revenue < row.old_revenue - 1e-6;
-        alert.before.revenue = row.alert_old_revenue;
-        alert.after.revenue = row.alert_new_revenue;
-      } else if (row.cadence !== 'day') {
+      if (!freshCache.has(key)) freshCache.set(key, facts(account, window.start, window.end));
+      const fresh = freshCache.get(key);
+      if (!fresh.size) continue;
+      alert.after = fresh.get(row.domain) || empty();
+      const rawAfter = alert.after;
+      if (!alertQualified(alert.before, rawAfter, config)) {
+        db.prepare("UPDATE regression_events SET new_revenue=?,new_requests=?,new_impressions=?,new_clicks=?,alert_old_revenue=?,alert_new_revenue=?,alert_status='not_triggered',alert_error='',drop_start_date=NULL WHERE id=? AND alert_status IN ('pending','failed')")
+          .run(rawAfter.revenue, rawAfter.requests, rawAfter.impressions, rawAfter.clicks, alert.before.revenue, rawAfter.revenue, row.id);
+        continue;
+      }
+      if (row.cadence !== 'day') {
         if (!pausedCache.has(key)) pausedCache.set(key, pausedRevenue(account, window));
         const adjustment = excludePausedRevenue(alert.before, alert.after, pausedCache.get(key).get(row.domain));
         alert.before = adjustment.before;
         alert.after = adjustment.after;
         alert.pauseExcluded = adjustment.excluded;
       }
+      db.prepare("UPDATE regression_events SET new_revenue=?,new_requests=?,new_impressions=?,new_clicks=?,alert_old_revenue=?,alert_new_revenue=? WHERE id=? AND alert_status IN ('pending','failed')")
+        .run(rawAfter.revenue, rawAfter.requests, rawAfter.impressions, rawAfter.clicks, alert.before.revenue, alert.after.revenue, row.id);
       if (alert.pauseExcluded && !alertQualified(alert.before, alert.after, config)) {
         db.prepare("UPDATE regression_events SET alert_status='paused_suppressed',alert_error='' WHERE id=?").run(row.id);
         continue;

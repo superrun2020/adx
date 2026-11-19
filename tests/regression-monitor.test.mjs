@@ -1,7 +1,17 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { regressionWindow, regressionCycleWindow, alertQualified, firstDropDate, regressionAlertMessage, regressionTestMessage, pausedAdUnitIds, excludePausedRevenue, registerRegressionMonitor } from '../server/regression-monitor.mjs';
+import { regressionWindow, regressionCycleWindow, regressionDispatchDue, regressionWindowReadyToSend, alertQualified, firstDropDate, regressionAlertMessage, regressionTestMessage, pausedAdUnitIds, excludePausedRevenue, registerRegressionMonitor } from '../server/regression-monitor.mjs';
+
+test('regression notifications wait for Pacific afternoon and complete GAM dates', () => {
+  const winter = new Date('2026-11-19T09:00:00Z');
+  assert.equal(regressionDispatchDue(new Date('2026-11-19T08:59:00Z')), false);
+  assert.equal(regressionDispatchDue(winter), true);
+  assert.equal(regressionDispatchDue(new Date('2026-07-01T08:00:00Z')), true);
+  assert.equal(regressionDispatchDue(new Date('2026-11-19T10:00:00Z')), false);
+  assert.equal(regressionWindowReadyToSend('Asia/Singapore', { end:'2026-11-18' }, winter), true);
+  assert.equal(regressionWindowReadyToSend('Asia/Singapore', { end:'2026-11-19' }, winter), false);
+});
 
 test('regression windows use each GAM account timezone and equal-length periods', () => {
   const instant = new Date('2026-11-04T01:30:00Z');
@@ -130,7 +140,7 @@ test('completed three-day comparison runs once and Feishu retries its original a
   db.prepare("UPDATE regression_events SET alert_status='failed',send_attempts=1,last_attempt_at='2000-01-01 00:00:00' WHERE id=?").run(first.id);
   const retryMonitor = registerRegressionMonitor(app, { db, requireAuth: () => {}, requireAdmin: () => {}, encryptCredential: () => '',
     decryptCredential: () => ({ url: 'https://open.feishu.cn/open-apis/bot/v2/hook/test', secret: '' }), transaction,
-    gamSync: { execute: async () => ({ rows: 1 }) }, audit: () => {} });
+    gamSync: { execute: async () => ({ rows: 1 }) }, audit: () => {}, now: () => new Date('2026-11-19T09:00:00Z') });
   const originalFetch = globalThis.fetch;
   let sent = 0, message = '';
   globalThis.fetch = async (_url, options) => {
@@ -168,8 +178,9 @@ test('transferred account never retries old-channel Feishu alerts', async () => 
   const transaction = fn => { db.exec('BEGIN'); try { const value = fn(); db.exec('COMMIT'); return value; } catch (error) { db.exec('ROLLBACK'); throw error; } };
   const monitor = registerRegressionMonitor(app, { db, requireAuth: () => {}, requireAdmin: () => {}, encryptCredential: () => '',
     decryptCredential: () => { throw new Error('old owner must not decrypt webhook'); }, transaction,
-    gamSync: { execute: async () => ({ rows: 0 }) }, audit: () => {} });
+    gamSync: { execute: async () => ({ rows: 0 }) }, audit: () => {}, now: () => new Date('2026-11-19T09:00:00Z') });
   db.exec("UPDATE regression_settings SET feishu_enabled=1,webhook_ciphertext='configured' WHERE id=1");
+  db.exec("INSERT INTO revenue_facts(channel_id,account,report_date,domain,source_file,revenue,requests,impressions,clicks) VALUES(1,'upstream','2026-11-15','example.com','gam-rest:123:test',80,0,0,0)");
   db.exec("INSERT INTO regression_runs(id,soap_account_id,cadence,period_start,period_end,status) VALUES(1,1,'day','2026-11-15','2026-11-15','success')");
   db.exec("INSERT INTO regression_events(id,run_id,soap_account_id,cadence,period_start,period_end,domain,old_revenue,new_revenue,old_requests,new_requests,old_impressions,new_impressions,old_clicks,new_clicks,alert_status) VALUES(1,1,1,'day','2026-11-15','2026-11-15','example.com',100,80,0,0,0,0,0,0,'failed')");
   await monitor.runForAccount({ id:1, name:'GAM', network_code:'123', rest_channel_id:2, rest_upstream_account_id:1, rest_network_timezone:'Asia/Shanghai' });

@@ -67,6 +67,21 @@ var regressionCadences = []struct {
 	{"month", 30, 168 * time.Hour},
 }
 
+// Dispatch after the US Pacific day has closed. This is 16:00 in China
+// during US daylight time and 17:00 in China during US standard time.
+func regressionDispatchDue(now time.Time) bool {
+	zone, err := time.LoadLocation("America/Los_Angeles")
+	return err == nil && now.In(zone).Hour() == 1
+}
+
+func regressionWindowReadyToSend(networkZone string, window regressionWindow, now time.Time) bool {
+	if !regressionDispatchDue(now) {
+		return false
+	}
+	today, err := localGamDateAt(networkZone, now, 0)
+	return err == nil && window.End < today
+}
+
 // Windows are calculated in the individual GAM network's timezone. Longer
 // windows exclude the incomplete current day and compare equal-length periods.
 func regressionWindowAt(zone string, now time.Time, cadence string) (regressionWindow, error) {
@@ -857,11 +872,24 @@ func (a *app) runRegressionWindow(ctx context.Context, account map[string]any, d
 // A persisted pending/failed alert must survive a restart or a temporary webhook outage.
 // Sent alerts and old disabled alerts are never replayed.
 func (a *app) retryRegressionAlerts(ctx context.Context, account map[string]any) {
+	a.retryRegressionAlertsAt(ctx, account, time.Now())
+}
+
+func (a *app) retryRegressionAlertsAt(ctx context.Context, account map[string]any, now time.Time) {
+	zone := importString(account["rest_network_timezone"])
+	if !regressionDispatchDue(now) {
+		return
+	}
+	today, dateErr := localGamDateAt(zone, now, 0)
+	if dateErr != nil {
+		log.Printf("regression_timezone_invalid account=%d error=%v", intMap(account, "id"), dateErr)
+		return
+	}
 	config, err := a.currentRegressionConfig()
 	if err != nil || !config.Enabled || config.Ciphertext == "" {
 		return
 	}
-	rows, err := a.db.QueryContext(ctx, "SELECT e.id,e.cadence,e.period_start,e.period_end,r.baseline_start,r.baseline_end,e.domain,e.old_revenue,e.new_revenue,e.old_requests,e.new_requests,e.old_impressions,e.new_impressions,e.old_clicks,e.new_clicks,COALESCE(e.drop_start_date,''),e.created_at,e.alert_old_revenue,e.alert_new_revenue FROM regression_events e JOIN regression_runs r ON r.id=e.run_id WHERE e.soap_account_id=? AND e.alert_status IN ('pending','failed') AND e.send_attempts<5 AND (e.last_attempt_at IS NULL OR e.last_attempt_at<=datetime('now','-15 minutes')) AND NOT EXISTS (SELECT 1 FROM regression_events sent WHERE sent.soap_account_id=e.soap_account_id AND sent.cadence=e.cadence AND sent.period_start=e.period_start AND sent.period_end=e.period_end AND sent.domain=e.domain AND sent.alert_status='sent') ORDER BY e.cadence,e.period_start,e.period_end,e.id DESC LIMIT 100", intMap(account, "id"))
+	rows, err := a.db.QueryContext(ctx, "SELECT e.id,e.cadence,e.period_start,e.period_end,r.baseline_start,r.baseline_end,e.domain,e.old_revenue,e.new_revenue,e.old_requests,e.new_requests,e.old_impressions,e.new_impressions,e.old_clicks,e.new_clicks,COALESCE(e.drop_start_date,''),e.created_at,e.alert_old_revenue,e.alert_new_revenue FROM regression_events e JOIN regression_runs r ON r.id=e.run_id WHERE e.soap_account_id=? AND e.period_end<? AND e.alert_status IN ('pending','failed') AND e.send_attempts<5 AND (e.last_attempt_at IS NULL OR e.last_attempt_at<=datetime('now','-15 minutes')) AND NOT EXISTS (SELECT 1 FROM regression_events sent WHERE sent.soap_account_id=e.soap_account_id AND sent.cadence=e.cadence AND sent.period_start=e.period_start AND sent.period_end=e.period_end AND sent.domain=e.domain AND sent.alert_status='sent') ORDER BY e.cadence,e.period_start,e.period_end,e.id DESC LIMIT 100", intMap(account, "id"), today)
 	if err != nil {
 		log.Printf("regression_retry_query_failed account=%d error=%v", intMap(account, "id"), err)
 		return
@@ -874,6 +902,7 @@ func (a *app) retryRegressionAlerts(ctx context.Context, account map[string]any)
 	seen := map[string]bool{}
 	duplicates := []int64{}
 	suppressed := []int64{}
+	recovered := []int64{}
 	type pendingAlert struct {
 		window             regressionWindow
 		alert              regressionAlert
@@ -897,13 +926,33 @@ func (a *app) retryRegressionAlerts(ctx context.Context, account map[string]any)
 		return
 	}
 	pausedCache := map[string]map[string]pausedRevenue{}
+	freshCache := map[string]map[string]regressionMeasure{}
 	for _, item := range pending {
 		alert, window := item.alert, item.window
-		if item.alertOld.Valid && item.alertNew.Valid {
-			alert.PauseExcluded = item.alertOld.Float64 < alert.Old.Revenue-0.000001
-			alert.Old.Revenue, alert.New.Revenue = item.alertOld.Float64, item.alertNew.Float64
-		} else if window.Cadence != "day" {
-			cacheKey := window.Cadence + "\x00" + window.Start + "\x00" + window.End
+		cacheKey := window.Cadence + "\x00" + window.Start + "\x00" + window.End
+		fresh, ok := freshCache[cacheKey]
+		if !ok {
+			fresh, err = a.regressionFacts(ctx, account, window.Start, window.End)
+			if err != nil {
+				log.Printf("regression_retry_fresh_check_failed account=%d error=%v", intMap(account, "id"), err)
+				return
+			}
+			freshCache[cacheKey] = fresh
+		}
+		if len(fresh) == 0 {
+			continue
+		}
+		alert.New = fresh[alert.Domain]
+		rawNew := alert.New
+		if !alertQualified(alert.Old, rawNew, config) {
+			if _, err = a.db.ExecContext(ctx, "UPDATE regression_events SET new_revenue=?,new_requests=?,new_impressions=?,new_clicks=?,alert_old_revenue=?,alert_new_revenue=? WHERE id=? AND alert_status IN ('pending','failed')", rawNew.Revenue, rawNew.Requests, rawNew.Impressions, rawNew.Clicks, alert.Old.Revenue, rawNew.Revenue, alert.ID); err != nil {
+				log.Printf("regression_retry_refresh_failed id=%d error=%v", alert.ID, err)
+				return
+			}
+			recovered = append(recovered, alert.ID)
+			continue
+		}
+		if window.Cadence != "day" {
 			paused, ok := pausedCache[cacheKey]
 			if !ok {
 				paused, err = a.pausedAdUnitRevenue(ctx, account, window)
@@ -914,6 +963,10 @@ func (a *app) retryRegressionAlerts(ctx context.Context, account map[string]any)
 				pausedCache[cacheKey] = paused
 			}
 			alert.Old, alert.New, alert.PauseExcluded = excludePausedRevenue(alert.Old, alert.New, paused[alert.Domain])
+		}
+		if _, err = a.db.ExecContext(ctx, "UPDATE regression_events SET new_revenue=?,new_requests=?,new_impressions=?,new_clicks=?,alert_old_revenue=?,alert_new_revenue=? WHERE id=? AND alert_status IN ('pending','failed')", rawNew.Revenue, rawNew.Requests, rawNew.Impressions, rawNew.Clicks, alert.Old.Revenue, alert.New.Revenue, alert.ID); err != nil {
+			log.Printf("regression_retry_refresh_failed id=%d error=%v", alert.ID, err)
+			return
 		}
 		if alert.PauseExcluded && !alertQualified(alert.Old, alert.New, config) {
 			suppressed = append(suppressed, alert.ID)
@@ -940,8 +993,13 @@ func (a *app) retryRegressionAlerts(ctx context.Context, account map[string]any)
 			log.Printf("regression_retry_pause_failed id=%d error=%v", id, err)
 		}
 	}
+	for _, id := range recovered {
+		if _, err := a.db.ExecContext(ctx, "UPDATE regression_events SET alert_status='not_triggered',alert_error='',drop_start_date=NULL WHERE id=? AND alert_status IN ('pending','failed')", id); err != nil {
+			log.Printf("regression_retry_recovered_failed id=%d error=%v", id, err)
+		}
+	}
 	for _, item := range groups {
-		a.deliverRegressionAlerts(ctx, account, item.window, item.alerts)
+		a.deliverRegressionAlertsAt(ctx, account, item.window, item.alerts, now)
 	}
 }
 
@@ -955,6 +1013,13 @@ func (a *app) recordRegressionFailure(account map[string]any, window regressionW
 }
 
 func (a *app) deliverRegressionAlerts(ctx context.Context, account map[string]any, window regressionWindow, alerts []regressionAlert) {
+	a.deliverRegressionAlertsAt(ctx, account, window, alerts, time.Now())
+}
+
+func (a *app) deliverRegressionAlertsAt(ctx context.Context, account map[string]any, window regressionWindow, alerts []regressionAlert, now time.Time) {
+	if !regressionWindowReadyToSend(importString(account["rest_network_timezone"]), window, now) {
+		return
+	}
 	config, err := a.currentRegressionConfig()
 	if err != nil || !config.Enabled || config.Ciphertext == "" {
 		return
@@ -976,7 +1041,7 @@ func (a *app) deliverRegressionAlerts(ctx context.Context, account map[string]an
 		location = time.UTC
 		zone = "UTC"
 	}
-	today := time.Now().In(location).Format("2006-01-02")
+	today := now.In(location).Format("2006-01-02")
 	if today < window.End {
 		today = window.End
 	}
@@ -1010,7 +1075,7 @@ func (a *app) deliverRegressionAlerts(ctx context.Context, account map[string]an
 		return
 	}
 	webhook, signingSecret := importString(credential["url"]), importString(credential["secret"])
-	sentAt := time.Now().In(location).Format("2006-01-02 15:04")
+	sentAt := now.In(location).Format("2006-01-02 15:04")
 	cadenceName := map[string]string{"day": "单日快照", "three_days": "近 3 天", "week": "近 7 天", "month": "近 30 天"}[window.Cadence]
 	channelIDs := make([]int64, 0, len(byChannel))
 	for channelID := range byChannel {

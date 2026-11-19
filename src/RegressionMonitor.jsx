@@ -117,7 +117,7 @@ export default function RegressionMonitor() {
         <Button type="primary" icon={<SettingOutlined/>} onClick={openSettings}>通知条件设置</Button></Space></div>
     <Alert showIcon type="info" message={
       '飞书条件：原收入 > ' + money(settings?.minRevenue ?? 50) + ' 且收入下降 ≥ ' + Number(settings?.minDropPercent ?? 2).toFixed(2) + '%；' + (settings?.feishuEnabled ? '通知已启用' : '通知未启用')
-    } description="今天和昨天有数据时，分别每 15 分钟与各自的同日上次快照比较；3 天和 7 天仅在完整区间结束后各比较一次，下一完整区间再与刚结束的区间比较。近 30 天每 7 天重新拉取。已记录的广告单元停投影响会从区间收入中扣除；扣除后仍达到下降阈值，继续推送。"/>
+    } description="数据继续每 15 分钟同步并检测；飞书告警只在美国西海岸 01:00–02:00 发送，美国夏令时对应北京时间 16:00–17:00，冬令时对应 17:00–18:00。发送前重新核对最新数据，只推送 GAM 账号时区内已结束的数据日或完整周期。3 天和 7 天按完整区间比较，近 30 天每 7 天检查。已记录的停投影响会从区间收入中扣除；扣除后仍达到下降阈值才推送。"/>
     {latest && <Text type="secondary">最近完成：{latest.accountName} · {cadenceNames[latest.cadence]} · {stamp(latest.finishedAt, latest.timeZone)}（{latest.timeZone}）</Text>}
     {runs[0]?.status === 'failed' && <Alert type="warning" showIcon message={'最近一次监测失败：' + runs[0].accountName + ' · ' + cadenceNames[runs[0].cadence]} description={runs[0].detail || '请检查 GAM 账号同步状态'} />}
     {runs[0]?.status === 'skipped' && <Alert type="info" showIcon message={'最近一次监测暂未比较：' + runs[0].accountName + ' · ' + cadenceNames[runs[0].cadence]} description={runs[0].detail || '等待 GAM 返回可比较的完整数据'} />}

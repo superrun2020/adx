@@ -73,6 +73,50 @@ func TestRegressionWindowsAndThresholds(t *testing.T) {
 	}
 }
 
+func TestRegressionDispatchUsesPacificClockAndCompletedNetworkDay(t *testing.T) {
+	beforeWinter := time.Date(2026, 11, 19, 8, 59, 0, 0, time.UTC)
+	winter := beforeWinter.Add(time.Minute)
+	summer := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
+	if regressionDispatchDue(beforeWinter) || !regressionDispatchDue(winter) || !regressionDispatchDue(summer) || regressionDispatchDue(winter.Add(time.Hour)) {
+		t.Fatal("Pacific 01:00-02:00 must follow US daylight saving time")
+	}
+	if !regressionWindowReadyToSend("Asia/Singapore", regressionWindow{End: "2026-11-18"}, winter) ||
+		regressionWindowReadyToSend("Asia/Singapore", regressionWindow{End: "2026-11-19"}, winter) ||
+		regressionWindowReadyToSend("Asia/Singapore", regressionWindow{End: "2026-11-18"}, beforeWinter) {
+		t.Fatal("only complete GAM publisher dates may be notified in the Pacific dispatch window")
+	}
+}
+
+func TestRegressionPendingAlertRecoversBeforePacificDispatch(t *testing.T) {
+	a := testApp(t)
+	for _, statement := range []string{
+		"INSERT INTO channels(id,name,email) VALUES(1,'Test','test@example.test')",
+		"INSERT INTO soap_accounts(id,name,network_code,credential_ciphertext,created_by,rest_report_name,rest_money_divisor,rest_upstream_account_id,rest_channel_id,rest_network_timezone) VALUES(1,'GAM','123','test','admin','networks/123/reports/1',1,1,1,'Asia/Singapore')",
+		"INSERT INTO upstream_accounts(id,account_key,name,soap_account_id) VALUES(1,'upstream','Upstream',1)",
+		"INSERT INTO revenue_facts(channel_id,report_date,domain,account,source_file,revenue) VALUES(1,'2026-11-18','example.com','upstream','gam-rest:123:test',100)",
+		"INSERT INTO regression_runs(id,soap_account_id,cadence,period_start,period_end,status) VALUES(1,1,'day','2026-11-18','2026-11-18','success')",
+		"INSERT INTO regression_events(id,run_id,soap_account_id,cadence,period_start,period_end,domain,old_revenue,new_revenue,old_requests,new_requests,old_impressions,new_impressions,old_clicks,new_clicks,alert_status,drop_start_date) VALUES(1,1,1,'day','2026-11-18','2026-11-18','example.com',100,70,0,0,0,0,0,0,'pending','2026-11-18')",
+		"UPDATE regression_settings SET feishu_enabled=1,webhook_ciphertext='configured' WHERE id=1",
+	} {
+		if _, err := a.db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	account, err := a.gamAccount(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	due := time.Date(2026, 11, 19, 9, 0, 0, 0, time.UTC)
+	a.retryRegressionAlertsAt(context.Background(), account, due.Add(-time.Minute))
+	if !a.exists("SELECT id FROM regression_events WHERE id=1 AND alert_status='pending'") {
+		t.Fatal("alert must remain queued before Pacific 01:00")
+	}
+	a.retryRegressionAlertsAt(context.Background(), account, due)
+	if !a.exists("SELECT id FROM regression_events WHERE id=1 AND alert_status='not_triggered' AND new_revenue=100 AND drop_start_date IS NULL AND send_attempts=0") {
+		t.Fatal("recovered revenue must cancel the queued alert without sending")
+	}
+}
+
 func TestRegressionCycleWaitsForFullLocalPeriods(t *testing.T) {
 	instant := time.Date(2026, 11, 13, 1, 30, 0, 0, time.UTC)
 	three, ready, err := regressionCycleWindowAt("Asia/Shanghai", instant, "three_days", "2026-11-11")
@@ -177,8 +221,8 @@ func TestRegressionPauseExclusionKeepsOtherRevenueDrops(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.retryRegressionAlerts(context.Background(), account)
-	if !a.exists("SELECT id FROM regression_events WHERE domain='pause.example' AND alert_old_revenue IS NULL AND alert_status='paused_suppressed'") {
+	a.retryRegressionAlertsAt(context.Background(), account, time.Date(2026, 11, 7, 9, 0, 0, 0, time.UTC))
+	if !a.exists("SELECT id FROM regression_events WHERE domain='pause.example' AND alert_old_revenue=100 AND alert_status='paused_suppressed'") {
 		t.Fatal("old failed alert must be rechecked before sending")
 	}
 	other, err := a.gamAccount(2)
@@ -405,7 +449,9 @@ func TestRegressionSuppressesAlertsForTransferredAccount(t *testing.T) {
 	a := testApp(t)
 	for _, statement := range []string{
 		"INSERT INTO channels(id,name,email) VALUES(1,'Old','old@example.test'),(2,'New','new@example.test')",
-		"INSERT INTO soap_accounts(id,name,network_code,credential_ciphertext,created_by,rest_channel_id,rest_network_timezone) VALUES(1,'GAM','123456','test','admin',2,'Asia/Shanghai')",
+		"INSERT INTO soap_accounts(id,name,network_code,credential_ciphertext,created_by,rest_report_name,rest_money_divisor,rest_upstream_account_id,rest_channel_id,rest_network_timezone) VALUES(1,'GAM','123456','test','admin','networks/123456/reports/1',1,1,2,'Asia/Shanghai')",
+		"INSERT INTO upstream_accounts(id,account_key,name,soap_account_id) VALUES(1,'upstream','Upstream',1)",
+		"INSERT INTO revenue_facts(channel_id,report_date,domain,account,source_file,revenue) VALUES(1,'2026-11-15','example.com','upstream','gam-rest:123456:test',80)",
 		"INSERT INTO gam_channel_assignments(soap_account_id,channel_id,effective_from,created_by) VALUES(1,1,'1900-01-01','test'),(1,2,'2026-11-16','test')",
 		"INSERT INTO regression_runs(id,soap_account_id,cadence,period_start,period_end,status) VALUES(1,1,'day','2026-11-15','2026-11-15','success')",
 		"INSERT INTO regression_events(id,run_id,soap_account_id,cadence,period_start,period_end,domain,old_revenue,new_revenue,old_requests,new_requests,old_impressions,new_impressions,old_clicks,new_clicks,alert_status) VALUES(1,1,1,'day','2026-11-15','2026-11-15','example.com',100,80,0,0,0,0,0,0,'failed')",
@@ -419,7 +465,7 @@ func TestRegressionSuppressesAlertsForTransferredAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.retryRegressionAlerts(context.Background(), account)
+	a.retryRegressionAlertsAt(context.Background(), account, time.Date(2026, 11, 19, 9, 0, 0, 0, time.UTC))
 	var status, detail string
 	var attempts int
 	if err := a.db.QueryRow("SELECT alert_status,alert_error,send_attempts FROM regression_events WHERE id=1").Scan(&status, &detail, &attempts); err != nil {
