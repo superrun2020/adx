@@ -1,9 +1,19 @@
 import { readCached, rememberRead } from './readCache.js';
+import { sessionFetch } from './sessionFetch.js';
 
 const form = document.getElementById('boot-login');
 const status = document.getElementById('boot-status');
 const button = form.querySelector('button[type="submit"]');
 const retryButton = document.getElementById('boot-retry');
+const sessionReauthKey = 'adx_session_reauth';
+let sessionReauth = false;
+try {
+  sessionReauth = sessionStorage.getItem(sessionReauthKey) === '1';
+  if (sessionReauth) {
+    sessionStorage.removeItem(sessionReauthKey);
+    status.textContent = '登录已过期，请重新登录。';
+  }
+} catch { /* Storage may be disabled. */ }
 const portal = window.location.hostname.toLowerCase() === 'adxpub.geekforest.ai'
   || new URLSearchParams(window.location.search).get('portal') === 'publisher';
 
@@ -55,7 +65,7 @@ function retryAutomatically() {
 const dashboardPath = '/api/dashboard?start=' + start + '&end=' + end + '&source=rest';
 const highlightsPath = '/api/dashboard/highlights';
 async function requestDashboard(path = dashboardPath) {
-  const response = await fetch(path, { credentials: 'include' });
+  const response = await sessionFetch(path, { credentials: 'include' });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.ok === false) throw new Error(data.error || 'http_' + response.status);
   return data;
@@ -152,7 +162,7 @@ const warmApp = () => { void prepareApp().catch(error => {
 }); };
 if ('requestIdleCallback' in window) window.requestIdleCallback(warmApp, { timeout: 500 });
 else window.setTimeout(warmApp, 0);
-fetch('/api/auth/me', { credentials: 'include', cache: 'no-store' })
+if (!sessionReauth) fetch('/api/auth/me', { credentials: 'include', cache: 'no-store' })
   .then(async response => {
     if (!response.ok || submitted) return;
     const result = await response.json();

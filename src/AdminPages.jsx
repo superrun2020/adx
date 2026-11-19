@@ -15,13 +15,14 @@ import NumericSortableTable from './NumericSortableTable.jsx';
 import { adminPermissionOptions } from './navigation.js';
 import { reportPresetRange } from './reportDatePresets.js';
 import { channelGAMDomains } from './channel-domain-catalog.mjs';
+import { sessionFetch } from './sessionFetch.js';
 
 const { Title, Text } = Typography;
 const Table = NumericSortableTable;
 const money = value => '$' + Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const number = value => Number(value || 0).toLocaleString('zh-CN');
 async function api(path, options = {}) {
-  const response = await fetch(path, {
+  const response = await sessionFetch(path, {
     credentials: 'include', ...options,
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
   });

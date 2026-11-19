@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Alert, Card, Select, Space, Table, Tag, Typography } from 'antd';
 import NumericSortHeader from './NumericSortHeader.jsx';
+import { sessionFetch } from './sessionFetch.js';
 
 const { Text } = Typography;
 const kinds = [
@@ -27,7 +28,7 @@ export default function DiagnosticReport({ range, accounts = [] }) {
     if (accountId) query.set('accountId', accountId);
     const load = () => {
       setLoading(true); setError('');
-      fetch('/api/admin/reports/diagnostics?' + query, { credentials:'include' })
+      sessionFetch('/api/admin/reports/diagnostics?' + query, { credentials:'include' })
       .then(async response => {
         const data = await response.json().catch(() => ({}));
         if (!response.ok || data.ok === false) throw new Error(data.error || 'http_' + response.status);

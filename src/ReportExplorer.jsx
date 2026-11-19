@@ -5,6 +5,7 @@ import { readCached, rememberRead } from './readCache.js';
 import ReportDateFilter from './ReportDateFilter.jsx';
 import DiagnosticReport from './DiagnosticReport.jsx';
 import NumericSortHeader from './NumericSortHeader.jsx';
+import { sessionFetch } from './sessionFetch.js';
 
 const { Title, Text } = Typography;
 const dimensions = [
@@ -38,7 +39,7 @@ const defaultReportPath = range => '/api/reports?' + new URLSearchParams({
 });
 
 async function getJson(path) {
-  const response = await fetch(path, { credentials:'include' });
+  const response = await sessionFetch(path, { credentials:'include' });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.ok === false) throw new Error(data.error || 'http_' + response.status);
   return data;
@@ -140,7 +141,7 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
         ...(selectedDate && selectedDimensions.includes('date') ? {drill:JSON.stringify({date:selectedDate})} : {}),
         ...(sort ? { sortBy:sort.key, sortDir:sort.direction } : {})
       });
-      const response = await fetch('/api/reports/export?' + query, { credentials:'include' });
+      const response = await sessionFetch('/api/reports/export?' + query, { credentials:'include' });
       if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.error || 'http_' + response.status); }
       const blob = await response.blob(), url = URL.createObjectURL(blob);
       const link = document.createElement('a'); link.href = url; link.download = 'adx-report.csv'; link.click();

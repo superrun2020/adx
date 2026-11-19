@@ -4,6 +4,7 @@ import { PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { batchUnitTemplates, belongsToSite, gamBrowserSizes, prepareGamUnitItems, siteDomain } from './gam-unit-plan.mjs';
 import { activatableDomainUnit, archivableDomainUnit, bulkUnitSignature, domainMatchesTarget, filterGamUnits, indexCreationRecords, parseDomainLines, resolveAdUnitDomain, scanGamUnits, unitActionBatches } from './gam-unit-domains.mjs';
+import { sessionFetch } from './sessionFetch.js';
 
 const { Text, Title } = Typography;
 const bannerSizes = ['320x50', '336x280', '250x250', '300x250'];
@@ -31,7 +32,7 @@ const duplicateMessage = error => ({
 })[error] || error;
 
 async function api(path, options = {}) {
-  const response = await fetch(path, { credentials: 'include', ...options,
+  const response = await sessionFetch(path, { credentials: 'include', ...options,
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload.ok === false) throw new Error(payload.error || 'http_' + response.status);

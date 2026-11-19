@@ -3,6 +3,7 @@ import { Alert, Button, Card, Form, Input, InputNumber, Modal, Select, Space, Sw
 import { ReloadOutlined, SendOutlined, SettingOutlined } from '@ant-design/icons';
 import ReportDateFilter from './ReportDateFilter.jsx';
 import NumericSortHeader from './NumericSortHeader.jsx';
+import { sessionFetch } from './sessionFetch.js';
 
 const { Title, Text } = Typography;
 const cadenceNames = { day: '单日 · 同日上次快照', three_days: '每 3 天 · 前 3 天', week: '每 7 天 · 前 7 天', month: '近 30 天 · 前 30 天' };
@@ -12,7 +13,7 @@ const signed = (value, suffix = '') => (Number(value) > 0 ? '+' : '') + Number(v
 const stamp = (value, zone) => value ? new Date(value.replace(' ', 'T') + (value.includes('Z') ? '' : 'Z')).toLocaleString('zh-CN', { hour12: false, timeZone: zone || undefined }) : '—';
 
 async function api(path, options = {}) {
-  const response = await fetch(path, { credentials: 'include', ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
+  const response = await sessionFetch(path, { credentials: 'include', ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.ok === false) throw new Error(data.error || 'http_' + response.status);
   return data;

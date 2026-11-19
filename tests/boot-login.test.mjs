@@ -6,12 +6,13 @@ import vm from 'node:vm';
 const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 const boot = (await readFile(new URL('../src/boot.js', import.meta.url), 'utf8'))
   .replace("import { readCached, rememberRead } from './readCache.js';", '')
+  .replace("import { sessionFetch } from './sessionFetch.js';", '')
   .replace("import('./main.jsx')", 'globalThis.__loadApp()')
   .replace("import('./RevenueChart.jsx')", 'globalThis.__loadChart()')
   .replace("import('./ReportExplorer.jsx')", 'globalThis.__loadSecondary()')
   .replace("import('./AdminPages.jsx')", 'globalThis.__loadSecondary()');
 
-function start({ loginResponse, loadApp, dashboardResponse }) {
+function start({ loginResponse, loadApp, dashboardResponse, sessionExpired = false }) {
   const listeners = {};
   const button = { disabled: false, textContent: '登录' };
   const form = {
@@ -30,17 +31,18 @@ function start({ loginResponse, loadApp, dashboardResponse }) {
     if (!nodes.has(id)) nodes.set(id, makeNode());
     return nodes.get(id);
   }, querySelector: () => loginPage };
+  const fetchStub = async (path, options) => {
+    calls.push({ path, options });
+    if (path === '/api/auth/me') return { ok: false };
+    if (path.startsWith('/api/dashboard')) return dashboardResponse || { ok: true,
+      json: async () => ({ summary: { revenue: 12, impressions: 34 }, trend: [], topUrls: [] }) };
+    return loginResponse;
+  };
   const context = {
     document, URLSearchParams, console, readCached: () => null, rememberRead() {},
     window: { location: { hostname: 'adx.geekforest.ai', search: '', reload() {} }, setTimeout() {} },
-    sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },
-    fetch: async (path, options) => {
-      calls.push({ path, options });
-      if (path === '/api/auth/me') return { ok: false };
-      if (path.startsWith('/api/dashboard')) return dashboardResponse || { ok: true,
-        json: async () => ({ summary: { revenue: 12, impressions: 34 }, trend: [], topUrls: [] }) };
-      return loginResponse;
-    },
+    sessionStorage: { getItem: key => sessionExpired && key === 'adx_session_reauth' ? '1' : null, setItem() {}, removeItem() {} },
+    fetch: fetchStub, sessionFetch: fetchStub,
     __loadApp: loadApp,
     __loadChart: async () => ({}),
     __loadSecondary: async () => ({})
@@ -112,4 +114,13 @@ test('application load failure leaves a retryable login page', async () => {
   assert.equal(page.button.disabled, false);
   assert.equal(page.retry.hidden, false);
   assert.match(page.status.textContent, /后台资源加载失败/);
+});
+
+test('expired session opens a clean login screen without fetching old data', async () => {
+  const page = start({ sessionExpired: true, loadApp: async () => ({}),
+    loginResponse: { ok: false } });
+  await new Promise(setImmediate);
+  assert.match(page.status.textContent, /登录已过期/);
+  assert.equal(page.calls.some(call => call.path === '/api/auth/me'), false);
+  assert.equal(page.calls.some(call => call.path.startsWith('/api/dashboard')), false);
 });

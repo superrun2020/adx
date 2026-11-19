@@ -2,12 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { Alert, Button, Card, Col, Form, Input, Row, Space, Statistic, Switch, Tag, Typography, message } from 'antd';
 import { ReloadOutlined, SendOutlined } from '@ant-design/icons';
 import NumericSortableTable from './NumericSortableTable.jsx';
+import { sessionFetch } from './sessionFetch.js';
 
 const { Title, Text } = Typography;
 const money = value => '$' + Number(value).toLocaleString('en-US', { minimumFractionDigits:2, maximumFractionDigits:2 });
 
 async function api(path, options = {}) {
-  const response = await fetch(path, { credentials:'include', ...options,
+  const response = await sessionFetch(path, { credentials:'include', ...options,
     headers:{ 'Content-Type':'application/json', ...(options.headers || {}) } });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.ok === false) throw new Error(data.error || 'http_' + response.status);

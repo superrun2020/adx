@@ -12,6 +12,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { clearCachedUser, readCached, rememberRead } from './readCache.js';
+import { sessionFetch } from './sessionFetch.js';
 import { canVisit, shouldNavigateInPlace, viewForPath, viewPaths } from './navigation.js';
 import ReportDateFilter from './ReportDateFilter.jsx';
 import RevenueChart from './RevenueChart.jsx';
@@ -27,7 +28,7 @@ const LinkManager = React.lazy(() => import('./LinkManager.jsx'));
 const RegressionMonitor = React.lazy(() => import('./RegressionMonitor.jsx'));
 const BotReport = React.lazy(() => import('./BotReport.jsx'));
 async function api(path, options = {}) {
-  const response = await fetch(path, {
+  const response = await sessionFetch(path, {
     credentials: 'include',
     ...options,
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }

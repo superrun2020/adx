@@ -3,13 +3,14 @@ import { Alert, Button, Card, Col, Empty, Form, Input, Modal, Row, Select, Space
 import { EditOutlined, LinkOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import { catalogLinksWithManual, hostname } from './link-catalog.mjs';
 import { matchingDomainAssignment, resolveChannelAssignment } from './channel-domain-catalog.mjs';
+import { sessionFetch } from './sessionFetch.js';
 
 const { Title, Text } = Typography;
 import { readCached, rememberRead } from './readCache.js';
 const snapshotPath = '/ui/link-catalog';
 
 async function api(path, signal, options = {}) {
-  const response = await fetch(path, { credentials: 'include', signal, ...options });
+  const response = await sessionFetch(path, { credentials: 'include', signal, ...options });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload.ok === false) throw new Error(payload.error || 'http_' + response.status);
   return payload;
