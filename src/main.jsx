@@ -83,6 +83,9 @@ class AppErrorBoundary extends React.Component {
 
 function MetricCards({ summary, admin }) {
   const pending = !summary;
+  const clickRate = pending ? '—' : Number(summary.impressions) > 0
+    ? (Number(summary.clicks || 0) * 100 / Number(summary.impressions)).toFixed(2) + '%'
+    : '0.00%';
   const items = [
     [admin?'原始流水':'渠道结算收入', pending ? '—' : money(summary.revenue), <DollarOutlined />],
     ...(admin?[
@@ -91,7 +94,8 @@ function MetricCards({ summary, admin }) {
       ['渠道结算金额', pending ? '—' : money(summary.channelRevenue), <TeamOutlined />]
     ]:[]),
     ['展示量', pending ? '—' : number(summary.impressions), <BarChartOutlined />],
-    ['匹配率', pending ? '—' : Number(summary.matchRate || 0).toFixed(2) + '%', <SafetyOutlined />]
+    ['匹配率', pending ? '—' : Number(summary.matchRate || 0).toFixed(2) + '%', <SafetyOutlined />],
+    ['点击率', clickRate, <BarChartOutlined />]
   ];
   return <Row gutter={[16, 16]}>{items.map(([title, value, icon]) => <Col xs={24} sm={12} xl={6} key={title}><Card className="metric"><Statistic title={title} value={value} prefix={icon} /></Card></Col>)}</Row>;
 }
