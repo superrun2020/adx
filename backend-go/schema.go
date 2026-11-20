@@ -72,6 +72,9 @@ func (a *app) ensureSchema() error {
 		{"regression_events", "drop_start_date", "TEXT"},
 		{"regression_events", "send_attempts", "INTEGER NOT NULL DEFAULT 0"}, {"regression_events", "last_attempt_at", "TEXT"},
 		{"regression_events", "alert_old_revenue", "REAL"}, {"regression_events", "alert_new_revenue", "REAL"},
+		{"regression_settings", "coverage_drop_points", "REAL NOT NULL DEFAULT 30"},
+		{"regression_settings", "coverage_min_requests", "INTEGER NOT NULL DEFAULT 100"},
+		{"regression_settings", "coverage_feishu_enabled", "INTEGER NOT NULL DEFAULT 1"},
 	} {
 		if err = a.ensureColumn(item.table, item.column, item.definition); err != nil {
 			return fmt.Errorf("schema_column_%s_%s: %w", item.table, item.column, err)

@@ -9,6 +9,7 @@ import { registerGamRoutes } from './gam-routes.mjs';
 import { createGamSync } from './gam-sync.mjs';
 import { parseChannelAccountIds, assignChannelAccounts } from './channel-accounts.mjs';
 import { registerRegressionMonitor } from './regression-monitor.mjs';
+import { registerCoverageAlert } from './coverage-alert.mjs';
 import { registerBotReport } from './bot-report.mjs';
 import { ensureAdUnitIdDimension } from './revenue-schema.mjs';
 import { adminSidebarViews, allowedAdminRequest, parseSidebarPermissions, sidebarPermissionsFor } from './admin-permissions.mjs';
@@ -478,9 +479,15 @@ app.post('/api/admin/ad-units/create', requireAuth, requireAdmin, (req,res) => {
 app.get('/api/admin/ad-units', requireAuth, requireAdmin, (_req,res) => res.json({ok:true,items:db.prepare('SELECT id,code,name,subdomain,inventory_type inventoryType,size,description,adsense_enabled adsenseEnabled,placement,target_window targetWindow,label,status,provider_id providerId,gam_network_code gamNetworkCode,gam_parent_ad_unit gamParentAdUnit,publish_error publishError,published_at publishedAt,created_at createdAt FROM managed_ad_units ORDER BY id DESC LIMIT 1000').all()}));
 
 const regression = registerRegressionMonitor(app, { db, requireAuth, requireAdmin, encryptCredential, decryptCredential, transaction, gamSync, audit });
+const coverage = registerCoverageAlert({ app, db, requireAuth, requireAdmin, decryptCredential });
 const botReport = registerBotReport(app, { db, requireAuth, requireAdmin, encryptCredential, decryptCredential,
   upstreamShareSql, settledRevenueSql, audit });
-const { runHourlyGamSync } = registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptCredential, tokenFor: gamTokenFor, gamSync, audit, onScheduledSync: regression.runForAccount });
+const { runHourlyGamSync } = registerGamRoutes(app, { db, requireAuth, requireAdmin, encryptCredential, tokenFor: gamTokenFor, gamSync, audit,
+  onScheduledSync: async account => {
+    try { await coverage.runForAccount(account); }
+    catch (error) { console.error('coverage_alert_check_failed', account.id, error.message); }
+    await regression.runForAccount(account);
+  } });
 
 let dashboardDailyReady = true;
 let dashboardRestDailyReady = true;

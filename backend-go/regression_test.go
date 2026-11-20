@@ -281,9 +281,10 @@ func TestRegressionTestMessageIsClearlySyntheticAndLabelsEveryChannel(t *testing
 	if !strings.HasPrefix(message, "【手动测试｜以下均为示例数据，不代表真实告警】\n") {
 		t.Fatalf("test alert is not visibly labeled: %s", message)
 	}
-	if strings.Count(message, "渠道：示例渠道") != 2 ||
+	if strings.Count(message, "渠道：示例渠道") != 3 ||
 		!strings.Contains(message, "域名：news.example.com\n渠道：示例渠道") ||
-		!strings.Contains(message, "域名：finance.example.com\n渠道：示例渠道") {
+		!strings.Contains(message, "域名：finance.example.com\n渠道：示例渠道") ||
+		!strings.Contains(message, "【AdX 覆盖率下降】") {
 		t.Fatalf("test domains must each show their channel: %s", message)
 	}
 }

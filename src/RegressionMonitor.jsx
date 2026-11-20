@@ -24,6 +24,7 @@ export default function RegressionMonitor() {
   const [accounts, setAccounts] = useState([]);
   const [runs, setRuns] = useState([]);
   const [rows, setRows] = useState([]);
+  const [coverageRows, setCoverageRows] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -50,8 +51,15 @@ export default function RegressionMonitor() {
       if (domain.trim()) q.set('domain', domain.trim());
       if (alertsOnly) q.set('alertsOnly', '1');
       if (sort) { q.set('sortBy', sort.key); q.set('sortDir', sort.direction); }
-      const result = await api('/api/admin/regression/events?' + q);
-      if (id === requestId.current) { setRows(result.items || []); setTotal(result.total || 0); }
+      const [revenue, coverage] = await Promise.allSettled([
+        api('/api/admin/regression/events?' + q), api('/api/admin/regression/coverage-events?' + q)
+      ]);
+      if (id === requestId.current) {
+        if (revenue.status === 'fulfilled') { setRows(revenue.value.items || []); setTotal(revenue.value.total || 0); }
+        else message.error('收入监测记录读取失败：' + revenue.reason.message);
+        if (coverage.status === 'fulfilled') setCoverageRows(coverage.value.items || []);
+        else message.error('覆盖率告警记录读取失败：' + coverage.reason.message);
+      }
     } catch (error) { if (id === requestId.current) message.error('监测记录读取失败：' + error.message); }
     finally { if (id === requestId.current) setLoading(false); }
   };
@@ -68,8 +76,12 @@ export default function RegressionMonitor() {
   useEffect(() => { const timer = window.setTimeout(loadEvents, domain ? 250 : 0); return () => { window.clearTimeout(timer); requestId.current += 1; }; }, [page, range?.[0]?.valueOf(), range?.[1]?.valueOf(), accountId, cadence, domain, alertsOnly, sort]);
   const updateFilter = setter => value => { setPage(1); setter(value); };
   const openSettings = () => {
-    form.setFieldsValue({ feishuEnabled: Boolean(settings?.feishuEnabled), minRevenue: settings?.minRevenue ?? 50,
-      minDropPercent: settings?.minDropPercent ?? 2, webhook: '', signingSecret: '', clearWebhook: false, clearSigningSecret: false });
+    form.setFieldsValue({ feishuEnabled: Boolean(settings?.feishuEnabled),
+      coverageFeishuEnabled: settings?.coverageFeishuEnabled ?? true, minRevenue: settings?.minRevenue ?? 50,
+      minDropPercent: settings?.minDropPercent ?? 2,
+      minCoverageDropPoints: settings?.minCoverageDropPoints ?? 30,
+      minCoverageRequests: settings?.minCoverageRequests ?? 100,
+      webhook: '', signingSecret: '', clearWebhook: false, clearSigningSecret: false });
     setModal(true);
   };
   const saveSettings = async values => {
@@ -110,6 +122,19 @@ export default function RegressionMonitor() {
     { title: '来源', width: 90, render: () => <Tag color="purple">GAM REST</Tag> },
     { title: '飞书通知', dataIndex: 'alertStatus', width: 145, render: (value, row) => <Tag title={row.alertError || ''} color={value === 'sent' ? 'green' : value === 'failed' ? 'red' : value === 'pending' ? 'blue' : 'default'}>{({sent:'已发送',failed:'发送失败',pending:'待发送',disabled:'未启用',duplicate:'已去重',paused_suppressed:'停投影响，未推送',ownership_suppressed:'渠道已转移，未推送',not_triggered:'未触发'})[value] || value}</Tag> }
   ].map(column => column.align === 'right' ? { ...column, className: [column.className, 'numeric-sort-column'].filter(Boolean).join(' ') } : column);
+  const coverageColumns = [
+    {title:'数据小时',width:210,render:(_,row)=>row.reportDate + ' ' + String(row.reportHour).padStart(2,'0') + ':00（' + (row.timeZone || 'UTC') + '）'},
+    {title:'账号',dataIndex:'accountName',width:170},
+    {title:'渠道',dataIndex:'channelName',width:120,render:value=>value || '未关联渠道'},
+    {title:'域名',dataIndex:'domain',width:245},
+    {title:'覆盖率',width:175,align:'right',sorter:(a,b)=>Number(a.currentCoverage)-Number(b.currentCoverage),
+      render:(_,row)=>Number(row.baselineCoverage || 0).toFixed(2) + '% → ' + Number(row.currentCoverage || 0).toFixed(2) + '%'},
+    {title:'下降',width:120,align:'right',sorter:(a,b)=>(a.baselineCoverage-a.currentCoverage)-(b.baselineCoverage-b.currentCoverage),
+      render:(_,row)=>(Number(row.baselineCoverage || 0)-Number(row.currentCoverage || 0)).toFixed(2) + ' 个百分点'},
+    {title:'请求数',width:160,align:'right',sorter:(a,b)=>a.currentRequests-b.currentRequests,
+      render:(_,row)=>Number(row.baselineRequests).toLocaleString() + ' → ' + Number(row.currentRequests).toLocaleString()},
+    {title:'通知',dataIndex:'status',width:100,render:value=><Tag color={value==='sent'?'green':value==='failed'?'red':'default'}>{({sent:'已发送',failed:'发送失败',pending:'待发送',recovered:'已恢复'})[value] || value}</Tag>}
+  ];
   const latest = runs.find(run => run.status === 'success');
   return <Space direction="vertical" size={16} className="page-stack regression-monitor">
     <div className="page-heading"><div><Title level={2}>数据回退监测</Title><Text type="secondary">比较真实 GAM REST 报表，按账号时区计算日期；登录可直接查看最近监测结果</Text></div>
@@ -117,8 +142,8 @@ export default function RegressionMonitor() {
         <Button icon={<SendOutlined/>} loading={testing} disabled={!settings?.webhookConfigured} onClick={sendTest}>发送测试告警</Button>
         <Button type="primary" icon={<SettingOutlined/>} onClick={openSettings}>通知条件设置</Button></Space></div>
     <Alert showIcon type="info" message={
-      '飞书条件：原收入 > ' + money(settings?.minRevenue ?? 50) + ' 且收入下降 ≥ ' + Number(settings?.minDropPercent ?? 2).toFixed(2) + '%；' + (settings?.feishuEnabled ? '通知已启用' : '通知未启用')
-    } description="数据继续每 15 分钟同步并检测；飞书告警只在美国西海岸 01:00–02:00 发送，美国夏令时对应北京时间 16:00–17:00，冬令时对应 17:00–18:00。发送前重新核对最新数据，只推送 GAM 账号时区内已结束的数据日或完整周期。3 天和 7 天按完整区间比较，近 30 天每 7 天检查。已记录的停投影响会从区间收入中扣除；扣除后仍达到下降阈值才推送。"/>
+      '收入告警' + (settings?.feishuEnabled ? '已启用' : '未启用') + '；覆盖率告警' + (settings?.coverageFeishuEnabled ? '已启用' : '未启用')
+    } description={'收入条件：原收入 > ' + money(settings?.minRevenue ?? 50) + ' 且下降 ≥ ' + Number(settings?.minDropPercent ?? 2).toFixed(2) + '%。覆盖率=匹配请求÷广告请求；与昨日同小时相比下降 ≥ ' + Number(settings?.minCoverageDropPoints ?? 30).toFixed(2) + ' 个百分点，且两小时各有 ≥ ' + Number(settings?.minCoverageRequests ?? 100) + ' 次请求时报警。覆盖率每 15 分钟同步后检测，同域名每天最多推送一次，后台归档单元不计入。收入回退仍在美国西海岸 01:00–02:00 发送（北京时间夏令时 16:00–17:00、冬令时 17:00–18:00）。'}/>
     {latest && <Text type="secondary">最近完成：{latest.accountName} · {cadenceNames[latest.cadence]} · {stamp(latest.finishedAt, latest.timeZone)}（{latest.timeZone}）</Text>}
     {runs[0]?.status === 'failed' && <Alert type="warning" showIcon message={'最近一次监测失败：' + runs[0].accountName + ' · ' + cadenceNames[runs[0].cadence]} description={runs[0].detail || '请检查 GAM 账号同步状态'} />}
     {runs[0]?.status === 'skipped' && <Alert type="info" showIcon message={'最近一次监测暂未比较：' + runs[0].accountName + ' · ' + cadenceNames[runs[0].cadence]} description={runs[0].detail || '等待 GAM 返回可比较的完整数据'} />}
@@ -133,12 +158,17 @@ export default function RegressionMonitor() {
     </Space></Card>
     <Card className="regression-table" title={'监测记录（' + total + '）'}><Table rowKey="id" loading={loading} dataSource={rows} columns={columns} size="middle" scroll={{x:1850}}
       pagination={{current:page,pageSize:100,total,showSizeChanger:false,onChange:setPage}} locale={{emptyText:'暂无可比较的变化记录；首次同步会先建立基准快照'}}/></Card>
+    <Card className="regression-table" title="覆盖率下降告警（最近 100 条）"><Table rowKey="id" loading={loading} dataSource={coverageRows}
+      columns={coverageColumns} size="small" scroll={{x:1200}} pagination={false} locale={{emptyText:'暂无覆盖率告警；每次 GAM REST 同步成功后自动检测'}}/></Card>
     <Modal title="数据回退通知条件" open={modal} onCancel={() => setModal(false)} onOk={() => form.submit()} confirmLoading={saving} okText="保存条件" destroyOnHidden>
-      <Alert showIcon type="info" style={{marginBottom:16}} message="两项阈值须同时满足才发飞书通知；同一域名在同一监测时段成功发送后会去重。"/>
+      <Alert showIcon type="info" style={{marginBottom:16}} message="收入与覆盖率独立触发；覆盖率按账号当地时间与昨日同小时比较，低请求量不报警。"/>
       <Form form={form} layout="vertical" onFinish={saveSettings}>
-        <Form.Item name="feishuEnabled" label="飞书通知" valuePropName="checked"><Switch checkedChildren="启用" unCheckedChildren="停用"/></Form.Item>
+        <Form.Item name="feishuEnabled" label="收入回退飞书通知" valuePropName="checked"><Switch checkedChildren="启用" unCheckedChildren="停用"/></Form.Item>
+        <Form.Item name="coverageFeishuEnabled" label="覆盖率下降飞书通知" valuePropName="checked"><Switch checkedChildren="启用" unCheckedChildren="停用"/></Form.Item>
         <Space align="start" style={{display:'flex'}}><Form.Item name="minRevenue" label="原收入大于（美元）" rules={[{required:true}]}><InputNumber min={0} precision={2} style={{width:180}} prefix="$"/></Form.Item>
           <Form.Item name="minDropPercent" label="收入下降幅度不低于（%）" rules={[{required:true}]}><InputNumber min={0.01} max={100} precision={2} style={{width:180}} suffix="%"/></Form.Item></Space>
+        <Space align="start" style={{display:'flex'}}><Form.Item name="minCoverageDropPoints" label="覆盖率下降至少（百分点）" rules={[{required:true}]}><InputNumber min={0.01} max={100} precision={2} style={{width:180}}/></Form.Item>
+          <Form.Item name="minCoverageRequests" label="对比两小时各至少请求数" rules={[{required:true}]}><InputNumber min={1} precision={0} style={{width:180}}/></Form.Item></Space>
         <Form.Item name="webhook" label={'飞书机器人 Webhook' + (settings?.webhookConfigured ? '（已配置；留空保持原值）' : '')}><Input.Password placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." autoComplete="off"/></Form.Item>
         <Form.Item name="signingSecret" label="签名密钥（可选，留空保持原值）"><Input.Password autoComplete="off"/></Form.Item>
         <Form.Item name="clearSigningSecret" label="清除现有签名密钥" valuePropName="checked"><Switch/></Form.Item>

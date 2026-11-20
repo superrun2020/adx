@@ -406,6 +406,9 @@ func (a *app) runScheduledGamSync() {
 				} else {
 					log.Printf("gam_rest_sync_complete account=%d timings=%s", intMap(account, "id"), marshalText(result["timingsMs"]))
 					if refreshed, loadErr := a.gamAccount(intMap(account, "id")); loadErr == nil {
+						if coverageErr := a.runCoverageAlertsAt(ctx, refreshed, time.Now(), postFeishu); coverageErr != nil {
+							log.Printf("coverage_alert_check_failed account=%d error=%v", intMap(account, "id"), coverageErr)
+						}
 						a.runRegressionForAccount(ctx, refreshed)
 					}
 				}

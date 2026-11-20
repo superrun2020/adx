@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { localDate } from './gam-sync.mjs';
 import { gamChannelForDate } from './gam-channel-assignment.mjs';
+import { coverageAlertMessage } from './coverage-alert.mjs';
 
 const cadences = [
   { name: 'day', days: 1, interval: 15 * 60_000 },
@@ -142,11 +143,21 @@ export function regressionTestMessage(instant = new Date()) {
   return '【手动测试｜以下均为示例数据，不代表真实告警】\n' +
     regressionAlertMessage({ name:'示例账号', network_code:'000000' }, '示例渠道', timeZone,
       accountTimestamp(timeZone, instant), { cadence:'day', start:date, end:date },
-      [sample('news.example.com', 100, 70), sample('finance.example.com', 80, 60)]);
+      [sample('news.example.com', 100, 70), sample('finance.example.com', 80, 60)]) + '\n\n' +
+    coverageAlertMessage({ name:'示例账号', network_code:'000000' }, '示例渠道', date,
+      localDate(timeZone,-1,instant), timeZone, 10, instant,
+      [{ domain:'news.example.com', before:{requests:1000,matched:990}, after:{requests:1200,matched:120} }]);
 }
 
 export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, encryptCredential, decryptCredential, transaction, gamSync, audit, now = () => new Date() }) {
-  db.exec("CREATE TABLE IF NOT EXISTS regression_settings (id INTEGER PRIMARY KEY CHECK(id=1), feishu_enabled INTEGER NOT NULL DEFAULT 0, min_revenue REAL NOT NULL DEFAULT 50, min_drop_percent REAL NOT NULL DEFAULT 2, webhook_ciphertext TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+  db.exec("CREATE TABLE IF NOT EXISTS regression_settings (id INTEGER PRIMARY KEY CHECK(id=1), feishu_enabled INTEGER NOT NULL DEFAULT 0, coverage_feishu_enabled INTEGER NOT NULL DEFAULT 1, min_revenue REAL NOT NULL DEFAULT 50, min_drop_percent REAL NOT NULL DEFAULT 2, coverage_drop_points REAL NOT NULL DEFAULT 30, coverage_min_requests INTEGER NOT NULL DEFAULT 100, webhook_ciphertext TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('regression_settings') WHERE name='coverage_feishu_enabled'").get())
+    db.exec('ALTER TABLE regression_settings ADD COLUMN coverage_feishu_enabled INTEGER NOT NULL DEFAULT 1');
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('regression_settings') WHERE name='coverage_drop_points'").get())
+    db.exec('ALTER TABLE regression_settings ADD COLUMN coverage_drop_points REAL NOT NULL DEFAULT 30');
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('regression_settings') WHERE name='coverage_min_requests'").get())
+    db.exec('ALTER TABLE regression_settings ADD COLUMN coverage_min_requests INTEGER NOT NULL DEFAULT 100');
+  db.exec("CREATE TABLE IF NOT EXISTS coverage_alerts (id INTEGER PRIMARY KEY AUTOINCREMENT, soap_account_id INTEGER NOT NULL, report_date TEXT NOT NULL, report_hour INTEGER NOT NULL, domain TEXT NOT NULL, channel_id INTEGER NOT NULL, baseline_requests INTEGER NOT NULL, baseline_matched INTEGER NOT NULL, current_requests INTEGER NOT NULL, current_matched INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, last_attempt_at TEXT, sent_at TEXT, error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(soap_account_id,report_date,domain), FOREIGN KEY(soap_account_id) REFERENCES soap_accounts(id) ON DELETE CASCADE)");
   db.exec("CREATE TABLE IF NOT EXISTS regression_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, soap_account_id INTEGER NOT NULL, cadence TEXT NOT NULL, period_start TEXT NOT NULL, period_end TEXT NOT NULL, baseline_start TEXT NOT NULL DEFAULT '', baseline_end TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(soap_account_id) REFERENCES soap_accounts(id) ON DELETE CASCADE)");
   db.exec("CREATE TABLE IF NOT EXISTS regression_snapshots (run_id INTEGER NOT NULL, domain TEXT NOT NULL, revenue REAL NOT NULL, requests INTEGER NOT NULL, impressions INTEGER NOT NULL, clicks INTEGER NOT NULL, PRIMARY KEY(run_id,domain), FOREIGN KEY(run_id) REFERENCES regression_runs(id) ON DELETE CASCADE)");
   db.exec("CREATE TABLE IF NOT EXISTS regression_daily_snapshots (run_id INTEGER NOT NULL, soap_account_id INTEGER NOT NULL, report_date TEXT NOT NULL, domain TEXT NOT NULL, revenue REAL NOT NULL, requests INTEGER NOT NULL, impressions INTEGER NOT NULL, clicks INTEGER NOT NULL, PRIMARY KEY(run_id,report_date,domain), FOREIGN KEY(run_id) REFERENCES regression_runs(id) ON DELETE CASCADE, FOREIGN KEY(soap_account_id) REFERENCES soap_accounts(id) ON DELETE CASCADE)");
@@ -168,8 +179,10 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
   db.exec('CREATE INDEX IF NOT EXISTS idx_regression_daily_lookup ON regression_daily_snapshots(soap_account_id,report_date,domain,run_id DESC)');
 
   const settings = () => db.prepare('SELECT * FROM regression_settings WHERE id=1').get();
-  const publicSettings = row => ({ feishuEnabled: !!row.feishu_enabled, minRevenue: row.min_revenue,
-    minDropPercent: row.min_drop_percent, webhookConfigured: !!row.webhook_ciphertext });
+  const publicSettings = row => ({ feishuEnabled: !!row.feishu_enabled,
+    coverageFeishuEnabled: !!row.coverage_feishu_enabled, minRevenue: row.min_revenue,
+    minDropPercent: row.min_drop_percent, minCoverageDropPoints: row.coverage_drop_points,
+    minCoverageRequests: row.coverage_min_requests, webhookConfigured: !!row.webhook_ciphertext });
 
   app.get('/api/admin/regression/settings', requireAuth, requireAdmin, (_req, res) =>
     res.json({ ok: true, settings: publicSettings(settings()) }));
@@ -180,6 +193,13 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
     if (input.minRevenue === '' || input.minRevenue == null || input.minDropPercent === '' || input.minDropPercent == null || !Number.isFinite(minRevenue) || !Number.isFinite(minPercent) || minRevenue < 0 || minRevenue > 1e9 || minPercent <= 0 || minPercent > 100)
       return res.status(400).json({ ok: false, error: 'invalid_regression_threshold' });
     const current = settings();
+    const coverageEnabled = input.coverageFeishuEnabled == null ? !!current.coverage_feishu_enabled : input.coverageFeishuEnabled;
+    if (typeof coverageEnabled !== 'boolean') return res.status(400).json({ok:false,error:'invalid_coverage_enabled'});
+    const coveragePoints = input.minCoverageDropPoints == null ? current.coverage_drop_points : Number(input.minCoverageDropPoints);
+    const coverageRequests = input.minCoverageRequests == null ? current.coverage_min_requests : Number(input.minCoverageRequests);
+    if (!Number.isFinite(coveragePoints) || coveragePoints <= 0 || coveragePoints > 100 ||
+      !Number.isInteger(coverageRequests) || coverageRequests < 1 || coverageRequests > 1e9)
+      return res.status(400).json({ ok:false, error:'invalid_coverage_threshold' });
     let saved = current.webhook_ciphertext ? decryptCredential(current.webhook_ciphertext) : { url: '', secret: '' };
     if (input.clearWebhook === true) saved = { url: '', secret: '' };
     if (input.webhook != null && input.webhook !== '') {
@@ -191,12 +211,13 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
     if (input.clearSigningSecret === true) saved.secret = '';
     else if (input.signingSecret?.trim()) saved.secret = input.signingSecret.trim();
     if (saved.url && !validWebhook(saved.url)) return res.status(400).json({ ok: false, error: 'invalid_feishu_webhook' });
-    if (input.feishuEnabled && !saved.url) return res.status(400).json({ ok: false, error: 'invalid_feishu_webhook_required' });
+    if ((input.feishuEnabled || coverageEnabled) && !saved.url) return res.status(400).json({ ok: false, error: 'invalid_feishu_webhook_required' });
     const cipher = saved.url ? encryptCredential(saved) : '';
-    db.prepare('UPDATE regression_settings SET feishu_enabled=?,min_revenue=?,min_drop_percent=?,webhook_ciphertext=?,updated_at=CURRENT_TIMESTAMP WHERE id=1')
-      .run(input.feishuEnabled ? 1 : 0, minRevenue, minPercent, cipher);
+    db.prepare('UPDATE regression_settings SET feishu_enabled=?,coverage_feishu_enabled=?,min_revenue=?,min_drop_percent=?,coverage_drop_points=?,coverage_min_requests=?,webhook_ciphertext=?,updated_at=CURRENT_TIMESTAMP WHERE id=1')
+      .run(input.feishuEnabled ? 1 : 0, coverageEnabled ? 1 : 0, minRevenue, minPercent, coveragePoints, coverageRequests, cipher);
     audit(req.user.email, 'regression.settings_update', 'regression_settings', 1,
-      JSON.stringify({ feishuEnabled: input.feishuEnabled, minRevenue, minDropPercent: minPercent, webhookConfigured: !!saved.url }), req.ip);
+      JSON.stringify({ feishuEnabled: input.feishuEnabled, coverageFeishuEnabled:coverageEnabled, minRevenue, minDropPercent: minPercent,
+        minCoverageDropPoints:coveragePoints, minCoverageRequests:coverageRequests, webhookConfigured: !!saved.url }), req.ip);
     res.json({ ok: true, settings: publicSettings(settings()) });
   });
 
@@ -445,7 +466,7 @@ export function registerRegressionMonitor(app, { db, requireAuth, requireAdmin, 
     catch (error) { console.error('regression_retry_failed', account.id, error.message); }
     for (const cadence of cadences) {
       let networkWindow;
-      const instant = new Date();
+      const instant = now();
       let ready;
       try {
         const lastEnd = ['three_days', 'week'].includes(cadence.name)

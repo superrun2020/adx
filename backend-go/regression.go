@@ -43,7 +43,10 @@ type regressionWindow struct {
 
 type regressionConfig struct {
 	Enabled                    bool
+	CoverageEnabled            bool
 	MinRevenue, MinDropPercent float64
+	MinCoverageDropPoints      float64
+	MinCoverageRequests        int64
 	Ciphertext                 string
 }
 
@@ -144,10 +147,11 @@ func regressionCycleWindowAt(zone string, now time.Time, cadence, lastEnd string
 }
 
 func (a *app) currentRegressionConfig() (regressionConfig, error) {
-	var enabled int
+	var enabled, coverageEnabled int
 	var c regressionConfig
-	err := a.db.QueryRow("SELECT feishu_enabled,min_revenue,min_drop_percent,webhook_ciphertext FROM regression_settings WHERE id=1").Scan(&enabled, &c.MinRevenue, &c.MinDropPercent, &c.Ciphertext)
+	err := a.db.QueryRow("SELECT feishu_enabled,coverage_feishu_enabled,min_revenue,min_drop_percent,coverage_drop_points,coverage_min_requests,webhook_ciphertext FROM regression_settings WHERE id=1").Scan(&enabled, &coverageEnabled, &c.MinRevenue, &c.MinDropPercent, &c.MinCoverageDropPoints, &c.MinCoverageRequests, &c.Ciphertext)
 	c.Enabled = enabled == 1
+	c.CoverageEnabled = coverageEnabled == 1
 	return c, err
 }
 
@@ -158,8 +162,9 @@ func (a *app) regressionSettings(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "settings": map[string]any{
-		"feishuEnabled": c.Enabled, "minRevenue": c.MinRevenue,
-		"minDropPercent": c.MinDropPercent, "webhookConfigured": c.Ciphertext != "",
+		"feishuEnabled": c.Enabled, "coverageFeishuEnabled": c.CoverageEnabled, "minRevenue": c.MinRevenue,
+		"minDropPercent": c.MinDropPercent, "minCoverageDropPoints": c.MinCoverageDropPoints,
+		"minCoverageRequests": c.MinCoverageRequests, "webhookConfigured": c.Ciphertext != "",
 	}})
 }
 
@@ -191,6 +196,29 @@ func (a *app) updateRegressionSettings(w http.ResponseWriter, r *http.Request) e
 	c, err := a.currentRegressionConfig()
 	if err != nil {
 		return err
+	}
+	coverageEnabled := c.CoverageEnabled
+	if raw, exists := input["coverageFeishuEnabled"]; exists {
+		flag, valid := raw.(bool)
+		if !valid {
+			return errors.New("invalid_coverage_enabled")
+		}
+		coverageEnabled = flag
+	}
+	coveragePoints, coverageRequests := c.MinCoverageDropPoints, c.MinCoverageRequests
+	if _, exists := input["minCoverageDropPoints"]; exists {
+		value, valid := fieldFloat(input, "minCoverageDropPoints")
+		if !valid || value <= 0 || value > 100 {
+			return errors.New("invalid_coverage_threshold")
+		}
+		coveragePoints = value
+	}
+	if _, exists := input["minCoverageRequests"]; exists {
+		value, valid := fieldFloat(input, "minCoverageRequests")
+		if !valid || value < 1 || value > 1000000000 || math.Trunc(value) != value {
+			return errors.New("invalid_coverage_requests")
+		}
+		coverageRequests = int64(value)
 	}
 	secret := map[string]any{"url": "", "secret": ""}
 	if c.Ciphertext != "" {
@@ -225,7 +253,7 @@ func (a *app) updateRegressionSettings(w http.ResponseWriter, r *http.Request) e
 	if webhook != "" && !validFeishuWebhook(webhook) {
 		return errors.New("invalid_feishu_webhook")
 	}
-	if enabled && webhook == "" {
+	if (enabled || coverageEnabled) && webhook == "" {
 		return errors.New("invalid_feishu_webhook_required")
 	}
 	ciphertext := ""
@@ -239,11 +267,15 @@ func (a *app) updateRegressionSettings(w http.ResponseWriter, r *http.Request) e
 	if enabled {
 		flag = 1
 	}
-	_, err = a.db.ExecContext(r.Context(), "UPDATE regression_settings SET feishu_enabled=?,min_revenue=?,min_drop_percent=?,webhook_ciphertext=?,updated_at=CURRENT_TIMESTAMP WHERE id=1", flag, minRevenue, minPercent, ciphertext)
+	coverageFlag := 0
+	if coverageEnabled {
+		coverageFlag = 1
+	}
+	_, err = a.db.ExecContext(r.Context(), "UPDATE regression_settings SET feishu_enabled=?,coverage_feishu_enabled=?,min_revenue=?,min_drop_percent=?,coverage_drop_points=?,coverage_min_requests=?,webhook_ciphertext=?,updated_at=CURRENT_TIMESTAMP WHERE id=1", flag, coverageFlag, minRevenue, minPercent, coveragePoints, coverageRequests, ciphertext)
 	if err != nil {
 		return err
 	}
-	a.audit(currentUser(r).Email, "regression.settings_update", "regression_settings", 1, marshalText(map[string]any{"feishuEnabled": enabled, "minRevenue": minRevenue, "minDropPercent": minPercent, "webhookConfigured": webhook != ""}), clientIP(r))
+	a.audit(currentUser(r).Email, "regression.settings_update", "regression_settings", 1, marshalText(map[string]any{"feishuEnabled": enabled, "coverageFeishuEnabled": coverageEnabled, "minRevenue": minRevenue, "minDropPercent": minPercent, "minCoverageDropPoints": coveragePoints, "minCoverageRequests": coverageRequests, "webhookConfigured": webhook != ""}), clientIP(r))
 	a.regressionSettings(w, r)
 	return nil
 }
@@ -259,8 +291,11 @@ func regressionTestMessage(now time.Time) string {
 		{Domain: "finance.example.com", DetectedAtUTC: stamp, Old: regressionMeasure{Revenue: 80}, New: regressionMeasure{Revenue: 60}},
 	}
 	window := regressionWindow{Cadence: "day", Start: date, End: date}
+	coverageDate := now.In(location).AddDate(0, 0, -1).Format("2006-01-02")
+	coverage := coverageAlertMessage(account, "示例渠道", date, coverageDate, zone, 10, now,
+		[]coverageNotice{{Domain: "news.example.com", Before: coverageCount{Requests: 1000, Matched: 990}, After: coverageCount{Requests: 1200, Matched: 120}}})
 	return "【手动测试｜以下均为示例数据，不代表真实告警】\n" +
-		regressionAlertMessage(account, "示例渠道", zone, now.In(location).Format("2006-01-02 15:04"), window, "单日快照", alerts)
+		regressionAlertMessage(account, "示例渠道", zone, now.In(location).Format("2006-01-02 15:04"), window, "单日快照", alerts) + "\n\n" + coverage
 }
 
 func (a *app) testRegressionAlert(w http.ResponseWriter, r *http.Request) {

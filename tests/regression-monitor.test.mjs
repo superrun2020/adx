@@ -87,7 +87,8 @@ test('Feishu alert text identifies confirmed and unlocated data dates', () => {
   assert.match(multi, /少 \$10\.00/);
   const sample = regressionTestMessage(new Date('2026-11-09T08:30:00Z'));
   assert.match(sample, /手动测试｜以下均为示例数据/);
-  assert.equal(sample.match(/渠道：示例渠道/g).length, 2);
+  assert.equal(sample.match(/渠道：示例渠道/g).length, 3);
+  assert.match(sample, /【AdX 覆盖率下降】/);
 });
 
 test('drop start is the earliest confirmed same-date decrease only', () => {
@@ -114,15 +115,16 @@ test('completed three-day comparison runs once and Feishu retries its original a
   const routes = new Map();
   const app = { get: (path, ...handlers) => routes.set(path, handlers.at(-1)), put() {}, post: (path, ...handlers) => routes.set(path, handlers.at(-1)) };
   const transaction = fn => { db.exec('BEGIN'); try { const result = fn(); db.exec('COMMIT'); return result; } catch (error) { db.exec('ROLLBACK'); throw error; } };
-  const monitor = registerRegressionMonitor(app, { db, requireAuth: () => {}, requireAdmin: () => {}, encryptCredential: () => '', decryptCredential: () => ({}), transaction, gamSync: { execute: async () => ({ rows: 1 }) }, audit: () => {} });
+  const monitor = registerRegressionMonitor(app, { db, requireAuth: () => {}, requireAdmin: () => {}, encryptCredential: () => '', decryptCredential: () => ({}), transaction, gamSync: { execute: async () => ({ rows: 1 }) }, audit: () => {}, now: () => new Date('2026-11-19T09:00:00Z') });
   const account = { id: 1, name: 'GAM', network_code: '123', rest_channel_id: 1, rest_upstream_account_id: 1, rest_network_timezone: 'Asia/Tokyo' };
-  const window = regressionWindow(account.rest_network_timezone, 'three_days');
+  const fixedNow = new Date('2026-11-19T09:00:00Z');
+  const window = regressionWindow(account.rest_network_timezone, 'three_days', fixedNow);
   const insert = db.prepare("INSERT INTO revenue_facts(channel_id,account,report_date,domain,source_file,revenue,requests,impressions,clicks) VALUES(1,'upstream',?,'example.com','gam-rest:123:sample',?,100,80,5)");
   for (let date = new Date(window.baselineStart + 'T00:00:00Z'); date <= new Date(window.end + 'T00:00:00Z'); date.setUTCDate(date.getUTCDate() + 1)) {
     const day = date.toISOString().slice(0, 10);
     insert.run(day, day < window.start ? 100 : 80);
   }
-  insert.run(regressionWindow(account.rest_network_timezone, 'day').start, 90);
+  insert.run(regressionWindow(account.rest_network_timezone, 'day', fixedNow).start, 90);
   await monitor.runForAccount(account);
   assert.equal(db.prepare("SELECT COUNT(*) total FROM regression_runs WHERE cadence='day' AND status='success'").get().total, 2);
   const first = db.prepare("SELECT id,drop_start_date FROM regression_events WHERE cadence='three_days' ORDER BY id DESC LIMIT 1").get();

@@ -123,7 +123,9 @@ CREATE TABLE IF NOT EXISTS users (
 );
 CREATE TABLE IF NOT EXISTS regression_settings (
   id INTEGER PRIMARY KEY CHECK(id=1), feishu_enabled INTEGER NOT NULL DEFAULT 0,
+  coverage_feishu_enabled INTEGER NOT NULL DEFAULT 1,
   min_revenue REAL NOT NULL DEFAULT 50, min_drop_percent REAL NOT NULL DEFAULT 2,
+  coverage_drop_points REAL NOT NULL DEFAULT 30, coverage_min_requests INTEGER NOT NULL DEFAULT 100,
   webhook_ciphertext TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS bot_report_settings (
@@ -172,6 +174,16 @@ CREATE TABLE IF NOT EXISTS regression_events (
   FOREIGN KEY(soap_account_id) REFERENCES soap_accounts(id) ON DELETE CASCADE
 );
 INSERT OR IGNORE INTO regression_settings(id) VALUES(1);
+CREATE TABLE IF NOT EXISTS coverage_alerts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, soap_account_id INTEGER NOT NULL, report_date TEXT NOT NULL,
+  report_hour INTEGER NOT NULL, domain TEXT NOT NULL, channel_id INTEGER NOT NULL,
+  baseline_requests INTEGER NOT NULL, baseline_matched INTEGER NOT NULL,
+  current_requests INTEGER NOT NULL, current_matched INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
+  last_attempt_at TEXT, sent_at TEXT, error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(soap_account_id,report_date,domain),
+  FOREIGN KEY(soap_account_id) REFERENCES soap_accounts(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS gam_diagnostic_reports (
   account_id INTEGER NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('device','browser','demand')),
   network_code TEXT NOT NULL, report_name TEXT NOT NULL DEFAULT '', last_synced_at TEXT,

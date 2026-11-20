@@ -73,10 +73,15 @@ test('regression settings are admin-only and never expose the Feishu webhook', a
   const initial = await request('/api/admin/regression/settings');
   assert.equal(initial.body.settings.minRevenue, 50);
   assert.equal(initial.body.settings.minDropPercent, 2);
+  assert.equal(initial.body.settings.coverageFeishuEnabled, true);
+  assert.equal(initial.body.settings.minCoverageDropPoints, 30);
+  assert.equal(initial.body.settings.minCoverageRequests, 100);
   const invalid = await request('/api/admin/regression/settings', { method: 'PUT', body: JSON.stringify({ feishuEnabled: true, minRevenue: 50, minDropPercent: 2, webhook: 'http://127.0.0.1/hook' }) });
   assert.equal(invalid.response.status, 400);
-  const saved = await request('/api/admin/regression/settings', { method: 'PUT', body: JSON.stringify({ feishuEnabled: false, minRevenue: 75, minDropPercent: 3, webhook: 'https://open.feishu.cn/open-apis/bot/v2/hook/test', signingSecret: 'test-signing-secret' }) });
+  const saved = await request('/api/admin/regression/settings', { method: 'PUT', body: JSON.stringify({ feishuEnabled: false, minRevenue: 75, minDropPercent: 3, minCoverageDropPoints: 25, minCoverageRequests: 150, webhook: 'https://open.feishu.cn/open-apis/bot/v2/hook/test', signingSecret: 'test-signing-secret' }) });
   assert.equal(saved.body.settings.minRevenue, 75);
+  assert.equal(saved.body.settings.minCoverageDropPoints, 25);
+  assert.equal(saved.body.settings.minCoverageRequests, 150);
   assert.equal(saved.body.settings.webhookConfigured, true);
   assert.equal(JSON.stringify(saved.body).includes('/hook/test'), false);
   const readSavedSecret = () => {
@@ -92,6 +97,7 @@ test('regression settings are admin-only and never expose the Feishu webhook', a
   assert.equal(readSavedSecret(), 'test-signing-secret');
   const preserved = await request('/api/admin/regression/settings', { method: 'PUT', body: JSON.stringify({ feishuEnabled: false, minRevenue: 75, minDropPercent: 3, signingSecret: '' }) });
   assert.equal(preserved.response.status, 200);
+  assert.equal(preserved.body.settings.minCoverageDropPoints, 25);
   assert.equal(readSavedSecret(), 'test-signing-secret');
   const cleared = await request('/api/admin/regression/settings', { method: 'PUT', body: JSON.stringify({ feishuEnabled: false, minRevenue: 75, minDropPercent: 3, clearSigningSecret: true }) });
   assert.equal(cleared.response.status, 200);
