@@ -106,6 +106,8 @@ func (u user) allowedRequest(r *http.Request) bool {
 		views = []string{"channels", "settlement", "gam", "reports"}
 	case strings.HasPrefix(path, "/api/admin/channels"):
 		views = []string{"channels"}
+	case strings.HasPrefix(path, "/api/admin/channel-registrations"):
+		views = []string{"channels"}
 	case path == "/api/admin/upstream-accounts" && method == http.MethodGet:
 		views = []string{"settlement", "gam", "reports"}
 	case strings.HasPrefix(path, "/api/admin/upstream-accounts") || strings.HasPrefix(path, "/api/admin/ad-unit-domains") ||

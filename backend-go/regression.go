@@ -322,6 +322,10 @@ func (a *app) testRegressionAlert(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) regressionEvents(w http.ResponseWriter, r *http.Request) {
+	a.listRegressionEvents(w, r, 0)
+}
+
+func (a *app) listRegressionEvents(w http.ResponseWriter, r *http.Request, channelID int64) {
 	q := r.URL.Query()
 	start, end, cadence := q.Get("start"), q.Get("end"), q.Get("cadence")
 	if (start != "" && !validDate(start)) || (end != "" && !validDate(end)) || (start != "" && end != "" && start > end) {
@@ -368,6 +372,10 @@ func (a *app) regressionEvents(w http.ResponseWriter, r *http.Request) {
 		}
 		where = append(where, "e.soap_account_id=?")
 		args = append(args, id)
+	}
+	if channelID > 0 {
+		where = append(where, channelDomainOwnerAtSQL("e.domain", "e.period_end")+"=?")
+		args = append(args, channelID)
 	}
 	if domain := strings.TrimSpace(q.Get("domain")); domain != "" {
 		if len(domain) > 200 {

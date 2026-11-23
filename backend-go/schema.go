@@ -50,12 +50,19 @@ func (a *app) ensureSchema() error {
 	if err != nil {
 		return err
 	}
-	parts := strings.SplitN(string(script), "CREATE INDEX IF NOT EXISTS", 2)
-	if len(parts) != 2 {
-		return errors.New("invalid_schema_sql")
-	}
-	if _, err = a.db.Exec(parts[0]); err != nil {
-		return fmt.Errorf("schema_tables: %w", err)
+	var indexes []string
+	for _, statement := range strings.Split(string(script), ";") {
+		statement = strings.TrimSpace(statement)
+		if statement == "" {
+			continue
+		}
+		if strings.HasPrefix(strings.ToUpper(statement), "CREATE INDEX IF NOT EXISTS") {
+			indexes = append(indexes, statement)
+			continue
+		}
+		if _, err = a.db.Exec(statement); err != nil {
+			return fmt.Errorf("schema_statement: %w", err)
+		}
 	}
 	for _, item := range []struct{ table, column, definition string }{
 		{"channels", "api_secret_ciphertext", "TEXT"},
@@ -69,6 +76,11 @@ func (a *app) ensureSchema() error {
 		{"revenue_facts", "raw_json", "TEXT NOT NULL DEFAULT '{}'"},
 		{"soap_sync_runs", "stage", "TEXT NOT NULL DEFAULT ''"}, {"soap_sync_runs", "timings_json", "TEXT NOT NULL DEFAULT '{}'"},
 		{"users", "is_super_admin", "INTEGER NOT NULL DEFAULT 0"}, {"users", "sidebar_permissions", "TEXT"},
+		{"channel_domains", "gam_account_id", "INTEGER"}, {"channel_domains", "adx_txt", "TEXT NOT NULL DEFAULT ''"},
+		{"channel_registrations", "updated_at", "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"},
+		{"channel_registration_contracts", "counter_signer_title", "TEXT NOT NULL DEFAULT ''"},
+		{"channel_registration_contracts", "counter_signature_data", "TEXT NOT NULL DEFAULT ''"},
+		{"channel_registration_contracts", "counter_signature_hash", "TEXT NOT NULL DEFAULT ''"},
 		{"regression_events", "drop_start_date", "TEXT"},
 		{"regression_events", "send_attempts", "INTEGER NOT NULL DEFAULT 0"}, {"regression_events", "last_attempt_at", "TEXT"},
 		{"regression_events", "alert_old_revenue", "REAL"}, {"regression_events", "alert_new_revenue", "REAL"},
@@ -83,8 +95,10 @@ func (a *app) ensureSchema() error {
 	if err = a.migrateAdUnitID(); err != nil {
 		return fmt.Errorf("schema_revenue: %w", err)
 	}
-	if _, err = a.db.Exec("CREATE INDEX IF NOT EXISTS" + parts[1]); err != nil {
-		return fmt.Errorf("schema_indexes: %w", err)
+	for _, statement := range indexes {
+		if _, err = a.db.Exec(statement); err != nil {
+			return fmt.Errorf("schema_indexes: %w", err)
+		}
 	}
 	if _, err = a.db.Exec("INSERT OR IGNORE INTO channel_share_versions(channel_id,share_percent,effective_from,created_by) SELECT id,share_percent,'1900-01-01','migration' FROM channels"); err != nil {
 		return err

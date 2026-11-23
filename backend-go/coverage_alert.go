@@ -122,9 +122,17 @@ func mustCoverageLocation(zone string) *time.Location {
 }
 
 func (a *app) coverageEvents(w http.ResponseWriter, r *http.Request) {
+	a.listCoverageEvents(w, r, 0)
+}
+
+func (a *app) listCoverageEvents(w http.ResponseWriter, r *http.Request, channelID int64) {
 	q := r.URL.Query()
 	where := []string{"1=1"}
 	args := []any{}
+	if channelID > 0 {
+		where = append(where, channelDomainOwnerAtSQL("e.domain", "e.report_date")+"=?")
+		args = append(args, channelID)
+	}
 	if raw := q.Get("accountId"); raw != "" {
 		id, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || id < 1 {

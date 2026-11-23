@@ -6,7 +6,7 @@ import {
   Tag, Typography, message
 } from 'antd';
 import {
-  ApiOutlined, BarChartOutlined, DashboardOutlined, DollarOutlined, KeyOutlined,
+  ApiOutlined, BarChartOutlined, DashboardOutlined, DollarOutlined, FileProtectOutlined, KeyOutlined,
   LinkOutlined, LogoutOutlined, PlusOutlined, ReloadOutlined, SafetyOutlined, TeamOutlined,
   UserSwitchOutlined
 } from '@ant-design/icons';
@@ -27,6 +27,8 @@ const AdminPages = React.lazy(() => import('./AdminPages.jsx'));
 const LinkManager = React.lazy(() => import('./LinkManager.jsx'));
 const RegressionMonitor = React.lazy(() => import('./RegressionMonitor.jsx'));
 const BotReport = React.lazy(() => import('./BotReport.jsx'));
+const ChannelRegistration = React.lazy(() => import('./ChannelRegistration.jsx'));
+const ChannelPortalPage = React.lazy(() => import('./ChannelPortalPage.jsx'));
 async function api(path, options = {}) {
   const response = await sessionFetch(path, {
     credentials: 'include',
@@ -227,13 +229,16 @@ function Shell({ user, onLogout, initialView = 'dashboard', initialDashboard, on
       ...(admin?[sidebarItem('gam',<SafetyOutlined/>,'账号管理'),sidebarItem('links',<LinkOutlined/>,'链接管理'),sidebarItem('ad-units',<PlusOutlined/>,'广告单元创建')]:[]),
       sidebarItem('reports',<BarChartOutlined/>,'数据报告'),
       ...(admin?[sidebarItem('regression',<ReloadOutlined/>,'数据回退监测'),
-        sidebarItem('bot-report',<ApiOutlined/>,'机器人汇报')]:[])
+        sidebarItem('bot-report',<ApiOutlined/>,'机器人汇报')]:[
+        sidebarItem('channel-regression',<ReloadOutlined/>,'数据回退'),
+        sidebarItem('channel-links',<LinkOutlined/>,'我的链接'),
+        sidebarItem('channel-contract',<FileProtectOutlined/>,'我的合同')])
     ]},
     ...(admin?[{type:'group',label:'平台管理',children:[sidebarItem('channels',<TeamOutlined/>,'渠道管理'),sidebarItem('settlement',<DollarOutlined/>,'结算配置'),sidebarItem('admins',<UserSwitchOutlined/>,'管理员账户'),sidebarItem('report-keys',<KeyOutlined/>,'账户日报 API Key')]}]:[]),
     {type:'group',label:'开发能力',children:[sidebarItem('api',<ApiOutlined/>,'渠道 API')]}
   ].map(group=>({...group,children:group.children.filter(item=>canVisit(user,item.key))})).filter(group=>group.children.length),[user]);
-  const body=view==='dashboard'?<Dashboard range={range} setRange={setRange} admin={admin} user={user} initialDashboard={initialDashboard}/>:view==='reports'?<Reports range={range} setRange={setRange} admin={admin} user={user}/>:view==='links'?<LinkManager key={user?.id} user={user}/>:view==='regression'?<RegressionMonitor/>:view==='bot-report'?<BotReport/>:<AdminPages view={view} user={user}/>;
-  return <Layout className="app-shell"><Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={238}><div className="side-brand"><span>AX</span>{!collapsed&&<div><b>{admin?'AdX Control':'AdX Publisher'}</b><small>{admin?'平台管理端':'渠道工作台'}</small></div>}</div><Menu theme="dark" mode="inline" selectedKeys={[view]} items={menu} onClick={({key,domEvent})=>{if(!shouldNavigateInPlace(domEvent))return;domEvent?.preventDefault();navigate(key);}}/></Sider><Layout><Header><div><Text strong>{user.name||user.email}</Text><Tag color={admin?'blue':'cyan'}>{user.isSuperAdmin?'最高管理员':admin?'平台管理员':'渠道账号'}</Tag></div><Popconfirm title="确认退出登录？" onConfirm={onLogout}><Button icon={<LogoutOutlined/>}>退出</Button></Popconfirm></Header><Content><PageErrorBoundary key={view}><React.Suspense fallback={<Card className="route-loading">正在加载页面…</Card>}>{body}</React.Suspense></PageErrorBoundary></Content></Layout></Layout>;
+  const body=view==='dashboard'?<Dashboard range={range} setRange={setRange} admin={admin} user={user} initialDashboard={initialDashboard}/>:view==='reports'?<Reports range={range} setRange={setRange} admin={admin} user={user}/>:view==='links'?<LinkManager key={user?.id} user={user}/>:view==='regression'?<RegressionMonitor/>:view==='channel-regression'?<RegressionMonitor channelMode/>:view==='channel-links'||view==='channel-contract'?<ChannelPortalPage view={view}/>:view==='bot-report'?<BotReport/>:<AdminPages view={view} user={user}/>;
+  return <Layout className="app-shell"><Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={238}><div className="side-brand"><img src="/google-g.png" alt="Google" />{!collapsed&&<div><b>{admin?'AdX Control':'AdX Publisher'}</b><small>{admin?'平台管理端':'渠道工作台'}</small></div>}</div><Menu theme="dark" mode="inline" selectedKeys={[view]} items={menu} onClick={({key,domEvent})=>{if(!shouldNavigateInPlace(domEvent))return;domEvent?.preventDefault();navigate(key);}}/></Sider><Layout><Header><div><Text strong>{user.name||user.email}</Text><Tag color={admin?'blue':'cyan'}>{user.isSuperAdmin?'最高管理员':admin?'平台管理员':'渠道账号'}</Tag></div><Popconfirm title="确认退出登录？" onConfirm={onLogout}><Button icon={<LogoutOutlined/>}>退出</Button></Popconfirm></Header><Content><PageErrorBoundary key={view}><React.Suspense fallback={<Card className="route-loading">正在加载页面…</Card>}>{body}</React.Suspense></PageErrorBoundary></Content></Layout></Layout>;
 }
 
 function Root({ initialUser, initialView, initialDashboard, onReady }) {

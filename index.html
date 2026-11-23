@@ -14,16 +14,17 @@
       .boot-card h1{margin:0 0 6px;font-size:23px}.boot-hint{color:#6d8391;font-size:13px;line-height:1.7}
       .boot-card form{margin-top:24px}.boot-card label{display:block;margin:16px 0 8px;color:#30485a;font-size:13px;font-weight:600}.boot-card input{width:100%;height:42px;padding:9px 12px;border:1px solid #c8d7de;border-radius:6px;outline:none;background:#fff;color:#183142;transition:border-color .15s,box-shadow .15s}
       .boot-card input:focus{border-color:#1677ff;box-shadow:0 0 0 3px #1677ff20}.boot-card button{width:100%;height:42px;margin-top:24px;border:0;border-radius:6px;background:#1677ff;color:#fff;font-weight:650;cursor:pointer;transition:background .15s}.boot-card button:hover{background:#4096ff}.boot-card button:disabled{opacity:.7;cursor:wait}
+      .boot-google-g{width:42px;height:42px;flex:none;background:#fff;object-fit:contain;border-radius:8px;box-shadow:0 2px 8px #12293a22}.boot-register{margin-top:10px!important;background:#fff!important;color:#1677ff!important;border:1px solid #d2dfeb!important}.boot-register:hover{background:#f5f9ff!important}
       #boot-status{min-height:20px;margin:12px 0 0;color:#b42318;font-size:13px;line-height:1.5}#boot-status.loading{color:#60798a}#boot-retry{margin:0;background:#e6f4ff;color:#1677ff}.boot-note{margin:12px 0 0;padding-top:16px;border-top:1px solid #edf1f3;color:#8296a1;font-size:12px}
       @media(max-width:600px){.boot-shell{padding:18px}.boot-card{padding:26px 22px}.boot-identity{padding-bottom:22px;margin-bottom:22px}.boot-portal-label{display:none}}
     </style>
   </head>
   <body>
     <div id="root"><main class="boot-shell">
-      <section class="boot-card" aria-label="登录"><div class="boot-identity"><div class="boot-mark">AX</div><div><b id="boot-brand-name">AdX Control</b><small id="boot-brand-hint">广告数据工作台</small></div><span class="boot-portal-label" id="boot-portal-label">平台管理端</span></div><h1 id="boot-title">管理员登录</h1><div class="boot-hint" id="boot-hint">使用平台管理员账号登录。</div>
+      <section class="boot-card" aria-label="登录"><div class="boot-identity"><img class="boot-google-g" src="/google-g.png" alt="Google"/><div><b id="boot-brand-name">AdX Control</b><small id="boot-brand-hint">广告数据工作台</small></div><span class="boot-portal-label" id="boot-portal-label">平台管理端</span></div><h1 id="boot-title">管理员登录</h1><div class="boot-hint" id="boot-hint">使用平台管理员账号登录。</div>
         <form id="boot-login"><label for="boot-email">登录邮箱</label><input id="boot-email" name="email" type="email" autocomplete="username" required />
           <label for="boot-password">密码</label><input id="boot-password" name="password" type="password" autocomplete="current-password" required />
-          <button type="submit">登录</button></form><p id="boot-status" role="status" aria-live="polite"></p><button id="boot-retry" type="button" hidden>刷新页面</button><p class="boot-note">登录后直接进入完整工作台</p></section>
+          <button type="submit">登录</button></form><button id="boot-register" class="boot-register" type="button" hidden>创建渠道账号</button><p id="boot-status" role="status" aria-live="polite"></p><button id="boot-retry" type="button" hidden>刷新页面</button><p class="boot-note">登录后直接进入完整工作台</p></section>
     </main></div><div id="app-root" hidden></div>
     <script type="module" src="/src/boot.js"></script>
   </body>

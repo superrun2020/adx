@@ -37,7 +37,7 @@ func (a *app) queryDashboardHighlights(periods []dashboardAccountPeriod, month b
 	}
 	conditions := make([]string, 0, len(periods))
 	args := make([]any, 0, len(periods)*4+1)
-	ready := a.restDailyReady.Load()
+	ready := a.restDailyReady.Load() && !channel
 	for _, period := range periods {
 		start := period.today
 		if month {
@@ -58,15 +58,19 @@ func (a *app) queryDashboardHighlights(periods []dashboardAccountPeriod, month b
 		alias, source = "rd", "dashboard_rest_daily rd"
 	}
 	if scope > 0 {
-		where += " AND " + alias + ".channel_id=?"
-		args = append(args, scope)
+		if channel {
+			where += " AND " + channelDomainScopeSQL(alias, scope)
+		} else {
+			where += " AND " + alias + ".channel_id=?"
+			args = append(args, scope)
+		}
 	}
 	factor := alias + ".revenue"
 	if channel {
 		if ready {
 			factor = "rd.settled_revenue"
 		} else {
-			factor = settledRevenueSQL("rf")
+			factor = settledRevenueForChannelSQL("rf", scope)
 		}
 	}
 	domain := mappedDomainSQL("rf")

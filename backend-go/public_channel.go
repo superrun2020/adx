@@ -94,14 +94,15 @@ func (a *app) publicChannelRevenue(w http.ResponseWriter, r *http.Request) {
 		size = 5000
 	}
 	var total int64
-	err = a.db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM revenue_facts WHERE channel_id=? AND report_date BETWEEN ? AND ?", channelID, start, end).Scan(&total)
+	scope := channelDomainScopeSQL("revenue_facts", channelID)
+	err = a.db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM revenue_facts WHERE "+scope+" AND report_date BETWEEN ? AND ?", start, end).Scan(&total)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
-	settled := settledRevenueSQL("revenue_facts")
-	query := "SELECT report_date date," + mappedDomainSQL("revenue_facts") + " url,ad_unit,country,account,requests,matched_requests,impressions,clicks,ROUND(" + settled + ",6) revenue,CASE WHEN impressions>0 THEN ROUND(" + settled + "*1000.0/impressions,6) ELSE 0 END ecpm FROM revenue_facts WHERE channel_id=? AND report_date BETWEEN ? AND ? ORDER BY url,ad_unit LIMIT ? OFFSET ?"
-	rows, err := queryMaps(a.db, query, channelID, start, end, size, (page-1)*size)
+	settled := settledRevenueForChannelSQL("revenue_facts", channelID)
+	query := "SELECT report_date date," + mappedDomainSQL("revenue_facts") + " url,ad_unit,country,account,requests,matched_requests,impressions,clicks,ROUND(" + settled + ",6) revenue,CASE WHEN impressions>0 THEN ROUND(" + settled + "*1000.0/impressions,6) ELSE 0 END ecpm FROM revenue_facts WHERE " + scope + " AND report_date BETWEEN ? AND ? ORDER BY url,ad_unit LIMIT ? OFFSET ?"
+	rows, err := queryMaps(a.db, query, start, end, size, (page-1)*size)
 	if err != nil {
 		serverError(w, err)
 		return

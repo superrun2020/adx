@@ -19,7 +19,7 @@ async function api(path, options = {}) {
   return data;
 }
 
-export default function RegressionMonitor() {
+export default function RegressionMonitor({ channelMode = false }) {
   const [settings, setSettings] = useState(null);
   const [accounts, setAccounts] = useState([]);
   const [runs, setRuns] = useState([]);
@@ -51,8 +51,9 @@ export default function RegressionMonitor() {
       if (domain.trim()) q.set('domain', domain.trim());
       if (alertsOnly) q.set('alertsOnly', '1');
       if (sort) { q.set('sortBy', sort.key); q.set('sortDir', sort.direction); }
+      const prefix = channelMode ? '/api/channel/regression/' : '/api/admin/regression/';
       const [revenue, coverage] = await Promise.allSettled([
-        api('/api/admin/regression/events?' + q), api('/api/admin/regression/coverage-events?' + q)
+        api(prefix + 'events?' + q), api(prefix + 'coverage-events?' + q)
       ]);
       if (id === requestId.current) {
         if (revenue.status === 'fulfilled') { setRows(revenue.value.items || []); setTotal(revenue.value.total || 0); }
@@ -64,6 +65,7 @@ export default function RegressionMonitor() {
     finally { if (id === requestId.current) setLoading(false); }
   };
   const loadMeta = async () => {
+    if (channelMode) { setSettings(null); setAccounts([]); setRuns([]); return; }
     const results = await Promise.allSettled([
       api('/api/admin/regression/settings'), api('/api/admin/gam-accounts'), api('/api/admin/regression/runs')
     ]);
@@ -72,7 +74,7 @@ export default function RegressionMonitor() {
     if (results[2].status === 'fulfilled') setRuns(results[2].value.items || []);
     if (results.some(result => result.status === 'rejected')) message.error('部分监测信息读取失败，请刷新重试');
   };
-  useEffect(() => { loadMeta(); }, []);
+  useEffect(() => { void loadMeta(); }, [channelMode]);
   useEffect(() => { const timer = window.setTimeout(loadEvents, domain ? 250 : 0); return () => { window.clearTimeout(timer); requestId.current += 1; }; }, [page, range?.[0]?.valueOf(), range?.[1]?.valueOf(), accountId, cadence, domain, alertsOnly, sort]);
   const updateFilter = setter => value => { setPage(1); setter(value); };
   const openSettings = () => {
@@ -137,30 +139,30 @@ export default function RegressionMonitor() {
   ];
   const latest = runs.find(run => run.status === 'success');
   return <Space direction="vertical" size={16} className="page-stack regression-monitor">
-    <div className="page-heading"><div><Title level={2}>数据回退监测</Title><Text type="secondary">比较真实 GAM REST 报表，按账号时区计算日期；登录可直接查看最近监测结果</Text></div>
-      <Space><Button icon={<ReloadOutlined/>} loading={loading} onClick={() => { loadMeta(); loadEvents(); }}>刷新记录</Button>
-        <Button icon={<SendOutlined/>} loading={testing} disabled={!settings?.webhookConfigured} onClick={sendTest}>发送测试告警</Button>
-        <Button type="primary" icon={<SettingOutlined/>} onClick={openSettings}>通知条件设置</Button></Space></div>
-    <Alert showIcon type="info" message={
+    <div className="page-heading"><div><Title level={2}>{channelMode?'我的数据回退':'数据回退监测'}</Title><Text type="secondary">{channelMode?'仅显示已分配到本渠道域名的收入回退与覆盖率告警。':'比较真实 GAM REST 报表，按账号时区计算日期；登录可直接查看最近监测结果'}</Text></div>
+      <Space><Button icon={<ReloadOutlined/>} loading={loading} onClick={() => { if(!channelMode)void loadMeta(); void loadEvents(); }}>刷新记录</Button>
+        {!channelMode&&<Button icon={<SendOutlined/>} loading={testing} disabled={!settings?.webhookConfigured} onClick={sendTest}>发送测试告警</Button>}
+        {!channelMode&&<Button type="primary" icon={<SettingOutlined/>} onClick={openSettings}>通知条件设置</Button>}</Space></div>
+    {!channelMode&&<Alert showIcon type="info" message={
       '收入告警' + (settings?.feishuEnabled ? '已启用' : '未启用') + '；覆盖率告警' + (settings?.coverageFeishuEnabled ? '已启用' : '未启用')
-    } description={'收入条件：原收入 > ' + money(settings?.minRevenue ?? 50) + ' 且下降 ≥ ' + Number(settings?.minDropPercent ?? 2).toFixed(2) + '%。覆盖率=匹配请求÷广告请求；与昨日同小时相比下降 ≥ ' + Number(settings?.minCoverageDropPoints ?? 30).toFixed(2) + ' 个百分点，且两小时各有 ≥ ' + Number(settings?.minCoverageRequests ?? 100) + ' 次请求时报警。覆盖率每 15 分钟同步后检测，同域名每天最多推送一次，后台归档单元不计入。收入回退仍在美国西海岸 01:00–02:00 发送（北京时间夏令时 16:00–17:00、冬令时 17:00–18:00）。'}/>
-    {latest && <Text type="secondary">最近完成：{latest.accountName} · {cadenceNames[latest.cadence]} · {stamp(latest.finishedAt, latest.timeZone)}（{latest.timeZone}）</Text>}
+    } description={'收入条件：原收入 > ' + money(settings?.minRevenue ?? 50) + ' 且下降 ≥ ' + Number(settings?.minDropPercent ?? 2).toFixed(2) + '%。覆盖率=匹配请求÷广告请求；与昨日同小时相比下降 ≥ ' + Number(settings?.minCoverageDropPoints ?? 30).toFixed(2) + ' 个百分点，且两小时各有 ≥ ' + Number(settings?.minCoverageRequests ?? 100) + ' 次请求时报警。覆盖率每 15 分钟同步后检测，同域名每天最多推送一次，后台归档单元不计入。收入回退仍在美国西海岸 01:00–02:00 发送（北京时间夏令时 16:00–17:00、冬令时 17:00–18:00）。'}/>}
+    {!channelMode&&latest && <Text type="secondary">最近完成：{latest.accountName} · {cadenceNames[latest.cadence]} · {stamp(latest.finishedAt, latest.timeZone)}（{latest.timeZone}）</Text>}
     {runs[0]?.status === 'failed' && <Alert type="warning" showIcon message={'最近一次监测失败：' + runs[0].accountName + ' · ' + cadenceNames[runs[0].cadence]} description={runs[0].detail || '请检查 GAM 账号同步状态'} />}
     {runs[0]?.status === 'skipped' && <Alert type="info" showIcon message={'最近一次监测暂未比较：' + runs[0].accountName + ' · ' + cadenceNames[runs[0].cadence]} description={runs[0].detail || '等待 GAM 返回可比较的完整数据'} />}
     <Card className="regression-filters"><Space wrap size={12}>
       <ReportDateFilter value={range} onChange={updateFilter(setRange)} allowAll />
-      <Select allowClear showSearch optionFilterProp="label" placeholder="全部账号" style={{width:210}} value={accountId} onChange={updateFilter(setAccountId)} options={accounts.map(account => ({value:account.id,label:account.name + ' (' + account.networkCode + ')'}))}/>
+      {!channelMode&&<Select allowClear showSearch optionFilterProp="label" placeholder="全部账号" style={{width:210}} value={accountId} onChange={updateFilter(setAccountId)} options={accounts.map(account => ({value:account.id,label:account.name + ' (' + account.networkCode + ')'}))}/>}
       <Select allowClear placeholder="全部时间段" style={{width:190}} value={cadence} onChange={updateFilter(setCadence)} options={Object.entries(cadenceNames).map(([value,label]) => ({value,label}))}/>
       <Input allowClear placeholder="域名筛选" style={{width:205}} value={domain} onChange={event => {setPage(1); setDomain(event.target.value);}} onPressEnter={loadEvents}/>
       <Button onClick={() => {setPage(1); loadEvents();}}>搜索</Button>
-      <Space><Switch checked={alertsOnly} onChange={updateFilter(setAlertsOnly)}/><Tooltip title="达到收入回退阈值，包含已发送、待发送、发送失败及通知未启用的记录"><Text>仅看已触发</Text></Tooltip></Space>
+      {!channelMode&&<Space><Switch checked={alertsOnly} onChange={updateFilter(setAlertsOnly)}/><Tooltip title="达到收入回退阈值，包含已发送、待发送、发送失败及通知未启用的记录"><Text>仅看已触发</Text></Tooltip></Space>}
       <Button onClick={() => {setRange(null);setAccountId(null);setCadence(null);setDomain('');setAlertsOnly(false);setSort(null);setPage(1);}}>重置</Button>
     </Space></Card>
     <Card className="regression-table" title={'监测记录（' + total + '）'}><Table rowKey="id" loading={loading} dataSource={rows} columns={columns} size="middle" scroll={{x:1850}}
       pagination={{current:page,pageSize:100,total,showSizeChanger:false,onChange:setPage}} locale={{emptyText:'暂无可比较的变化记录；首次同步会先建立基准快照'}}/></Card>
     <Card className="regression-table" title="覆盖率下降告警（最近 100 条）"><Table rowKey="id" loading={loading} dataSource={coverageRows}
       columns={coverageColumns} size="small" scroll={{x:1200}} pagination={false} locale={{emptyText:'暂无覆盖率告警；每次 GAM REST 同步成功后自动检测'}}/></Card>
-    <Modal title="数据回退通知条件" open={modal} onCancel={() => setModal(false)} onOk={() => form.submit()} confirmLoading={saving} okText="保存条件" destroyOnHidden>
+    {!channelMode&&<Modal title="数据回退通知条件" open={modal} onCancel={() => setModal(false)} onOk={() => form.submit()} confirmLoading={saving} okText="保存条件" destroyOnHidden>
       <Alert showIcon type="info" style={{marginBottom:16}} message="收入与覆盖率独立触发；覆盖率按账号当地时间与昨日同小时比较，低请求量不报警。"/>
       <Form form={form} layout="vertical" onFinish={saveSettings}>
         <Form.Item name="feishuEnabled" label="收入回退飞书通知" valuePropName="checked"><Switch checkedChildren="启用" unCheckedChildren="停用"/></Form.Item>
@@ -174,6 +176,6 @@ export default function RegressionMonitor() {
         <Form.Item name="clearSigningSecret" label="清除现有签名密钥" valuePropName="checked"><Switch/></Form.Item>
         <Form.Item name="clearWebhook" label="移除现有 Webhook" valuePropName="checked"><Switch/></Form.Item>
       </Form>
-    </Modal>
+    </Modal>}
   </Space>;
 }

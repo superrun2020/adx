@@ -5,7 +5,7 @@ import {
   Tag, Typography, message
 } from 'antd';
 import {
-  ApiOutlined, BarChartOutlined, CopyOutlined, DashboardOutlined, DollarOutlined, KeyOutlined,
+  ApiOutlined, BarChartOutlined, CopyOutlined, DashboardOutlined, DollarOutlined, FileProtectOutlined, KeyOutlined,
   LogoutOutlined, PlusOutlined, ReloadOutlined, SafetyOutlined, TeamOutlined,
   UploadOutlined, UserSwitchOutlined
 } from '@ant-design/icons';
@@ -16,6 +16,8 @@ import { adminPermissionOptions } from './navigation.js';
 import { reportPresetRange } from './reportDatePresets.js';
 import { channelGAMDomains } from './channel-domain-catalog.mjs';
 import { sessionFetch } from './sessionFetch.js';
+import { SignaturePad } from './ChannelRegistration.jsx';
+import './channel-registration.css';
 
 const { Title, Text } = Typography;
 const Table = NumericSortableTable;
@@ -133,6 +135,78 @@ function ChannelDomainModal({ channel, domains, issues, busy, onClose }) {
   </Modal>;
 }
 
+function ChannelRegistrationReview({ registration, accounts, user, onClose, onDone }) {
+  const [detail,setDetail]=useState(null),[loading,setLoading]=useState(false),[saving,setSaving]=useState(false);
+  const [mapping,setMapping]=useState({}),[channelName,setChannelName]=useState(''),[sharePercent,setSharePercent]=useState(80);
+  const [effectiveFrom,setEffectiveFrom]=useState(dayjs()),[reviewNote,setReviewNote]=useState('');
+  const [reviewerTitle,setReviewerTitle]=useState('平台主管'),[signatureData,setSignatureData]=useState('');
+  useEffect(()=>{
+    let active=true;
+    setDetail(null);setSignatureData('');setReviewNote('');
+    if(!registration)return undefined;
+    setChannelName(registration.companyName||registration.contactName||'');
+    setSharePercent(80);setEffectiveFrom(dayjs());
+    setLoading(true);
+    api('/api/admin/channel-registrations/'+registration.id).then(result=>{
+      if(!active)return;
+      const item=result.item;setDetail(item);
+      const next={};for(const row of item.domains||[])next[row.domain]=row.gamAccountId;
+      setMapping(next);
+    }).catch(error=>message.error('注册申请加载失败：'+error.message)).finally(()=>{if(active)setLoading(false)});
+    return()=>{active=false};
+  },[registration?.id]);
+  const approve=async()=>{
+    const domains=(detail?.domains||[]).filter(row=>mapping[row.domain]).map(row=>({domain:row.domain,gamAccountId:Number(mapping[row.domain])}));
+    if(!domains.length||domains.length!==(detail?.domains||[]).length)return message.warning('请为每个申请域名匹配一个 GAM 账号');
+    if(!signatureData||!reviewerTitle.trim())return message.warning('请填写平台签署职务并完成平台手写签名');
+    setSaving(true);
+    try{
+      await api('/api/admin/channel-registrations/'+registration.id+'/approve',{method:'POST',body:JSON.stringify({
+        channelName,sharePercent,effectiveFrom:effectiveFrom.format('YYYY-MM-DD'),domains,reviewNote,
+        reviewerSignatureName:user?.name||'',reviewerSignatureTitle:reviewerTitle,reviewerSignatureData:signatureData,reviewerAccepted:true
+      })});
+      message.success('合同已由平台签署，渠道账号与所选域名已开通');
+      onDone();
+    }catch(error){message.error('审核失败：'+error.message)}
+    finally{setSaving(false)}
+  };
+  const reject=()=>Modal.confirm({title:'拒绝该渠道申请',content:<Input.TextArea id="registration-reject-note" rows={3} placeholder="填写拒绝原因"/>,okText:'确认拒绝',okButtonProps:{danger:true},
+    onOk:async()=>{const note=document.getElementById('registration-reject-note')?.value||'';await api('/api/admin/channel-registrations/'+registration.id+'/reject',{method:'POST',body:JSON.stringify({reviewNote:note})});message.success('申请已拒绝');onDone()}});
+  return <Modal open={Boolean(registration)} width={960} title={registration?'注册申请 · '+registration.companyName:''} onCancel={onClose}
+    footer={registration?.status==='signed'?<Space><Button onClick={onClose}>取消</Button><Button danger onClick={reject}>拒绝</Button><Button type="primary" loading={saving} onClick={approve}>复核并双方签署</Button></Space>:<Button onClick={onClose}>关闭</Button>}>
+    <Spin spinning={loading||saving}>{detail&&<Space direction="vertical" style={{width:'100%'}} size={14}>
+      <Alert type="info" showIcon message="注册人已提交并签署合同；签署内容与版本已冻结。完成账号、域名与 TXT 核对后，由运营在此完成平台签署。" />
+      <Descriptions size="small" bordered column={{xs:1,sm:2}} items={[
+        {key:'contact',label:'联系人',children:detail.contactName},{key:'email',label:'邮箱',children:detail.email},
+        {key:'company',label:'公司',children:detail.companyName},{key:'number',label:'注册编号',children:detail.registrationNumber},
+        {key:'country',label:'注册国家',children:detail.country},{key:'address',label:'注册地址',children:detail.registeredAddress},
+        {key:'phone',label:'电话',children:detail.phone},{key:'signed',label:'渠道方签署时间',children:detail.signedAt}
+      ]}/>
+      {(detail.domains||[]).map(row=><Card size="small" key={row.domain} title={row.domain} extra={<Tag color={row.currentChannelId?'orange':'blue'}>{row.currentChannelName||'未分配'}</Tag>}>
+        <Text strong>提交的 adx.txt</Text><pre className="channel-txt-preview">{row.adxTxt||'未提交'}</pre>
+        <label className="registration-admin-field">对应 GAM 账号<Select allowClear showSearch optionFilterProp="label" value={mapping[row.domain]} onChange={value=>setMapping(current=>({...current,[row.domain]:value}))} options={accounts.filter(account=>account.status==='active'&&Number(account.enabled)).map(account=>({value:Number(account.id),label:account.name+' · '+account.networkCode}))}/></label>
+      </Card>)}
+      <Row gutter={12}><Col xs={24} md={8}><label className="registration-admin-field">渠道名称<Input value={channelName} onChange={event=>setChannelName(event.target.value)}/></label></Col>
+        <Col xs={24} md={8}><label className="registration-admin-field">渠道分成比例（%）<InputNumber min={0} max={100} precision={2} value={sharePercent} onChange={value=>setSharePercent(value)} style={{width:'100%'}}/></label></Col>
+        <Col xs={24} md={8}><label className="registration-admin-field">数据归属生效日<DatePicker value={effectiveFrom} onChange={setEffectiveFrom} style={{width:'100%'}}/></label></Col></Row>
+      <label className="registration-admin-field">审核备注<Input.TextArea rows={2} value={reviewNote} onChange={event=>setReviewNote(event.target.value)}/></label>
+      <Card size="small" title={<Space><FileProtectOutlined/>渠道方已签署合同全文</Space>}>
+        <div className="contract-signatures">
+          <div><Text strong>渠道方签名：{detail.signerName}（{detail.signerTitle}）</Text><img src={detail.signatureData} alt="渠道方手写签名"/></div>
+          <Text type="secondary">签署时间：{detail.signedAt} · 内容 SHA-256：{detail.contractHash}</Text>
+        </div>
+        <pre className="contract-preview admin-contract-preview">{detail.contractText}</pre>
+      </Card>
+      {registration.status==='signed'&&<Card size="small" title="平台复核签署">
+        <label className="registration-admin-field">平台签署人<Input value={user?.name||''} disabled/></label>
+        <label className="registration-admin-field">平台签署职务<Input value={reviewerTitle} onChange={event=>setReviewerTitle(event.target.value)}/></label>
+        <SignaturePad title="平台主管手写签名" onChange={setSignatureData}/>
+        <Alert style={{marginTop:12}} type="warning" showIcon message="只有提交此处的平台签名后，系统才会激活渠道登录并按上述 GAM 账号及域名配置数据权限。"/>
+      </Card>}
+    </Space>}</Spin>
+  </Modal>;
+}
+
 function Channels({ user }) {
   const accountIdsFor=row=>{try{const ids=typeof row?.gamAccountIds==='string'?JSON.parse(row.gamAccountIds):row?.gamAccountIds;return Array.isArray(ids)?ids.map(Number):[]}catch{return []}};
   const cacheKey = user?.id || user?.email;
@@ -142,8 +216,12 @@ function Channels({ user }) {
   const [domainsByChannel,setDomainsByChannel]=useState(()=>initialDomainCache?.domains || new Map());
   const [domainIssues,setDomainIssues]=useState([]),[domainBusy,setDomainBusy]=useState(true);
   const [domainModalChannel,setDomainModalChannel]=useState(null);
+  const [registrations,setRegistrations]=useState([]);
+  const [registrationLoading,setRegistrationLoading]=useState(false);
+  const [reviewingRegistration,setReviewingRegistration]=useState(null);
   const domainRequest=useRef(null);
   const load=()=>Promise.all([api('/api/admin/channels'),api('/api/admin/gam-accounts')]).then(([r,gam])=>{const rows=r.items || [];setItems(rows);setGamAccounts(gam.items || []);setDomainModalChannel(current=>current&&rows.some(row=>row.id===current.id)?current:null);if(cacheKey)channelRowsCache.set(cacheKey,rows);}).catch(e=>message.error(e.message));
+  const loadRegistrations=async()=>{setRegistrationLoading(true);try{setRegistrations((await api('/api/admin/channel-registrations')).items||[])}catch(error){message.error('渠道注册申请读取失败：'+error.message)}finally{setRegistrationLoading(false)}};
   const loadDomains=async()=>{
     domainRequest.current?.abort();
     const controller=new AbortController(); domainRequest.current=controller;
@@ -190,7 +268,7 @@ function Channels({ user }) {
     }catch(error){if(!controller.signal.aborted)setDomainIssues([error.message]);}
     finally{if(!controller.signal.aborted)setDomainBusy(false);}
   };
-  useEffect(()=>{let active=true;const channelLoad=load();if(cacheKey&&channelRowsCache.has(cacheKey))void loadDomains();else void channelLoad.finally(()=>{if(active)void loadDomains();});return()=>{active=false;domainRequest.current?.abort();}},[]);
+  useEffect(()=>{let active=true;const channelLoad=load();void loadRegistrations();if(cacheKey&&channelRowsCache.has(cacheKey))void loadDomains();else void channelLoad.finally(()=>{if(active)void loadDomains();});return()=>{active=false;domainRequest.current?.abort();}},[]);
   const save=async values=>{try{const payload={...values,effectiveFrom:values.effectiveFrom?.format('YYYY-MM-DD')};await api(editing?`/api/admin/channels/${editing.id}`:'/api/admin/channels',{method:editing?'PUT':'POST',body:JSON.stringify(payload)});message.success('渠道和账号归属已更新');setOpen(false);await load();void loadDomains()}catch(e){message.error(e.message)}};
   const show=item=>{setEditing(item||null);form.resetFields();form.setFieldsValue(item?{...item,gamAccountIds:accountIdsFor(item),effectiveFrom:dayjs()}:{sharePercent:80,status:'active',effectiveFrom:dayjs(),gamAccountIds:[]});setOpen(true)};
   const resetPassword=r=>Modal.confirm({title:`重置 ${r.name} 的登录密码`,content:<Input.Password id="channel-new-password" placeholder="至少10位"/>,onOk:async()=>{const password=document.getElementById('channel-new-password')?.value||'';await api(`/api/admin/channels/${r.id}/password`,{method:'POST',body:JSON.stringify({password})});message.success('密码已更新，旧会话已退出')}});
@@ -207,7 +285,33 @@ function Channels({ user }) {
   const accountOptions=gamAccounts.map(account=>({value:Number(account.id),label:account.name+' · Network '+account.networkCode+(account.channelId?' · 当前 '+(ownerNames.get(Number(account.channelId))||'其他渠道'):''),disabled:account.status!=='active'||!Number(account.enabled)||!Number(account.reportConfigured)||Boolean(editing&&Number(account.channelId)===Number(editing.id))}));
   const accountColumn={title:'关联 GAM 账号',width:270,render:(_,row)=>{const ids=accountIdsFor(row);return ids.length?<Space wrap size={4}>{ids.map(id=><Tag key={id}>{accountNames.get(id)||('账号 '+id)}</Tag>)}</Space>:<Text type="secondary">未关联</Text>}};
   const columns=[{title:'渠道',dataIndex:'name'},accountColumn,domainColumn,{title:'登录邮箱',dataIndex:'email',render:v=>v||'仅内部管理'},{title:'分成比例',dataIndex:'sharePercent',render:v=>`${v}%`},{title:'API',dataIndex:'apiConfigured',render:(v,r)=>r.internalOnly?<Tag>仅内部</Tag>:<Tag color={v?'green':'orange'}>{v?'已配置':'未生成'}</Tag>},{title:'状态',dataIndex:'status',render:v=><Tag color={v==='active'?'green':'default'}>{v==='active'?'启用':'停用'}</Tag>},{title:'操作',render:(_,r)=><Space><Button type="link" onClick={()=>show(r)}>编辑</Button>{!r.internalOnly&&<><Button type="link" icon={<KeyOutlined/>} onClick={()=>resetPassword(r)}>密码</Button><Button type="link" onClick={()=>rotateSecret(r)}>API密钥</Button></>}</Space>}];
-  return <Space direction="vertical" size={16} className="page-stack"><div className="page-heading"><div><Title level={2}>渠道管理</Title><Text type="secondary">创建渠道时选择 GAM 账号，自动关联该账号的域名、广告单元、报表和飞书汇报</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={()=>show(null)}>新建渠道</Button></div><Card><Table rowKey="id" dataSource={items} numericKeys={['sharePercent']} columns={columns} scroll={{x:1200}}/></Card><ChannelDomainModal channel={items.find(item=>item.id===domainModalChannel?.id)||domainModalChannel} domains={domainsByChannel} issues={domainIssues} busy={domainBusy} onClose={()=>setDomainModalChannel(null)}/><Drawer title={editing?'编辑渠道':'新建渠道'} open={open} onClose={()=>setOpen(false)} width={520} destroyOnClose><Form form={form} layout="vertical" onFinish={save}><Form.Item name="name" label="渠道名称" rules={[{required:true}]}><Input/></Form.Item><Form.Item name="gamAccountIds" label="关联 GAM 账号" extra="选中后，该账号的主域名、子域名、链接、广告单元和报表从生效日期起归当前渠道；原渠道历史数据保留。要转移账号，请在目标渠道选中它。"><Select mode="multiple" showSearch optionFilterProp="label" maxTagCount="responsive" placeholder="选择已接入的 Ad Manager 账号" options={accountOptions}/></Form.Item><Form.Item name="email" label="登录邮箱（可选）" rules={[{type:'email'}]} extra="留空则仅用于后台归属，不创建渠道登录账号"><Input disabled={Boolean(editing)}/></Form.Item>{!editing&&<Form.Item noStyle shouldUpdate={(before,after)=>before.email!==after.email}>{({getFieldValue})=>getFieldValue('email')?<Form.Item name="password" label="初始密码" preserve={false} rules={[{required:true,min:10}]}><Input.Password/></Form.Item>:null}</Form.Item>}<Form.Item name="sharePercent" label="渠道分成比例（%）" rules={[{required:true}]}><InputNumber min={0} max={100} precision={2} style={{width:'100%'}}/></Form.Item><Form.Item name="effectiveFrom" label="分成及账号归属生效日期" rules={[{required:true,message:'请选择生效日期'}]} extra="该日期之前的报表保留原渠道；该日期起的账号数据归新渠道"><DatePicker format="YYYY-MM-DD" style={{width:'100%'}}/></Form.Item><Form.Item name="status" label="状态"><Select options={[{value:'active',label:'启用'},{value:'disabled',label:'停用'}]}/></Form.Item><Button type="primary" htmlType="submit">保存并读回</Button></Form></Drawer></Space>;
+  return <Space direction="vertical" size={16} className="page-stack">
+    <div className="page-heading"><div><Title level={2}>渠道管理</Title><Text type="secondary">创建渠道时选择 GAM 账号，自动关联该账号的域名、广告单元、报表和飞书汇报</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={()=>show(null)}>新建渠道</Button></div>
+    <Card><Table rowKey="id" dataSource={items} numericKeys={['sharePercent']} columns={columns} scroll={{x:1200}}/></Card>
+    <Card title={<Space><FileProtectOutlined/>渠道注册与合同审核<Tag color="gold">待复核 {registrations.filter(row=>row.status==='signed').length}</Tag></Space>} extra={<Button icon={<ReloadOutlined/>} loading={registrationLoading} onClick={()=>void loadRegistrations()}>刷新申请</Button>}>
+      <Table rowKey="id" dataSource={registrations} loading={registrationLoading} pagination={{pageSize:8,showSizeChanger:false}} scroll={{x:1050}} columns={[
+        {title:'申请时间',dataIndex:'createdAt',width:180},{title:'公司主体',dataIndex:'companyName',width:190},
+        {title:'联系人',dataIndex:'contactName',width:130},{title:'邮箱',dataIndex:'email',width:220},
+        {title:'申请域名',dataIndex:'domains',width:260,render:rows=><Space wrap>{(rows||[]).map(row=><Tag key={row.domain}>{row.domain}</Tag>)}</Space>},
+        {title:'状态',dataIndex:'status',width:110,render:value=><Tag color={value==='approved'?'green':value==='rejected'?'red':'gold'}>{value==='approved'?'已开通':value==='rejected'?'已拒绝':'待复核'}</Tag>},
+        {title:'操作',width:130,fixed:'right',render:(_,row)=><Button type="link" onClick={()=>setReviewingRegistration(row)}>{row.status==='signed'?'复核并签署':'查看合同'}</Button>}
+      ]}/>
+    </Card>
+    <ChannelRegistrationReview registration={reviewingRegistration} accounts={gamAccounts} user={user} onClose={()=>setReviewingRegistration(null)} onDone={()=>{setReviewingRegistration(null);void loadRegistrations();void load();void loadDomains()}}/>
+    <ChannelDomainModal channel={items.find(item=>item.id===domainModalChannel?.id)||domainModalChannel} domains={domainsByChannel} issues={domainIssues} busy={domainBusy} onClose={()=>setDomainModalChannel(null)}/>
+    <Drawer title={editing?'编辑渠道':'新建渠道'} open={open} onClose={()=>setOpen(false)} width={520} destroyOnClose>
+      <Form form={form} layout="vertical" onFinish={save}>
+        <Form.Item name="name" label="渠道名称" rules={[{required:true}]}><Input/></Form.Item>
+        <Form.Item name="gamAccountIds" label="关联 GAM 账号" extra="选中后，该账号的主域名、子域名、链接、广告单元和报表从生效日期起归当前渠道；原渠道历史数据保留。要转移账号，请在目标渠道选中它。"><Select mode="multiple" showSearch optionFilterProp="label" maxTagCount="responsive" placeholder="选择已接入的 Ad Manager 账号" options={accountOptions}/></Form.Item>
+        <Form.Item name="email" label="登录邮箱（可选）" rules={[{type:'email'}]} extra="留空则仅用于后台归属，不创建渠道登录账号"><Input disabled={Boolean(editing)}/></Form.Item>
+        {!editing&&<Form.Item noStyle shouldUpdate={(before,after)=>before.email!==after.email}>{({getFieldValue})=>getFieldValue('email')?<Form.Item name="password" label="初始密码" preserve={false} rules={[{required:true,min:10}]}><Input.Password/></Form.Item>:null}</Form.Item>}
+        <Form.Item name="sharePercent" label="渠道分成比例（%）" rules={[{required:true}]}><InputNumber min={0} max={100} precision={2} style={{width:'100%'}}/></Form.Item>
+        <Form.Item name="effectiveFrom" label="分成及账号归属生效日期" rules={[{required:true,message:'请选择生效日期'}]} extra="该日期之前的报表保留原渠道；该日期起的账号数据"><DatePicker format="YYYY-MM-DD" style={{width:'100%'}}/></Form.Item>
+        <Form.Item name="status" label="状态"><Select options={[{value:'active',label:'启用'},{value:'disabled',label:'停用'}]}/></Form.Item>
+        <Button type="primary" htmlType="submit">保存并读回</Button>
+      </Form>
+    </Drawer>
+  </Space>;
 }
 
 function DataImport() {

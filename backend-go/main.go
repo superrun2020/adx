@@ -116,6 +116,8 @@ func (a *app) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", a.health)
 	mux.HandleFunc("POST /api/auth/login", a.login)
+	mux.HandleFunc("POST /api/auth/register-channel", a.registerChannel)
+	mux.HandleFunc("GET /api/public/channel-contract", a.publicChannelContract)
 	mux.HandleFunc("GET /api/auth/me", a.auth("", a.me))
 	mux.HandleFunc("POST /api/auth/logout", a.auth("", a.logout))
 	mux.HandleFunc("GET /api/dashboard", a.auth("", a.cachedReport(a.dashboard)))
@@ -141,6 +143,14 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("POST /api/admin/domain-share-rules", a.auth("admin", a.createDomainShareRule))
 	mux.HandleFunc("PUT /api/admin/domain-share-rules/{id}", a.auth("admin", a.updateDomainShareRule))
 	mux.HandleFunc("GET /api/admin/channels", a.auth("admin", a.channels))
+	mux.HandleFunc("GET /api/admin/channel-registrations", a.auth("admin", a.channelRegistrations))
+	mux.HandleFunc("GET /api/admin/channel-registrations/{id}", a.auth("admin", a.channelRegistrationDetail))
+	mux.HandleFunc("POST /api/admin/channel-registrations/{id}/approve", a.auth("admin", a.approveChannelRegistration))
+	mux.HandleFunc("POST /api/admin/channel-registrations/{id}/reject", a.auth("admin", a.rejectChannelRegistration))
+	mux.HandleFunc("GET /api/channel/domains", a.auth("channel", a.channelDomains))
+	mux.HandleFunc("GET /api/channel/contract", a.auth("channel", a.channelContract))
+	mux.HandleFunc("GET /api/channel/regression/events", a.auth("channel", a.channelRegressionEvents))
+	mux.HandleFunc("GET /api/channel/regression/coverage-events", a.auth("channel", a.channelCoverageEvents))
 	mux.HandleFunc("POST /api/admin/channels", a.auth("admin", a.createChannel))
 	mux.HandleFunc("PUT /api/admin/channels/{id}", a.auth("admin", a.updateChannel))
 	mux.HandleFunc("POST /api/admin/channels/{id}/password", a.auth("admin", a.resetChannelPassword))
@@ -316,7 +326,11 @@ func (a *app) static(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, filepath.Join(dist, "index.html"))
 }
 
-func queryMaps(db *sql.DB, query string, args ...any) ([]map[string]any, error) {
+type sqlQueryer interface {
+	Query(string, ...any) (*sql.Rows, error)
+}
+
+func queryMaps(db sqlQueryer, query string, args ...any) ([]map[string]any, error) {
 	rows, err := db.Query(query, args...)
 	if err != nil {
 		return nil, err
@@ -349,7 +363,7 @@ func queryMaps(db *sql.DB, query string, args ...any) ([]map[string]any, error) 
 	return result, rows.Err()
 }
 
-func firstMap(db *sql.DB, query string, args ...any) (map[string]any, error) {
+func firstMap(db sqlQueryer, query string, args ...any) (map[string]any, error) {
 	rows, err := queryMaps(db, query, args...)
 	if err != nil {
 		return nil, err

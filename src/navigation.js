@@ -10,6 +10,9 @@ export const viewPaths = Object.freeze({
   'ad-units': '/ad-units',
   admins: '/admins',
   'report-keys': '/report-keys',
+  'channel-links': '/my-links',
+  'channel-contract': '/my-contract',
+  'channel-regression': '/channel-regression',
   api: '/api-docs'
 });
 
@@ -27,7 +30,7 @@ export const adminPermissionOptions = Object.freeze([
 
 export function canVisit(userOrRole, view) {
   const user = typeof userOrRole === 'string' ? { role: userOrRole } : userOrRole || {};
-  if (user.role !== 'admin') return !adminOnlyViews.has(view);
+  if (user.role !== 'admin') return !adminOnlyViews.has(view) && (!view.startsWith('channel-') || ['channel-links','channel-contract','channel-regression'].includes(view));
   if (user.isSuperAdmin || userOrRole === 'admin') return true;
   if (view === 'admins') return false;
   return !Array.isArray(user.sidebarPermissions) || user.sidebarPermissions.includes(view);

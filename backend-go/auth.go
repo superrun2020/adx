@@ -37,7 +37,7 @@ func (u user) public() map[string]any {
 		channel = u.ChannelID.Int64
 	}
 	return map[string]any{"id": u.ID, "email": u.Email, "name": u.Name,
-		"role": u.Role, "channelId": channel, "isSuperAdmin": u.IsSuperAdmin,
+		"role": u.Role, "channelId": channel, "status": u.Status, "isSuperAdmin": u.IsSuperAdmin,
 		"sidebarPermissions": u.sidebarViews()}
 }
 
@@ -161,8 +161,12 @@ func (a *app) auth(role string, next http.HandlerFunc) http.HandlerFunc {
 			"SELECT u.id,u.email,u.name,u.role,u.channel_id,u.status,u.is_super_admin,u.sidebar_permissions FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>datetime('now')",
 			sha256Hex(token)).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.ChannelID, &u.Status, &super, &u.SidebarPermissions)
 		u.IsSuperAdmin = super == 1
-		if err != nil || u.Status != "active" {
+		if err != nil || (u.Status != "active" && !(u.Status == "pending" && u.Role == "channel" && !u.ChannelID.Valid)) {
 			writeError(w, 401, "unauthorized")
+			return
+		}
+		if u.Status == "pending" && r.URL.Path != "/api/auth/me" && r.URL.Path != "/api/auth/logout" {
+			writeError(w, 403, "registration_pending_review")
 			return
 		}
 		if portal := a.portalRole(r); portal != "" && u.Role != portal {
@@ -216,8 +220,12 @@ func (a *app) login(w http.ResponseWriter, r *http.Request) {
 	err := a.db.QueryRowContext(r.Context(), "SELECT id,email,name,role,channel_id,status,password_hash,is_super_admin,sidebar_permissions FROM users WHERE email=?", email).
 		Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.ChannelID, &u.Status, &encoded, &super, &u.SidebarPermissions)
 	u.IsSuperAdmin = super == 1
-	if err != nil || u.Status != "active" || (a.portalRole(r) != "" && a.portalRole(r) != u.Role) || !passwordMatches(input["password"], encoded) {
+	if err != nil || (u.Status != "active" && u.Status != "pending") || (a.portalRole(r) != "" && a.portalRole(r) != u.Role) || !passwordMatches(input["password"], encoded) {
 		writeError(w, 401, "invalid_credentials")
+		return
+	}
+	if u.Status == "pending" {
+		writeError(w, 403, "registration_pending_review")
 		return
 	}
 	raw := make([]byte, 32)

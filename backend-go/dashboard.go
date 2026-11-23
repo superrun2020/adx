@@ -88,18 +88,12 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 	if u.Role == "admin" {
 		scope, _ = strconv.ParseInt(r.URL.Query().Get("channelId"), 10, 64)
 	}
-	where := "report_date BETWEEN ? AND ?"
-	args := []any{start, end}
-	if scope > 0 {
-		where += " AND channel_id=?"
-		args = append(args, scope)
-	}
 	ready := a.dailyReady.Load()
 	if restOnly {
 		ready = a.restDailyReady.Load()
 	}
-	if restOnly && !ready {
-		where += " AND source_file LIKE 'gam-rest:%'"
+	if u.Role == "channel" {
+		ready = false
 	}
 	source := "revenue_facts"
 	if ready {
@@ -108,6 +102,19 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 		} else {
 			source = "dashboard_daily"
 		}
+	}
+	where := "report_date BETWEEN ? AND ?"
+	args := []any{start, end}
+	if scope > 0 {
+		if u.Role == "channel" {
+			where += " AND " + channelDomainScopeSQL("revenue_facts", scope)
+		} else {
+			where += " AND channel_id=?"
+			args = append(args, scope)
+		}
+	}
+	if restOnly && !ready {
+		where += " AND source_file LIKE 'gam-rest:%'"
 	}
 	upstreamField := ""
 	if ready && u.Role == "admin" {
@@ -124,7 +131,7 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 		if ready {
 			factor = "settled_revenue"
 		} else {
-			factor = settledRevenueSQL("revenue_facts")
+			factor = settledRevenueForChannelSQL("revenue_facts", scope)
 		}
 	}
 	trend, err := queryMaps(a.db, "SELECT report_date date,ROUND(SUM("+factor+"),6) revenue FROM "+source+" WHERE "+where+" GROUP BY report_date ORDER BY report_date", args...)
@@ -147,6 +154,13 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 	settledSQL := "SELECT COALESCE(SUM(" + settledRevenueSQL("rf") + "),0) value FROM revenue_facts rf WHERE " + settledWhere
 	if ready {
 		settledSQL = "SELECT COALESCE(SUM(settled_revenue),0) value FROM " + source + " WHERE " + where
+	}
+	if u.Role == "channel" {
+		sourceFilter := ""
+		if restOnly {
+			sourceFilter = " AND rf.source_file LIKE 'gam-rest:%'"
+		}
+		settledSQL = "SELECT COALESCE(SUM(" + settledRevenueForChannelSQL("rf", scope) + "),0) value FROM revenue_facts rf WHERE rf.report_date BETWEEN ? AND ?" + sourceFilter + " AND " + channelDomainScopeSQL("rf", scope)
 	}
 	settled, err := firstMap(a.db, settledSQL, args...)
 	if err != nil {

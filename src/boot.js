@@ -5,6 +5,7 @@ const form = document.getElementById('boot-login');
 const status = document.getElementById('boot-status');
 const button = form.querySelector('button[type="submit"]');
 const retryButton = document.getElementById('boot-retry');
+const registerButton = document.getElementById('boot-register');
 const sessionReauthKey = 'adx_session_reauth';
 let sessionReauth = false;
 try {
@@ -23,6 +24,7 @@ if (portal) {
   document.getElementById('boot-portal-label').textContent = '渠道工作台';
   document.getElementById('boot-title').textContent = '渠道登录';
   document.getElementById('boot-hint').textContent = '使用平台分配的渠道账号登录，查看本渠道数据。';
+  registerButton.hidden = false;
 }
 
 let mounted = false;
@@ -143,16 +145,35 @@ form.addEventListener('submit', async event => {
       })
     });
     const result = await response.json().catch(() => ({}));
-    if (!response.ok || result.ok === false || !result.user) throw new Error(result.error || 'login_failed');
+    if (!response.ok || result.ok === false || !result.user) {
+      const error = new Error(result.error || 'login_failed');
+      error.status = response.status;
+      throw error;
+    }
     await openApp(result.user);
   } catch (error) {
     status.classList.remove('loading');
-    status.textContent = error.message === 'invalid_credentials' ? '账号或密码错误' : '登录失败，请稍后重试。';
+    status.textContent = error.message === 'registration_pending_review' ? '注册资料和合同已提交，正在等待运营审核。审核通过后即可登录查看已分配域名的数据。'
+      : error.message === 'invalid_credentials' ? '账号或密码错误' : '登录失败，请稍后重试。';
   } finally {
     if (!mounted) {
       button.disabled = false;
       button.textContent = '登录';
     }
+  }
+});
+
+registerButton.addEventListener('click', async () => {
+  if (registerButton.disabled) return;
+  registerButton.disabled = true;
+  status.textContent = '正在打开注册表单…';
+  try {
+    const module = await import('./ChannelRegistration.jsx');
+    module.mountChannelRegistration(() => window.location.reload());
+  } catch (error) {
+    console.error('channel_registration_load_failed', error);
+    status.textContent = '注册表单加载失败，请刷新后重试。';
+    registerButton.disabled = false;
   }
 });
 

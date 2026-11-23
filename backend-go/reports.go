@@ -166,8 +166,7 @@ func (a *app) serveReports(w http.ResponseWriter, r *http.Request, export bool) 
 		}
 	}
 	if !isAdmin {
-		where = append(where, "rf.channel_id=?")
-		args = append(args, u.ChannelID.Int64)
+		where = append(where, channelDomainScopeSQL("rf", u.ChannelID.Int64))
 	} else if raw := q.Get("channelId"); raw != "" {
 		id, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || id < 1 {
@@ -285,8 +284,10 @@ func (a *app) serveReports(w http.ResponseWriter, r *http.Request, export bool) 
 		groups = append(groups, expression)
 	}
 	visible := "grossRevenue"
+	channelRevenueExpression := settledRevenueSQL("rf")
 	if !isAdmin {
 		visible = "channelRevenue"
+		channelRevenueExpression = settledRevenueForChannelSQL("rf", u.ChannelID.Int64)
 	}
 	rateSQL := map[string]string{
 		"requests": "requests", "matchedRequests": "matchedRequests", "impressions": "impressions", "clicks": "clicks",
@@ -321,7 +322,7 @@ func (a *app) serveReports(w http.ResponseWriter, r *http.Request, export bool) 
 	grouped := "WITH grouped AS (SELECT " + strings.Join(selects, ",") + ",MAX(rf.report_date) sortDate," +
 		"SUM(rf.requests) requests,SUM(rf.matched_requests) matchedRequests,SUM(rf.impressions) impressions,SUM(rf.clicks) clicks," +
 		"ROUND(SUM(rf.revenue),6) grossRevenue,ROUND(SUM(rf.revenue*(" + upstream + ")/100.0),6) upstreamRevenue," +
-		"ROUND(SUM(" + settledRevenueSQL("rf") + "),6) channelRevenue," +
+		"ROUND(SUM(" + channelRevenueExpression + "),6) channelRevenue," +
 		"ROUND(AVG(" + upstream + "),2) upstreamSharePercent,ROUND(AVG(" + channelRuleShareSQL("rf") + "),2) channelSharePercent " +
 		"FROM revenue_facts rf JOIN channels c ON c.id=rf.channel_id LEFT JOIN upstream_accounts ua ON ua.account_key=rf.account LEFT JOIN soap_accounts sa ON sa.id=ua.soap_account_id " +
 		"WHERE " + strings.Join(where, " AND ") + " GROUP BY " + strings.Join(groups, ",") + ") "

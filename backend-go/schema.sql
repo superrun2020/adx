@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS channel_domain_share_rules (
 );
 CREATE TABLE IF NOT EXISTS channel_domains (
   id INTEGER PRIMARY KEY AUTOINCREMENT, channel_id INTEGER NOT NULL, domain TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  gam_account_id INTEGER, adx_txt TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS channel_share_rules (
@@ -121,6 +122,40 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS channel_registrations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL UNIQUE,
+  company_name TEXT NOT NULL, contact_name TEXT NOT NULL, registration_number TEXT NOT NULL,
+  country TEXT NOT NULL, registered_address TEXT NOT NULL, organization_email TEXT NOT NULL,
+  phone TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'signed' CHECK(status IN ('signed','approved','rejected')),
+  channel_id INTEGER, reviewer_id INTEGER, reviewer_signature TEXT NOT NULL DEFAULT '',
+  reviewed_at TEXT, review_note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE SET NULL,
+  FOREIGN KEY(reviewer_id) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS channel_registration_contracts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, registration_id INTEGER NOT NULL,
+  version TEXT NOT NULL, contract_text TEXT NOT NULL, contract_hash TEXT NOT NULL,
+  signer_name TEXT NOT NULL, signer_title TEXT NOT NULL, signer_email TEXT NOT NULL,
+  signature_data TEXT NOT NULL, signature_hash TEXT NOT NULL, signed_at TEXT NOT NULL,
+  signer_ip TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '',
+  counter_signer TEXT NOT NULL DEFAULT '', countersigned_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(registration_id,version),
+  FOREIGN KEY(registration_id) REFERENCES channel_registrations(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS channel_registration_domains (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, registration_id INTEGER NOT NULL,
+  domain TEXT NOT NULL COLLATE NOCASE, adx_txt TEXT NOT NULL DEFAULT '',
+  channel_id INTEGER, gam_account_id INTEGER, status TEXT NOT NULL DEFAULT 'pending',
+  approved_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(registration_id,domain),
+  FOREIGN KEY(registration_id) REFERENCES channel_registrations(id) ON DELETE CASCADE,
+  FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_channel_registration_status ON channel_registrations(status,created_at);
+CREATE INDEX IF NOT EXISTS idx_channel_registration_domains_owner ON channel_registration_domains(channel_id,domain);
 CREATE TABLE IF NOT EXISTS regression_settings (
   id INTEGER PRIMARY KEY CHECK(id=1), feishu_enabled INTEGER NOT NULL DEFAULT 0,
   coverage_feishu_enabled INTEGER NOT NULL DEFAULT 1,
