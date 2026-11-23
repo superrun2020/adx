@@ -149,6 +149,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("POST /api/admin/channel-registrations/{id}/reject", a.auth("admin", a.rejectChannelRegistration))
 	mux.HandleFunc("GET /api/channel/domains", a.auth("channel", a.channelDomains))
 	mux.HandleFunc("GET /api/channel/contract", a.auth("channel", a.channelContract))
+	mux.HandleFunc("POST /api/channel/contract/sign", a.auth("channel", a.signChannelContract))
 	mux.HandleFunc("GET /api/channel/regression/events", a.auth("channel", a.channelRegressionEvents))
 	mux.HandleFunc("GET /api/channel/regression/coverage-events", a.auth("channel", a.channelCoverageEvents))
 	mux.HandleFunc("POST /api/admin/channels", a.auth("admin", a.createChannel))

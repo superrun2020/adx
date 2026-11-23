@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	_ "embed"
@@ -11,9 +12,9 @@ import (
 	"net/http"
 	"net/mail"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 //go:embed contracts/xpertmobi-template-v1.txt
@@ -112,25 +113,8 @@ func validRegistrationInput(input channelRegistrationInput) bool {
 	if err != nil || address.Address != email || input.Website != "" ||
 		len(input.Password) < 10 || len(input.Password) > 200 ||
 		len(input.ContactName) < 2 || len(input.ContactName) > 200 ||
-		len(input.CompanyName) < 2 || len(input.CompanyName) > 200 ||
-		len(input.RegistrationNumber) < 2 || len(input.RegistrationNumber) > 100 ||
-		len(input.Country) < 2 || len(input.Country) > 100 ||
-		len(input.RegisteredAddress) < 8 || len(input.RegisteredAddress) > 800 ||
-		len(input.Phone) < 5 || len(input.Phone) > 80 ||
-		len(input.SignatureName) < 2 || len(input.SignatureName) > 200 ||
-		len(input.SignatureTitle) < 2 || len(input.SignatureTitle) > 150 ||
-		!strings.EqualFold(strings.TrimSpace(input.SignatureName), strings.TrimSpace(input.ContactName)) ||
-		!input.Accepted || input.ContractVersion != channelAgreementVersion ||
-		len(input.Domains) == 0 || len(input.Domains) > 20 {
+		len(input.CompanyName) < 2 || len(input.CompanyName) > 200 {
 		return false
-	}
-	seen := map[string]bool{}
-	for _, row := range input.Domains {
-		domain, err := gamSiteDomain(row.Domain)
-		if err != nil || seen[domain] || strings.TrimSpace(row.AdxTxt) == "" || len(row.AdxTxt) > 64000 || !utf8.ValidString(row.AdxTxt) {
-			return false
-		}
-		seen[domain] = true
 	}
 	return true
 }
@@ -140,7 +124,7 @@ func (a *app) registerChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 421, "unknown_host")
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
 	var input channelRegistrationInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeError(w, 400, "invalid_registration")
@@ -149,12 +133,6 @@ func (a *app) registerChannel(w http.ResponseWriter, r *http.Request) {
 	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
 	input.ContactName = strings.TrimSpace(input.ContactName)
 	input.CompanyName = strings.TrimSpace(input.CompanyName)
-	input.RegistrationNumber = strings.TrimSpace(input.RegistrationNumber)
-	input.Country = strings.TrimSpace(input.Country)
-	input.RegisteredAddress = strings.TrimSpace(input.RegisteredAddress)
-	input.Phone = strings.TrimSpace(input.Phone)
-	input.SignatureName = strings.TrimSpace(input.SignatureName)
-	input.SignatureTitle = strings.TrimSpace(input.SignatureTitle)
 	if !validRegistrationInput(input) {
 		writeError(w, 400, "invalid_registration")
 		return
@@ -169,26 +147,26 @@ func (a *app) registerChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "registration_email_unavailable")
 		return
 	}
-	signature, signatureDigest, err := parseRegistrationSignature(input.SignatureData)
-	if err != nil {
-		writeError(w, 400, err.Error())
-		return
-	}
 	hash, err := passwordHash(input.Password)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
-	signedAt := time.Now().UTC().Format(time.RFC3339Nano)
-	snapshot := renderRegistrationContract(input)
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		serverError(w, err)
+		return
+	}
+	token := base64.RawURLEncoding.EncodeToString(raw)
+	ttl := sessionTTLHours()
 	tx, err := a.db.BeginTx(r.Context(), nil)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
 	defer tx.Rollback()
-	userResult, err := tx.ExecContext(r.Context(), "INSERT INTO users(email,name,password_hash,role,channel_id,status) VALUES(?,?,?,'channel',NULL,'pending')",
-		input.Email, input.ContactName, hash)
+	userResult, err := tx.ExecContext(r.Context(), "INSERT INTO users(email,name,password_hash,company_name,role,channel_id,status) VALUES(?,?,?,?,'channel',NULL,'pending')",
+		input.Email, input.ContactName, hash, input.CompanyName)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			writeError(w, 409, "registration_email_unavailable")
@@ -198,48 +176,117 @@ func (a *app) registerChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID, _ := userResult.LastInsertId()
-	regResult, err := tx.ExecContext(r.Context(), "INSERT INTO channel_registrations(user_id,company_name,contact_name,registration_number,country,registered_address,organization_email,phone,status) VALUES(?,?,?,?,?,?,?,?,'signed')",
-		userID, input.CompanyName, input.ContactName, input.RegistrationNumber, input.Country, input.RegisteredAddress, input.Email, input.Phone)
+	_, err = tx.ExecContext(r.Context(), "INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,datetime('now',?))",
+		sha256Hex(token), userID, "+"+strconv.Itoa(ttl)+" hours")
 	if err != nil {
 		serverError(w, err)
 		return
-	}
-	registrationID, _ := regResult.LastInsertId()
-	userAgent := strings.TrimSpace(r.UserAgent())
-	if len(userAgent) > 500 {
-		userAgent = userAgent[:500]
-	}
-	_, err = tx.ExecContext(r.Context(), "INSERT INTO channel_registration_contracts(registration_id,version,contract_text,contract_hash,signer_name,signer_title,signer_email,signature_data,signature_hash,signed_at,signer_ip,user_agent) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-		registrationID, channelAgreementVersion, snapshot, contractTextHash(snapshot), input.SignatureName, input.SignatureTitle,
-		input.Email, signature, signatureDigest, signedAt, ip, userAgent)
-	if err != nil {
-		serverError(w, err)
-		return
-	}
-	for _, item := range input.Domains {
-		domain, _ := gamSiteDomain(item.Domain)
-		if _, err = tx.ExecContext(r.Context(), "INSERT INTO channel_registration_domains(registration_id,domain,adx_txt) VALUES(?,?,?)",
-			registrationID, domain, strings.TrimSpace(item.AdxTxt)); err != nil {
-			serverError(w, err)
-			return
-		}
 	}
 	if err = tx.Commit(); err != nil {
 		serverError(w, err)
 		return
 	}
-	a.audit(input.Email, "channel.registration_signed", "channel_registration", registrationID,
-		marshalText(map[string]any{"company": input.CompanyName, "domains": len(input.Domains), "contractVersion": channelAgreementVersion, "contractHash": contractTextHash(snapshot), "signatureHash": signatureDigest}), ip)
-	writeJSON(w, 201, map[string]any{"ok": true, "status": "signed_pending_review", "email": input.Email})
+	setSessionCookie(w, r, token, ttl)
+	a.audit(input.Email, "channel.registration_created", "user", userID, marshalText(map[string]any{"company": input.CompanyName}), ip)
+	writeJSON(w, 201, map[string]any{"ok": true, "status": "pending", "user": user{ID: userID, Email: input.Email, Name: input.ContactName, CompanyName: input.CompanyName, Role: "channel", Status: "pending"}.public()})
+}
+
+func (a *app) signChannelContract(w http.ResponseWriter, r *http.Request) {
+	u := currentUser(r)
+	if u.Status != "pending" || u.ChannelID.Valid {
+		writeError(w, 409, "channel_contract_not_signable")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var input channelRegistrationInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, 400, "invalid_contract_details")
+		return
+	}
+	input.ContactName, input.CompanyName, input.Email = u.Name, u.CompanyName, u.Email
+	input.RegistrationNumber = strings.TrimSpace(input.RegistrationNumber)
+	input.Country = strings.TrimSpace(input.Country)
+	input.RegisteredAddress = strings.TrimSpace(input.RegisteredAddress)
+	input.Phone = strings.TrimSpace(input.Phone)
+	input.SignatureName = strings.TrimSpace(input.SignatureName)
+	input.SignatureTitle = strings.TrimSpace(input.SignatureTitle)
+	if len(input.CompanyName) < 2 || len(input.RegistrationNumber) < 2 || len(input.RegistrationNumber) > 100 ||
+		len(input.Country) < 2 || len(input.Country) > 100 ||
+		len(input.RegisteredAddress) < 8 || len(input.RegisteredAddress) > 800 ||
+		len(input.Phone) < 5 || len(input.Phone) > 80 ||
+		input.SignatureName != u.Name || len(input.SignatureTitle) < 2 || len(input.SignatureTitle) > 150 ||
+		!input.Accepted || input.ContractVersion != channelAgreementVersion || len(input.Domains) != 0 || input.Website != "" {
+		writeError(w, 400, "invalid_contract_details")
+		return
+	}
+	signature, signatureDigest, err := parseRegistrationSignature(input.SignatureData)
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	if a.exists("SELECT 1 FROM channel_registrations WHERE user_id=?", u.ID) {
+		writeError(w, 409, "channel_contract_already_signed")
+		return
+	}
+	signedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	snapshot := renderRegistrationContract(input)
+	userAgent := strings.TrimSpace(r.UserAgent())
+	if len(userAgent) > 500 {
+		userAgent = userAgent[:500]
+	}
+	tx, err := a.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(r.Context(),
+		"INSERT INTO channel_registrations(user_id,company_name,contact_name,registration_number,country,registered_address,organization_email,phone,status) VALUES(?,?,?,?,?,?,?,?,'signed')",
+		u.ID, input.CompanyName, input.ContactName, input.RegistrationNumber, input.Country, input.RegisteredAddress, input.Email, input.Phone)
+	if err != nil {
+		writeError(w, 409, "channel_contract_already_signed")
+		return
+	}
+	registrationID, _ := result.LastInsertId()
+	_, err = tx.ExecContext(r.Context(),
+		"INSERT INTO channel_registration_contracts(registration_id,version,contract_text,contract_hash,signer_name,signer_title,signer_email,signature_data,signature_hash,signed_at,signer_ip,user_agent) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+		registrationID, channelAgreementVersion, snapshot, contractTextHash(snapshot), input.SignatureName, input.SignatureTitle,
+		input.Email, signature, signatureDigest, signedAt, clientIP(r), userAgent)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	if err = tx.Commit(); err != nil {
+		serverError(w, err)
+		return
+	}
+	a.audit(u.Email, "channel.contract_signed", "channel_registration", registrationID,
+		marshalText(map[string]string{"contractVersion": channelAgreementVersion, "contractHash": contractTextHash(snapshot), "signatureHash": signatureDigest}), clientIP(r))
+	writeJSON(w, 201, map[string]any{"ok": true, "status": "signed_pending_review", "contractHash": contractTextHash(snapshot)})
 }
 
 func (a *app) channelRegistrations(w http.ResponseWriter, r *http.Request) {
-	items, err := queryMaps(a.db, "SELECT r.id,r.user_id userId,r.company_name companyName,r.contact_name contactName,r.registration_number registrationNumber,r.country,r.registered_address registeredAddress,r.organization_email email,r.phone,r.status,r.channel_id channelId,r.reviewer_signature reviewerSignature,r.reviewed_at reviewedAt,r.review_note reviewNote,r.created_at createdAt,c.name channelName,co.version contractVersion,co.signer_name signerName,co.signer_title signerTitle,co.signed_at signedAt,co.contract_hash contractHash FROM channel_registrations r JOIN users u ON u.id=r.user_id LEFT JOIN channels c ON c.id=r.channel_id LEFT JOIN channel_registration_contracts co ON co.registration_id=r.id WHERE r.status IN ('signed','approved','rejected') ORDER BY r.id DESC LIMIT 300")
+	items, err := queryMaps(a.db, "SELECT COALESCE(r.id,-u.id) id,u.id userId,COALESCE(r.company_name,u.company_name) companyName,"+
+		"COALESCE(r.contact_name,u.name) contactName,COALESCE(r.registration_number,'') registrationNumber,COALESCE(r.country,'') country,"+
+		"COALESCE(r.registered_address,'') registeredAddress,u.email,COALESCE(r.phone,'') phone,COALESCE(r.status,'registered') status,"+
+		"r.channel_id channelId,COALESCE(r.review_note,'') reviewNote,COALESCE(r.created_at,u.created_at) createdAt,"+
+		"COALESCE(c.name,'') channelName,co.version contractVersion,co.signer_name signerName,co.signer_title signerTitle,"+
+		"co.signed_at signedAt,co.contract_hash contractHash,"+
+		"(SELECT COUNT(*) FROM channel_domains cd WHERE cd.channel_id=r.channel_id) assignedDomainCount,"+
+		"(SELECT COUNT(*) FROM soap_accounts s WHERE s.rest_channel_id=r.channel_id) gamAccountCount,"+
+		"COALESCE((SELECT group_concat(cd.domain,', ') FROM channel_domains cd WHERE cd.channel_id=r.channel_id),'') assignedDomains "+
+		"FROM users u LEFT JOIN channel_registrations r ON r.user_id=u.id LEFT JOIN channels c ON c.id=r.channel_id "+
+		"LEFT JOIN channel_registration_contracts co ON co.registration_id=r.id WHERE u.role='channel' AND (r.id IS NOT NULL OR u.status='pending') "+
+		"ORDER BY u.id DESC LIMIT 300")
 	if err != nil {
 		writeError(w, 500, "channel_registrations_unavailable")
 		return
 	}
 	for _, item := range items {
+		if intMap(item, "id") < 1 {
+			item["domains"] = []any{}
+			continue
+		}
 		domains, queryErr := queryMaps(a.db, "SELECT d.id,d.domain,d.adx_txt adxTxt,d.status,d.gam_account_id gamAccountId,COALESCE(s.name,'') accountName,COALESCE(lm.channel_id,cd.channel_id) currentChannelId,COALESCE(c.name,'') currentChannelName FROM channel_registration_domains d LEFT JOIN soap_accounts s ON s.id=d.gam_account_id LEFT JOIN link_metadata lm ON lower(lm.domain)=lower(d.domain) LEFT JOIN channel_domains cd ON lower(cd.domain)=lower(d.domain) LEFT JOIN channels c ON c.id=COALESCE(lm.channel_id,cd.channel_id) WHERE d.registration_id=? ORDER BY d.domain", item["id"])
 		if queryErr != nil {
 			writeError(w, 500, "channel_registration_domains_unavailable")
@@ -273,7 +320,7 @@ type approvedRegistrationDomain struct {
 
 func parseApprovedRegistrationDomains(input map[string]any) ([]approvedRegistrationDomain, error) {
 	values := array(input["domains"])
-	if len(values) == 0 || len(values) > 20 {
+	if len(values) > 20 {
 		return nil, errors.New("invalid_registration_domains")
 	}
 	out, seen := make([]approvedRegistrationDomain, 0, len(values)), map[string]bool{}

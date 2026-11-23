@@ -23,7 +23,7 @@ if (portal) {
   document.getElementById('boot-brand-hint').textContent = '渠道工作台';
   document.getElementById('boot-portal-label').textContent = '渠道工作台';
   document.getElementById('boot-title').textContent = '渠道登录';
-  document.getElementById('boot-hint').textContent = '使用平台分配的渠道账号登录，查看本渠道数据。';
+  document.getElementById('boot-hint').textContent = '登录后可在合同管理完善资料并签署；数据由运营分配后开放。';
   registerButton.hidden = false;
 }
 
@@ -77,6 +77,20 @@ async function openApp(user) {
   if (mounted || opening) return;
   opening = true;
   button.disabled = true;
+  if (user.role === 'channel' && user.status === 'pending') {
+    try {
+      const app = await prepareApp();
+      await app.mountApp(user, 'channel-contract', null);
+      mounted = true;
+    } catch (error) {
+      console.error('contract_workspace_load_failed', error);
+      status.textContent = '合同管理加载失败，请刷新重试。';
+      retryButton.hidden = false;
+    } finally {
+      opening = false;
+    }
+    return;
+  }
   if (user.role === 'admin' && !user.isSuperAdmin &&
       Array.isArray(user.sidebarPermissions) && !user.sidebarPermissions.includes('dashboard')) {
     try {
@@ -153,8 +167,7 @@ form.addEventListener('submit', async event => {
     await openApp(result.user);
   } catch (error) {
     status.classList.remove('loading');
-    status.textContent = error.message === 'registration_pending_review' ? '注册资料和合同已提交，正在等待运营审核。审核通过后即可登录查看已分配域名的数据。'
-      : error.message === 'invalid_credentials' ? '账号或密码错误' : '登录失败，请稍后重试。';
+    status.textContent = error.message === 'invalid_credentials' ? '账号或密码错误' : '登录失败，请稍后重试。';
   } finally {
     if (!mounted) {
       button.disabled = false;
@@ -169,7 +182,7 @@ registerButton.addEventListener('click', async () => {
   status.textContent = '正在打开注册表单…';
   try {
     const module = await import('./ChannelRegistration.jsx');
-    module.mountChannelRegistration(() => window.location.reload());
+    module.mountChannelRegistration(() => window.location.reload(), user => openApp(user));
   } catch (error) {
     console.error('channel_registration_load_failed', error);
     status.textContent = '注册表单加载失败，请刷新后重试。';

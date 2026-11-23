@@ -22,6 +22,16 @@ test('channel accounts cannot open administrator routes directly', () => {
   assert.equal(viewForPath('/reports', 'dashboard', 'channel'), 'reports');
 });
 
+test('newly registered channels can only open contract management', () => {
+  const pending = { role:'channel', status:'pending' };
+  assert.equal(canVisit(pending, 'channel-contract'), true);
+  assert.equal(canVisit(pending, 'dashboard'), false);
+  assert.equal(canVisit(pending, 'reports'), false);
+  assert.equal(canVisit(pending, 'channel-links'), false);
+  assert.equal(viewForPath('/reports', 'dashboard', pending), 'channel-contract');
+  assert.equal(viewForPath('/my-contract', 'dashboard', pending), 'channel-contract');
+});
+
 test('restricted administrators see only granted sidebar routes', () => {
   const user = { role: 'admin', isSuperAdmin: false, sidebarPermissions: ['reports', 'links'] };
   assert.equal(canVisit(user, 'reports'), true);

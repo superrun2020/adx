@@ -16,7 +16,7 @@ import { adminPermissionOptions } from './navigation.js';
 import { reportPresetRange } from './reportDatePresets.js';
 import { channelGAMDomains } from './channel-domain-catalog.mjs';
 import { sessionFetch } from './sessionFetch.js';
-import { SignaturePad } from './ChannelRegistration.jsx';
+import SignaturePad from './SignaturePad.jsx';
 import './channel-registration.css';
 
 const { Title, Text } = Typography;
@@ -137,7 +137,7 @@ function ChannelDomainModal({ channel, domains, issues, busy, onClose }) {
 
 function ChannelRegistrationReview({ registration, accounts, user, onClose, onDone }) {
   const [detail,setDetail]=useState(null),[loading,setLoading]=useState(false),[saving,setSaving]=useState(false);
-  const [mapping,setMapping]=useState({}),[channelName,setChannelName]=useState(''),[sharePercent,setSharePercent]=useState(80);
+  const [mapping,setMapping]=useState({}),[channelName,setChannelName]=useState(''),[sharePercent,setSharePercent]=useState(null);
   const [effectiveFrom,setEffectiveFrom]=useState(dayjs()),[reviewNote,setReviewNote]=useState('');
   const [reviewerTitle,setReviewerTitle]=useState('平台主管'),[signatureData,setSignatureData]=useState('');
   useEffect(()=>{
@@ -145,7 +145,7 @@ function ChannelRegistrationReview({ registration, accounts, user, onClose, onDo
     setDetail(null);setSignatureData('');setReviewNote('');
     if(!registration)return undefined;
     setChannelName(registration.companyName||registration.contactName||'');
-    setSharePercent(80);setEffectiveFrom(dayjs());
+    setSharePercent(null);setEffectiveFrom(dayjs());
     setLoading(true);
     api('/api/admin/channel-registrations/'+registration.id).then(result=>{
       if(!active)return;
@@ -157,7 +157,8 @@ function ChannelRegistrationReview({ registration, accounts, user, onClose, onDo
   },[registration?.id]);
   const approve=async()=>{
     const domains=(detail?.domains||[]).filter(row=>mapping[row.domain]).map(row=>({domain:row.domain,gamAccountId:Number(mapping[row.domain])}));
-    if(!domains.length||domains.length!==(detail?.domains||[]).length)return message.warning('请为每个申请域名匹配一个 GAM 账号');
+    if(domains.length!==(detail?.domains||[]).length)return message.warning('请为每个已有申请域名匹配一个 GAM 账号');
+    if(sharePercent===null||sharePercent===undefined)return message.warning('请明确填写渠道结算比例');
     if(!signatureData||!reviewerTitle.trim())return message.warning('请填写平台签署职务并完成平台手写签名');
     setSaving(true);
     try{
@@ -165,7 +166,7 @@ function ChannelRegistrationReview({ registration, accounts, user, onClose, onDo
         channelName,sharePercent,effectiveFrom:effectiveFrom.format('YYYY-MM-DD'),domains,reviewNote,
         reviewerSignatureName:user?.name||'',reviewerSignatureTitle:reviewerTitle,reviewerSignatureData:signatureData,reviewerAccepted:true
       })});
-      message.success('合同已由平台签署，渠道账号与所选域名已开通');
+      message.success('平台签署完成，渠道账号已开通；网站可随后在运营后台关联');
       onDone();
     }catch(error){message.error('审核失败：'+error.message)}
     finally{setSaving(false)}
@@ -175,7 +176,7 @@ function ChannelRegistrationReview({ registration, accounts, user, onClose, onDo
   return <Modal open={Boolean(registration)} width={960} title={registration?'注册申请 · '+registration.companyName:''} onCancel={onClose}
     footer={registration?.status==='signed'?<Space><Button onClick={onClose}>取消</Button><Button danger onClick={reject}>拒绝</Button><Button type="primary" loading={saving} onClick={approve}>复核并双方签署</Button></Space>:<Button onClick={onClose}>关闭</Button>}>
     <Spin spinning={loading||saving}>{detail&&<Space direction="vertical" style={{width:'100%'}} size={14}>
-      <Alert type="info" showIcon message="注册人已提交并签署合同；签署内容与版本已冻结。完成账号、域名与 TXT 核对后，由运营在此完成平台签署。" />
+      <Alert type="info" showIcon message="渠道方已签署合同；平台复核主体资料、明确分成并签署后开通账号。网站和 GAM 账号可在运营后台另行关联。" />
       <Descriptions size="small" bordered column={{xs:1,sm:2}} items={[
         {key:'contact',label:'联系人',children:detail.contactName},{key:'email',label:'邮箱',children:detail.email},
         {key:'company',label:'公司',children:detail.companyName},{key:'number',label:'注册编号',children:detail.registrationNumber},
@@ -186,6 +187,7 @@ function ChannelRegistrationReview({ registration, accounts, user, onClose, onDo
         <Text strong>提交的 adx.txt</Text><pre className="channel-txt-preview">{row.adxTxt||'未提交'}</pre>
         <label className="registration-admin-field">对应 GAM 账号<Select allowClear showSearch optionFilterProp="label" value={mapping[row.domain]} onChange={value=>setMapping(current=>({...current,[row.domain]:value}))} options={accounts.filter(account=>account.status==='active'&&Number(account.enabled)).map(account=>({value:Number(account.id),label:account.name+' · '+account.networkCode}))}/></label>
       </Card>)}
+      {!(detail.domains||[]).length&&<Alert type="warning" showIcon message="渠道方未提交网站；审核通过后请在运营后台为渠道关联真实 GAM 账号和域名。"/>}
       <Row gutter={12}><Col xs={24} md={8}><label className="registration-admin-field">渠道名称<Input value={channelName} onChange={event=>setChannelName(event.target.value)}/></label></Col>
         <Col xs={24} md={8}><label className="registration-admin-field">渠道分成比例（%）<InputNumber min={0} max={100} precision={2} value={sharePercent} onChange={value=>setSharePercent(value)} style={{width:'100%'}}/></label></Col>
         <Col xs={24} md={8}><label className="registration-admin-field">数据归属生效日<DatePicker value={effectiveFrom} onChange={setEffectiveFrom} style={{width:'100%'}}/></label></Col></Row>
@@ -201,7 +203,7 @@ function ChannelRegistrationReview({ registration, accounts, user, onClose, onDo
         <label className="registration-admin-field">平台签署人<Input value={user?.name||''} disabled/></label>
         <label className="registration-admin-field">平台签署职务<Input value={reviewerTitle} onChange={event=>setReviewerTitle(event.target.value)}/></label>
         <SignaturePad title="平台主管手写签名" onChange={setSignatureData}/>
-        <Alert style={{marginTop:12}} type="warning" showIcon message="只有提交此处的平台签名后，系统才会激活渠道登录并按上述 GAM 账号及域名配置数据权限。"/>
+        <Alert style={{marginTop:12}} type="warning" showIcon message="平台签署后渠道账户才能查看业务数据；若尚未关联网站，报表仍为空。"/>
       </Card>}
     </Space>}</Spin>
   </Modal>;
@@ -288,13 +290,16 @@ function Channels({ user }) {
   return <Space direction="vertical" size={16} className="page-stack">
     <div className="page-heading"><div><Title level={2}>渠道管理</Title><Text type="secondary">创建渠道时选择 GAM 账号，自动关联该账号的域名、广告单元、报表和飞书汇报</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={()=>show(null)}>新建渠道</Button></div>
     <Card><Table rowKey="id" dataSource={items} numericKeys={['sharePercent']} columns={columns} scroll={{x:1200}}/></Card>
-    <Card title={<Space><FileProtectOutlined/>渠道注册与合同审核<Tag color="gold">待复核 {registrations.filter(row=>row.status==='signed').length}</Tag></Space>} extra={<Button icon={<ReloadOutlined/>} loading={registrationLoading} onClick={()=>void loadRegistrations()}>刷新申请</Button>}>
+    <Card title={<Space><FileProtectOutlined/>渠道注册与合同审核<Tag color="blue">待签约 {registrations.filter(row=>row.status==='registered').length}</Tag><Tag color="gold">待复核 {registrations.filter(row=>row.status==='signed').length}</Tag></Space>} extra={<Button icon={<ReloadOutlined/>} loading={registrationLoading} onClick={()=>void loadRegistrations()}>刷新申请</Button>}>
+      <Alert type="info" showIcon style={{marginBottom:16}} message="注册资料和合同状态与渠道后台同步；平台复签后，到本页编辑渠道关联 GAM 账号，或到链接管理按网站分配归属。"/>
       <Table rowKey="id" dataSource={registrations} loading={registrationLoading} pagination={{pageSize:8,showSizeChanger:false}} scroll={{x:1050}} columns={[
         {title:'申请时间',dataIndex:'createdAt',width:180},{title:'公司主体',dataIndex:'companyName',width:190},
         {title:'联系人',dataIndex:'contactName',width:130},{title:'邮箱',dataIndex:'email',width:220},
-        {title:'申请域名',dataIndex:'domains',width:260,render:rows=><Space wrap>{(rows||[]).map(row=><Tag key={row.domain}>{row.domain}</Tag>)}</Space>},
-        {title:'状态',dataIndex:'status',width:110,render:value=><Tag color={value==='approved'?'green':value==='rejected'?'red':'gold'}>{value==='approved'?'已开通':value==='rejected'?'已拒绝':'待复核'}</Tag>},
-        {title:'操作',width:130,fixed:'right',render:(_,row)=><Button type="link" onClick={()=>setReviewingRegistration(row)}>{row.status==='signed'?'复核并签署':'查看合同'}</Button>}
+        {title:'关联渠道',dataIndex:'channelName',width:150,render:value=>value||<Text type="secondary">待运营开通</Text>},
+        {title:'GAM 账号',dataIndex:'gamAccountCount',width:105,render:value=>Number(value||0)},
+        {title:'已关联网站',dataIndex:'assignedDomains',width:260,render:(value,row)=>value||<Text type="secondary">{row.status==='approved'?'待运营分配':'签约后分配'}</Text>},
+        {title:'状态',dataIndex:'status',width:115,render:value=><Tag color={value==='approved'?'green':value==='rejected'?'red':value==='registered'?'blue':'gold'}>{value==='approved'?'已开通':value==='rejected'?'已拒绝':value==='registered'?'待渠道签约':'待平台复核'}</Tag>},
+        {title:'操作',width:130,fixed:'right',render:(_,row)=>row.status==='registered'?<Text type="secondary">等待签署</Text>:<Button type="link" onClick={()=>setReviewingRegistration(row)}>{row.status==='signed'?'复核并签署':'查看合同'}</Button>}
       ]}/>
     </Card>
     <ChannelRegistrationReview registration={reviewingRegistration} accounts={gamAccounts} user={user} onClose={()=>setReviewingRegistration(null)} onDone={()=>{setReviewingRegistration(null);void loadRegistrations();void load();void loadDomains()}}/>

@@ -34,6 +34,9 @@ func validSidebarPermissions(value any) ([]string, error) {
 
 func (u user) sidebarViews() []string {
 	if u.Role != "admin" {
+		if u.Status == "pending" {
+			return []string{"channel-contract"}
+		}
 		return []string{"dashboard", "reports", "api"}
 	}
 	if u.IsSuperAdmin || !u.SidebarPermissions.Valid {
@@ -51,6 +54,9 @@ func (u user) canView(view string) bool {
 		return u.Role == "admin" && u.IsSuperAdmin
 	}
 	if u.Role != "admin" {
+		if u.Status == "pending" {
+			return view == "channel-contract"
+		}
 		return view == "dashboard" || view == "reports" || view == "api"
 	}
 	for _, allowed := range u.sidebarViews() {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -15,12 +16,7 @@ func TestChannelRegistrationRemainsPendingUntilReview(t *testing.T) {
 	a := testApp(t)
 	input := map[string]any{
 		"contactName": "Jordan Example", "companyName": "Example Media Ltd", "email": "jordan@example.test",
-		"password": "strong-password-123", "registrationNumber": "REG-12345", "country": "Hong Kong",
-		"registeredAddress": "1 Example Street, Central", "phone": "+852 5555 1234",
-		"domains":       []any{map[string]any{"domain": "example.com", "adxTxt": "google.com, pub-123, DIRECT, f08c47fec0942fa0"}},
-		"signatureName": "Jordan Example", "signatureTitle": "Director",
-		"signatureData": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII=",
-		"accepted":      true, "contractVersion": channelAgreementVersion,
+		"password": "strong-password-123",
 	}
 	body, err := json.Marshal(input)
 	if err != nil {
@@ -42,6 +38,18 @@ func TestChannelRegistrationRemainsPendingUntilReview(t *testing.T) {
 	if status != "pending" || channelID.Valid {
 		t.Fatalf("new applicant status=%q channelID=%v", status, channelID)
 	}
+	if a.exists("SELECT 1 FROM channel_registrations WHERE organization_email='jordan@example.test'") {
+		t.Fatal("registration must not sign a contract automatically")
+	}
+	adminList := func(want string) {
+		t.Helper()
+		response := httptest.NewRecorder()
+		a.channelRegistrations(response, httptest.NewRequest(http.MethodGet, "/api/admin/channel-registrations", nil))
+		if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte("\"status\":\""+want+"\"")) {
+			t.Fatalf("admin list missing %s: status=%d body=%s", want, response.Code, response.Body.String())
+		}
+	}
+	adminList("registered")
 
 	loginBody, _ := json.Marshal(map[string]string{"email": "jordan@example.test", "password": "strong-password-123"})
 	login := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(loginBody))
@@ -49,8 +57,68 @@ func TestChannelRegistrationRemainsPendingUntilReview(t *testing.T) {
 	login.RemoteAddr = "192.0.2.10:1234"
 	loginResponse := httptest.NewRecorder()
 	a.routes().ServeHTTP(loginResponse, login)
-	if loginResponse.Code != http.StatusForbidden || !bytes.Contains(loginResponse.Body.Bytes(), []byte("registration_pending_review")) {
+	if loginResponse.Code != http.StatusOK {
 		t.Fatalf("pending login status=%d body=%s", loginResponse.Code, loginResponse.Body.String())
+	}
+	cookies := loginResponse.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("pending login did not receive a session")
+	}
+	call := func(method, path string, payload any) *httptest.ResponseRecorder {
+		t.Helper()
+		var body []byte
+		if payload != nil {
+			body, _ = json.Marshal(payload)
+		}
+		request := httptest.NewRequest(method, path, bytes.NewReader(body))
+		request.Host = "adxpub.geekforest.ai"
+		request.AddCookie(cookies[0])
+		response := httptest.NewRecorder()
+		a.routes().ServeHTTP(response, request)
+		return response
+	}
+	if dashboard := call(http.MethodGet, "/api/dashboard?start=2026-11-23&end=2026-11-23", nil); dashboard.Code != http.StatusForbidden {
+		t.Fatalf("pending account read dashboard: %d %s", dashboard.Code, dashboard.Body.String())
+	}
+	contract := call(http.MethodGet, "/api/channel/contract", nil)
+	if contract.Code != http.StatusOK || !bytes.Contains(contract.Body.Bytes(), []byte("\"status\":\"registered\"")) {
+		t.Fatalf("unsigned contract status=%d body=%s", contract.Code, contract.Body.String())
+	}
+	signature := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII="
+	sign := call(http.MethodPost, "/api/channel/contract/sign", map[string]any{
+		"registrationNumber": "REG-12345", "country": "Hong Kong", "registeredAddress": "1 Example Street, Central",
+		"phone": "+852 5555 1234", "signatureName": "Jordan Example", "signatureTitle": "Director",
+		"signatureData": signature, "accepted": true, "contractVersion": channelAgreementVersion,
+	})
+	if sign.Code != http.StatusCreated {
+		t.Fatalf("sign status=%d body=%s", sign.Code, sign.Body.String())
+	}
+	contract = call(http.MethodGet, "/api/channel/contract", nil)
+	if contract.Code != http.StatusOK || !bytes.Contains(contract.Body.Bytes(), []byte("\"status\":\"signed\"")) {
+		t.Fatalf("signed contract status=%d body=%s", contract.Code, contract.Body.String())
+	}
+	adminList("signed")
+	var registrationID int64
+	if err := a.db.QueryRow("SELECT id FROM channel_registrations WHERE organization_email='jordan@example.test'").Scan(&registrationID); err != nil {
+		t.Fatal(err)
+	}
+	approval, _ := json.Marshal(map[string]any{
+		"channelName": "Example Media", "sharePercent": 75, "effectiveFrom": "2026-11-23", "domains": []any{},
+		"reviewerSignatureName": "平台管理员", "reviewerSignatureTitle": "运营负责人",
+		"reviewerSignatureData": signature, "reviewerAccepted": true,
+	})
+	adminRequest := httptest.NewRequest(http.MethodPost, "/api/admin/channel-registrations/1/approve", bytes.NewReader(approval))
+	adminRequest.SetPathValue("id", strconv.FormatInt(registrationID, 10))
+	adminRequest = adminRequest.WithContext(context.WithValue(adminRequest.Context(), userKey{}, user{ID: 1, Email: "admin@example.test", Name: "平台管理员", Role: "admin"}))
+	adminResponse := httptest.NewRecorder()
+	a.approveChannelRegistration(adminResponse, adminRequest)
+	if adminResponse.Code != http.StatusOK {
+		t.Fatalf("no-domain approval status=%d body=%s", adminResponse.Code, adminResponse.Body.String())
+	}
+	adminList("approved")
+	var assigned int
+	if err := a.db.QueryRow("SELECT COUNT(*) FROM channel_domains WHERE channel_id=(SELECT channel_id FROM users WHERE email='jordan@example.test')").Scan(&assigned); err != nil || assigned != 0 {
+		t.Fatalf("domains must be assigned later by operations: count=%d err=%v", assigned, err)
 	}
 }
 
@@ -172,5 +240,34 @@ func TestChannelReportUsesAssignedDomainOwnerWithLegacyFallback(t *testing.T) {
 	newOwnerRows := requestRows(2)
 	if len(newOwnerRows) != 1 || newOwnerRows[0].(map[string]any)["url"] != "child.owner.example.com" {
 		t.Fatalf("new owner rows=%v", newOwnerRows)
+	}
+}
+
+func TestChannelDomainsIncludeOperationsLinkAssignments(t *testing.T) {
+	a := testApp(t)
+	for _, statement := range []string{
+		"INSERT INTO channels(id,name,email,share_percent) VALUES(1,'Old channel','old@example.test',75)",
+		"INSERT INTO channels(id,name,email,share_percent) VALUES(2,'New channel','new@example.test',75)",
+		"INSERT INTO soap_accounts(id,name,network_code,credential_ciphertext,status,enabled,created_by) VALUES(1,'GAM','123456','cipher','active',1,'test')",
+		"INSERT INTO link_metadata(network_code,domain,is_manual,monitor_domains_json,channel_id,notes,updated_by) VALUES('123456','news.example.com',0,'[]',2,'','test')",
+	} {
+		if _, err := a.db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/channel/domains", nil)
+	request = request.WithContext(context.WithValue(request.Context(), userKey{}, user{Role: "channel", ChannelID: sql.NullInt64{Int64: 2, Valid: true}}))
+	response := httptest.NewRecorder()
+	a.channelDomains(response, request)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte("news.example.com")) {
+		t.Fatalf("assigned site missing: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if _, err := a.db.Exec("UPDATE link_metadata SET channel_id=1 WHERE domain='news.example.com'"); err != nil {
+		t.Fatal(err)
+	}
+	response = httptest.NewRecorder()
+	a.channelDomains(response, request)
+	if response.Code != http.StatusOK || bytes.Contains(response.Body.Bytes(), []byte("news.example.com")) {
+		t.Fatalf("transferred site still visible: status=%d body=%s", response.Code, response.Body.String())
 	}
 }

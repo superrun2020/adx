@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +24,7 @@ type user struct {
 	ID                 int64
 	Email              string
 	Name               string
+	CompanyName        string
 	Role               string
 	ChannelID          sql.NullInt64
 	Status             string
@@ -36,7 +38,7 @@ func (u user) public() map[string]any {
 	if u.ChannelID.Valid {
 		channel = u.ChannelID.Int64
 	}
-	return map[string]any{"id": u.ID, "email": u.Email, "name": u.Name,
+	return map[string]any{"id": u.ID, "email": u.Email, "name": u.Name, "companyName": u.CompanyName,
 		"role": u.Role, "channelId": channel, "status": u.Status, "isSuperAdmin": u.IsSuperAdmin,
 		"sidebarPermissions": u.sidebarViews()}
 }
@@ -158,14 +160,18 @@ func (a *app) auth(role string, next http.HandlerFunc) http.HandlerFunc {
 		var u user
 		var super int64
 		err := a.db.QueryRowContext(r.Context(),
-			"SELECT u.id,u.email,u.name,u.role,u.channel_id,u.status,u.is_super_admin,u.sidebar_permissions FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>datetime('now')",
-			sha256Hex(token)).Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.ChannelID, &u.Status, &super, &u.SidebarPermissions)
+			"SELECT u.id,u.email,u.name,u.company_name,u.role,u.channel_id,u.status,u.is_super_admin,u.sidebar_permissions FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>datetime('now')",
+			sha256Hex(token)).Scan(&u.ID, &u.Email, &u.Name, &u.CompanyName, &u.Role, &u.ChannelID, &u.Status, &super, &u.SidebarPermissions)
 		u.IsSuperAdmin = super == 1
-		if err != nil || (u.Status != "active" && !(u.Status == "pending" && u.Role == "channel" && !u.ChannelID.Valid)) {
+		if err != nil || (u.Status != "active" && !(u.Status == "pending" && u.Role == "channel")) ||
+			(u.Status == "active" && u.Role == "channel" && !u.ChannelID.Valid) {
 			writeError(w, 401, "unauthorized")
 			return
 		}
-		if u.Status == "pending" && r.URL.Path != "/api/auth/me" && r.URL.Path != "/api/auth/logout" {
+		pendingRoute := r.URL.Path == "/api/auth/me" || r.URL.Path == "/api/auth/logout" ||
+			(r.URL.Path == "/api/channel/contract" && r.Method == http.MethodGet) ||
+			(r.URL.Path == "/api/channel/contract/sign" && r.Method == http.MethodPost)
+		if u.Status == "pending" && !pendingRoute {
 			writeError(w, 403, "registration_pending_review")
 			return
 		}
@@ -200,6 +206,30 @@ func (a *app) audit(actor, action, targetType string, targetID any, detail, ip s
 	}
 }
 
+func sessionTTLHours() int {
+	ttl, err := strconv.Atoi(envDefault("SESSION_TTL_HOURS", "12"))
+	if err != nil || ttl < 1 {
+		return 12
+	}
+	if ttl > 168 {
+		return 168
+	}
+	return ttl
+}
+
+func setSessionCookie(w http.ResponseWriter, r *http.Request, token string, ttl int) {
+	secure := r.TLS != nil
+	remote, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if (remote == "127.0.0.1" || remote == "::1") && r.Header.Get("X-Forwarded-Proto") == "https" {
+		secure = true
+	}
+	if os.Getenv("NODE_ENV") == "production" || os.Getenv("ADX_ENV") == "production" {
+		secure = true
+	}
+	http.SetCookie(w, &http.Cookie{Name: "adx_session", Value: token, Path: "/", HttpOnly: true,
+		SameSite: http.SameSiteLaxMode, Secure: secure, MaxAge: ttl * 3600})
+}
+
 func (a *app) login(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var input map[string]string
@@ -217,15 +247,13 @@ func (a *app) login(w http.ResponseWriter, r *http.Request) {
 	var u user
 	var super int64
 	var encoded string
-	err := a.db.QueryRowContext(r.Context(), "SELECT id,email,name,role,channel_id,status,password_hash,is_super_admin,sidebar_permissions FROM users WHERE email=?", email).
-		Scan(&u.ID, &u.Email, &u.Name, &u.Role, &u.ChannelID, &u.Status, &encoded, &super, &u.SidebarPermissions)
+	err := a.db.QueryRowContext(r.Context(), "SELECT id,email,name,company_name,role,channel_id,status,password_hash,is_super_admin,sidebar_permissions FROM users WHERE email=?", email).
+		Scan(&u.ID, &u.Email, &u.Name, &u.CompanyName, &u.Role, &u.ChannelID, &u.Status, &encoded, &super, &u.SidebarPermissions)
 	u.IsSuperAdmin = super == 1
-	if err != nil || (u.Status != "active" && u.Status != "pending") || (a.portalRole(r) != "" && a.portalRole(r) != u.Role) || !passwordMatches(input["password"], encoded) {
+	if err != nil || (u.Status != "active" && u.Status != "pending") ||
+		(u.Status == "active" && u.Role == "channel" && !u.ChannelID.Valid) ||
+		(a.portalRole(r) != "" && a.portalRole(r) != u.Role) || !passwordMatches(input["password"], encoded) {
 		writeError(w, 401, "invalid_credentials")
-		return
-	}
-	if u.Status == "pending" {
-		writeError(w, 403, "registration_pending_review")
 		return
 	}
 	raw := make([]byte, 32)
@@ -234,16 +262,7 @@ func (a *app) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := base64.RawURLEncoding.EncodeToString(raw)
-	ttl, err := strconv.Atoi(envDefault("SESSION_TTL_HOURS", "12"))
-	if err != nil {
-		ttl = 12
-	}
-	if ttl < 1 {
-		ttl = 1
-	}
-	if ttl > 168 {
-		ttl = 168
-	}
+	ttl := sessionTTLHours()
 	if _, err := a.db.Exec("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,datetime('now',?))",
 		sha256Hex(token), u.ID, "+"+strconv.Itoa(ttl)+" hours"); err != nil {
 		writeError(w, 500, "internal_error")
@@ -251,13 +270,7 @@ func (a *app) login(w http.ResponseWriter, r *http.Request) {
 	}
 	a.audit(email, "auth.login", "user", u.ID, "", clientIP(r))
 	a.attempts.clear(key)
-	secure := r.TLS != nil
-	remote, _, _ := net.SplitHostPort(r.RemoteAddr)
-	if (remote == "127.0.0.1" || remote == "::1") && r.Header.Get("X-Forwarded-Proto") == "https" {
-		secure = true
-	}
-	http.SetCookie(w, &http.Cookie{Name: "adx_session", Value: token, Path: "/", HttpOnly: true,
-		SameSite: http.SameSiteLaxMode, Secure: secure, MaxAge: ttl * 3600})
+	setSessionCookie(w, r, token, ttl)
 	writeJSON(w, 200, map[string]any{"ok": true, "user": u.public()})
 }
 

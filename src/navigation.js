@@ -30,6 +30,7 @@ export const adminPermissionOptions = Object.freeze([
 
 export function canVisit(userOrRole, view) {
   const user = typeof userOrRole === 'string' ? { role: userOrRole } : userOrRole || {};
+  if (user.role === 'channel' && user.status === 'pending') return view === 'channel-contract';
   if (user.role !== 'admin') return !adminOnlyViews.has(view) && (!view.startsWith('channel-') || ['channel-links','channel-contract','channel-regression'].includes(view));
   if (user.isSuperAdmin || userOrRole === 'admin') return true;
   if (view === 'admins') return false;

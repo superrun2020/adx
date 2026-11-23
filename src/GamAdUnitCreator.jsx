@@ -140,7 +140,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
   const creationByResource = useMemo(() => indexCreationRecords(domainMap), [domainMap]);
   const withDomain = row => ({ ...row, ...resolveAdUnitDomain(row,
     creationByResource.get(String(row.networkCode) + ':' + row.name)) });
-  const displayedUnits = useMemo(() => filterGamUnits(remoteUnits.map(withDomain), lastQuery || {}),
+  const displayedUnits = useMemo(() => filterGamUnits(remoteUnits.filter(row => Boolean(row.parentAdUnit)).map(withDomain), lastQuery || {}),
     [remoteUnits, creationByResource, lastQuery]);
   useEffect(() => {
     if (!open || !accountId) return;
@@ -467,7 +467,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
   ];
 
   return <Space direction="vertical" size={16} style={{ width: '100%' }}>
-    <div className="page-heading"><div><Title level={2}>广告单元</Title><Text type="secondary">默认列出各 GAM 账号的全部广告单元；可编辑、归档或重新激活</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={openCreator}>新建广告单元</Button></div>
+    <div className="page-heading"><div><Title level={2}>广告单元</Title><Text type="secondary">列出各 GAM 账号的实际广告位；隐藏不可归档的网络根单元 Default，历史报表保留</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={openCreator}>新建广告单元</Button></div>
     <Card><Space wrap>
       <Select showSearch optionFilterProp="label" style={{ width: 310 }} value={filterAccountId ?? 'all'}
         onChange={value => { const id = value === 'all' ? null : value; setFilterAccountId(id);
@@ -496,7 +496,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     {lastQuery?.domain && <Alert type="info" showIcon message={'域名：' + lastQuery.domain + ' · 主域名包含其子域名'}
       description="已扫描所选 GAM 账号的全部分页和状态；按 GAM 名称、代码或本站创建记录确认归属。无法确认域名的单元仍可在清空域名筛选后查看。"/>}
     {listError && <Alert type="warning" showIcon message={listError} action={<Button size="small" onClick={() => searchUnits(lastQuery)}>重试</Button>}/>}
-    <Card title="GAM 已存在的广告单元" extra={<Text type="secondary">{listBusy ? '正在加载…' : '匹配 ' + displayedUnits.length + ' 个（扫描 ' + remoteUnits.length + ' 个，已归档 ' + displayedUnits.filter(row => row.status === 'ARCHIVED').length + ' 个）'} · 历史报表保留</Text>} bodyStyle={{ padding: 0 }}>
+    <Card title="GAM 已存在的广告单元" extra={<Text type="secondary">{listBusy ? '正在加载…' : '匹配 ' + displayedUnits.length + ' 个（扫描 ' + remoteUnits.length + ' 个，隐藏根单元 ' + remoteUnits.filter(row => !row.parentAdUnit).length + ' 个）'} · 历史报表保留</Text>} bodyStyle={{ padding: 0 }}>
       <Table rowKey="name" loading={listBusy && !remoteUnits.length} dataSource={displayedUnits} columns={remoteColumns}
         rowSelection={{ selectedRowKeys: selectedUnits, onChange: setSelectedUnits,
           getCheckboxProps: row => ({ disabled: !row.parentAdUnit || !row.accountEnabled ||

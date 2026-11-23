@@ -117,7 +117,7 @@ CREATE TABLE IF NOT EXISTS upstream_accounts (
 CREATE TABLE IF NOT EXISTS upstream_share_versions (id INTEGER PRIMARY KEY AUTOINCREMENT, upstream_account_id INTEGER NOT NULL, share_percent REAL NOT NULL CHECK(share_percent BETWEEN 0 AND 100), effective_from TEXT NOT NULL, created_by TEXT NOT NULL, UNIQUE(upstream_account_id,effective_from), FOREIGN KEY(upstream_account_id) REFERENCES upstream_accounts(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL UNIQUE COLLATE NOCASE, name TEXT NOT NULL,
-  password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','channel')), channel_id INTEGER,
+  password_hash TEXT NOT NULL, company_name TEXT NOT NULL DEFAULT '', role TEXT NOT NULL CHECK(role IN ('admin','channel')), channel_id INTEGER,
   status TEXT NOT NULL DEFAULT 'active', is_super_admin INTEGER NOT NULL DEFAULT 0, sidebar_permissions TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE
