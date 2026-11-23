@@ -140,6 +140,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
   const creationByResource = useMemo(() => indexCreationRecords(domainMap), [domainMap]);
   const withDomain = row => ({ ...row, ...resolveAdUnitDomain(row,
     creationByResource.get(String(row.networkCode) + ':' + row.name)) });
+  const unitByName = useMemo(() => new Map(remoteUnits.map(row => [row.name, row])), [remoteUnits]);
   const displayedUnits = useMemo(() => filterGamUnits(remoteUnits.filter(row => Boolean(row.parentAdUnit)).map(withDomain), lastQuery || {}),
     [remoteUnits, creationByResource, lastQuery]);
   useEffect(() => {
@@ -451,6 +452,10 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     { title: '主域名', dataIndex: 'mainDomain', width: 190, render: value => value || '—' },
     { title: '子域名', dataIndex: 'subdomain', width: 210, render: (value, row) => value || (row.domain ? '—' : <Text type="secondary">未确认 · {row.source}</Text>) },
     { title: '归属依据', dataIndex: 'source', width: 145 },
+    { title: 'GAM 层级', dataIndex: 'parentAdUnit', width: 165, render: value => {
+      const parent = unitByName.get(value);
+      return parent ? <Tag color={parent.parentAdUnit ? 'default' : 'blue'}>{parent.parentAdUnit ? '子级' : '顶级（父级）'}</Tag> : <Text type="secondary">待确认</Text>;
+    } },
     { title: '尺寸', dataIndex: 'adUnitSizes', render: remoteSizes },
     { title: '状态', dataIndex: 'status', width: 135, render: value => <Tag color={value === 'ACTIVE' ? 'green' : value === 'ARCHIVED' ? 'red' : 'default'}>
       {value === 'ACTIVE' ? '激活' : value === 'INACTIVE' ? '停用' : value === 'ARCHIVED' ? '已归档' : value || '—'}</Tag> },
@@ -467,7 +472,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
   ];
 
   return <Space direction="vertical" size={16} style={{ width: '100%' }}>
-    <div className="page-heading"><div><Title level={2}>广告单元</Title><Text type="secondary">列出各 GAM 账号的实际广告位；隐藏不可归档的网络根单元 Default，历史报表保留</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={openCreator}>新建广告单元</Button></div>
+    <div className="page-heading"><div><Title level={2}>广告单元</Title><Text type="secondary">各 GAM 账号的系统根单元（例如 Default）不列入；直接挂在根单元下的广告位显示为“顶级”</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={openCreator}>新建广告单元</Button></div>
     <Card><Space wrap>
       <Select showSearch optionFilterProp="label" style={{ width: 310 }} value={filterAccountId ?? 'all'}
         onChange={value => { const id = value === 'all' ? null : value; setFilterAccountId(id);
@@ -496,12 +501,12 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     {lastQuery?.domain && <Alert type="info" showIcon message={'域名：' + lastQuery.domain + ' · 主域名包含其子域名'}
       description="已扫描所选 GAM 账号的全部分页和状态；按 GAM 名称、代码或本站创建记录确认归属。无法确认域名的单元仍可在清空域名筛选后查看。"/>}
     {listError && <Alert type="warning" showIcon message={listError} action={<Button size="small" onClick={() => searchUnits(lastQuery)}>重试</Button>}/>}
-    <Card title="GAM 已存在的广告单元" extra={<Text type="secondary">{listBusy ? '正在加载…' : '匹配 ' + displayedUnits.length + ' 个（扫描 ' + remoteUnits.length + ' 个，隐藏根单元 ' + remoteUnits.filter(row => !row.parentAdUnit).length + ' 个）'} · 历史报表保留</Text>} bodyStyle={{ padding: 0 }}>
+    <Card title="GAM 已存在的广告单元" extra={<Text type="secondary">{listBusy ? '正在加载…' : '匹配 ' + displayedUnits.length + ' 个 · 已扫描 ' + remoteUnits.length + ' 个 GAM 库存项'} · 历史报表保留</Text>} bodyStyle={{ padding: 0 }}>
       <Table rowKey="name" loading={listBusy && !remoteUnits.length} dataSource={displayedUnits} columns={remoteColumns}
         rowSelection={{ selectedRowKeys: selectedUnits, onChange: setSelectedUnits,
           getCheckboxProps: row => ({ disabled: !row.parentAdUnit || !row.accountEnabled ||
             !['ACTIVE', 'INACTIVE', 'ARCHIVED'].includes(row.status) }) }}
-        pagination={{ pageSize: 20 }} scroll={{ x: 1600 }} locale={{ emptyText: <Empty description={queried ? '没有匹配的广告单元' : '正在读取 GAM 广告单元'}/> }}/>
+        pagination={{ pageSize: 20 }} scroll={{ x: 1750 }} locale={{ emptyText: <Empty description={queried ? '没有匹配的广告单元' : '正在读取 GAM 广告单元'}/> }}/>
     </Card>
     {results.length > 0 && <Alert type={results.some(row => row.status === 'failed') ? 'warning' : 'success'} showIcon
       message={'本次同步：成功 ' + results.filter(row => row.status === 'created').length + ' 个，失败 ' + results.filter(row => row.status === 'failed').length + ' 个'}
