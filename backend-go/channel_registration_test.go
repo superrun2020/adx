@@ -127,6 +127,10 @@ func TestChannelRegistrationRemainsPendingUntilReview(t *testing.T) {
 	if err := a.db.QueryRow("SELECT signed_pdf FROM channel_registration_contracts WHERE registration_id=?", registrationID).Scan(&savedPDF); err != nil || !bytes.Equal(savedPDF, finalPDF.Body.Bytes()) {
 		t.Fatalf("final PDF not retained: %v", err)
 	}
+	var queuedMail int
+	if err := a.db.QueryRow("SELECT COUNT(*) FROM channel_contract_mail_deliveries WHERE registration_id=? AND status='pending'", registrationID).Scan(&queuedMail); err != nil || queuedMail != 2 {
+		t.Fatalf("signed PDF was not queued for both parties: count=%d err=%v", queuedMail, err)
+	}
 	var assigned int
 	if err := a.db.QueryRow("SELECT COUNT(*) FROM channel_domains WHERE channel_id=(SELECT channel_id FROM users WHERE email='jordan@example.test')").Scan(&assigned); err != nil || assigned != 0 {
 		t.Fatalf("domains must be assigned later by operations: count=%d err=%v", assigned, err)

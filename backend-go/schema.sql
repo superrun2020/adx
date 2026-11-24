@@ -152,6 +152,14 @@ CREATE TABLE IF NOT EXISTS channel_contract_email_codes (
   attempts INTEGER NOT NULL DEFAULT 0, consumed_at TEXT,
   FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS channel_contract_mail_deliveries (
+  registration_id INTEGER NOT NULL, purpose TEXT NOT NULL CHECK(purpose IN ('channel','party_a')),
+  recipient TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','sending','failed','sent')),
+  attempts INTEGER NOT NULL DEFAULT 0, last_attempt_at TEXT, sent_at TEXT, last_error TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY(registration_id,purpose),
+  FOREIGN KEY(registration_id) REFERENCES channel_registrations(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_channel_contract_mail_pending ON channel_contract_mail_deliveries(status,last_attempt_at);
 CREATE TABLE IF NOT EXISTS channel_registration_domains (
   id INTEGER PRIMARY KEY AUTOINCREMENT, registration_id INTEGER NOT NULL,
   domain TEXT NOT NULL COLLATE NOCASE, adx_txt TEXT NOT NULL DEFAULT '',

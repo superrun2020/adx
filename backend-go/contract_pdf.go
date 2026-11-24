@@ -72,8 +72,12 @@ func buildSignedContractPDF(record signedContractPDF) ([]byte, error) {
 	}
 
 	pdf := fpdf.New("P", "mm", "A4", "")
-	pdf.SetTitle("AdX 合作协议 - "+record.CompanyName, false)
-	pdf.SetAuthor("AdX Publisher", false)
+	issuer := "AdX Publisher"
+	if record.Version == channelAgreementVersion {
+		issuer = "JUNGLELABS LTD"
+	}
+	pdf.SetTitle("AdX 合作协议 - "+record.CompanyName, true)
+	pdf.SetAuthor(issuer, true)
 	pdf.SetMargins(18, 20, 18)
 	pdf.SetAutoPageBreak(true, 20)
 	pdf.AddUTF8FontFromBytes("NotoSC", "", contractPDFFont)
@@ -84,7 +88,7 @@ func buildSignedContractPDF(record signedContractPDF) ([]byte, error) {
 		pdf.SetY(-13)
 		pdf.SetFont("NotoSC", "", 8)
 		pdf.SetTextColor(125, 140, 154)
-		pdf.CellFormat(0, 5, fmt.Sprintf("AdX Publisher  |  %d", pdf.PageNo()), "", 0, "C", false, 0, "")
+		pdf.CellFormat(0, 5, fmt.Sprintf("%s  |  %d", issuer, pdf.PageNo()), "", 0, "C", false, 0, "")
 	})
 	pdf.AddPage()
 	pdf.SetFont("NotoSC", "", 16)

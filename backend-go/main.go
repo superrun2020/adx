@@ -278,6 +278,21 @@ func main() {
 			}
 		}()
 	}
+	if contractEmailConfigured() {
+		go func() {
+			run := func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+				defer cancel()
+				a.runPendingContractDeliveries(ctx)
+			}
+			run()
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+			for range ticker.C {
+				run()
+			}
+		}()
+	}
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}

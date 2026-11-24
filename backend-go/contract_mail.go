@@ -5,10 +5,11 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"log"
 	"math/big"
 	"net"
 	"net/http"
@@ -63,6 +64,58 @@ func (auth *smtpLoginAuth) Next(_ []byte, more bool) ([]byte, error) {
 }
 
 func sendContractVerificationEmail(ctx context.Context, recipient, code string) error {
+	return sendContractRawEmail(ctx, recipient, contractVerificationEmailMessage(recipient, code))
+}
+
+const contractSenderName = "AdX Admin"
+
+func contractFromHeader(address string) string {
+	return (&mail.Address{Name: contractSenderName, Address: address}).String()
+}
+
+func contractVerificationEmailMessage(recipient, code string) []byte {
+	from := strings.TrimSpace(os.Getenv("CONTRACT_MAIL_FROM"))
+	body := fmt.Sprintf("您的 AdX 合同签署验证码：%s\n15 分钟内有效。若不是您本人操作，请忽略此邮件。\n", code)
+	content := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: JungleLabs AdX contract verification code\r\nDate: %s\r\nMessage-ID: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n%s", contractFromHeader(from), recipient, time.Now().UTC().Format(time.RFC1123Z), contractMailMessageID(from), base64MailBody([]byte(body)))
+	return []byte(content)
+}
+
+func contractMailMessageID(from string) string {
+	domain := "localhost"
+	if at := strings.LastIndexByte(from, '@'); at >= 0 {
+		domain = from[at+1:]
+	}
+	return fmt.Sprintf("<adx-%d@%s>", time.Now().UnixNano(), domain)
+}
+
+func base64MailBody(value []byte) string {
+	encoded := base64.StdEncoding.EncodeToString(value)
+	var body strings.Builder
+	for len(encoded) > 76 {
+		body.WriteString(encoded[:76] + "\r\n")
+		encoded = encoded[76:]
+	}
+	body.WriteString(encoded + "\r\n")
+	return body.String()
+}
+
+func sendSignedContractEmail(ctx context.Context, recipient string, registrationID int64, pdf []byte) error {
+	return sendContractRawEmail(ctx, recipient, signedContractEmailMessage(recipient, registrationID, pdf))
+}
+
+func signedContractEmailMessage(recipient string, registrationID int64, pdf []byte) []byte {
+	from := strings.TrimSpace(os.Getenv("CONTRACT_MAIL_FROM"))
+	boundary := fmt.Sprintf("adx-contract-%d-%d", registrationID, time.Now().UnixNano())
+	var content strings.Builder
+	fmt.Fprintf(&content, "From: %s\r\nTo: %s\r\nReply-To: notice@junglelabs.uk\r\nSubject: JungleLabs AdX signed cooperation agreement\r\nDate: %s\r\nMessage-ID: %s\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=%q\r\n\r\n", contractFromHeader(from), recipient, time.Now().UTC().Format(time.RFC1123Z), contractMailMessageID(from), boundary)
+	fmt.Fprintf(&content, "--%s\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n%s\r\n", boundary, base64MailBody([]byte("JungleLabs AdX 合作协议已由双方签署。签署版 PDF 见附件，也可登录渠道后台下载。\n如有合同问题，请回复此邮件联系合同通知邮箱。\n")))
+	fmt.Fprintf(&content, "--%s\r\nContent-Type: application/pdf\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename=%q\r\n\r\n", boundary, fmt.Sprintf("junglelabs-adx-contract-%d.pdf", registrationID))
+	content.WriteString(base64MailBody(pdf))
+	fmt.Fprintf(&content, "--%s--\r\n", boundary)
+	return []byte(content.String())
+}
+
+func sendContractRawEmail(ctx context.Context, recipient string, content []byte) error {
 	if !contractEmailConfigured() {
 		return errors.New("contract_email_unconfigured")
 	}
@@ -127,15 +180,18 @@ func sendContractVerificationEmail(ctx context.Context, recipient, code string) 
 	if err != nil {
 		return err
 	}
-	content := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: AdX contract signing verification code\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nYour one-time code for signing the AdX cooperation agreement is: %s\r\nThe code expires in 15 minutes. If you did not request it, ignore this email.\r\n", from, recipient, code)
-	if _, err = io.WriteString(writer, content); err != nil {
+	if _, err = writer.Write(content); err != nil {
 		_ = writer.Close()
 		return err
 	}
 	if err = writer.Close(); err != nil {
 		return err
 	}
-	return client.Quit()
+	// A successful DATA response means the SMTP server accepted the message.
+	// A failed QUIT after that point must not report a false send failure.
+	_ = connection.SetDeadline(time.Now().Add(2 * time.Second))
+	_ = client.Quit()
+	return nil
 }
 
 func newContractEmailCode() (string, error) {
@@ -198,13 +254,21 @@ func (a *app) sendChannelContractCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
-	_, err = a.db.ExecContext(r.Context(), "INSERT INTO channel_contract_email_codes(user_id,email,contract_hash,code_hash,expires_at,sent_at,attempts,consumed_at) VALUES(?,?,?,?,?,?,0,NULL) ON CONFLICT(user_id) DO UPDATE SET email=excluded.email,contract_hash=excluded.contract_hash,code_hash=excluded.code_hash,expires_at=excluded.expires_at,sent_at=excluded.sent_at,attempts=0,consumed_at=NULL", u.ID, u.Email, contractTextHash(renderRegistrationContract(input)), string(hash), now.Add(15*time.Minute).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+	reservation, err := a.db.ExecContext(r.Context(), "INSERT INTO channel_contract_email_codes(user_id,email,contract_hash,code_hash,expires_at,sent_at,attempts,consumed_at) VALUES(?,?,?,?,?,?,0,NULL) ON CONFLICT(user_id) DO UPDATE SET email=excluded.email,contract_hash=excluded.contract_hash,code_hash=excluded.code_hash,expires_at=excluded.expires_at,sent_at=excluded.sent_at,attempts=0,consumed_at=NULL WHERE julianday(channel_contract_email_codes.sent_at)<=julianday(excluded.sent_at,'-1 minute')", u.ID, u.Email, contractTextHash(renderRegistrationContract(input)), string(hash), now.Add(15*time.Minute).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 	if err != nil {
 		serverError(w, err)
 		return
 	}
+	if updated, err := reservation.RowsAffected(); err != nil {
+		serverError(w, err)
+		return
+	} else if updated == 0 {
+		writeError(w, 429, "contract_code_rate_limited")
+		return
+	}
 	if err = sendContractVerificationEmail(r.Context(), u.Email, code); err != nil {
 		_, _ = a.db.ExecContext(r.Context(), "DELETE FROM channel_contract_email_codes WHERE user_id=? AND code_hash=?", u.ID, string(hash))
+		log.Printf("contract_code_email_failed user=%d code=%s", u.ID, contractMailFailure(err))
 		writeError(w, 503, "contract_email_send_failed")
 		return
 	}

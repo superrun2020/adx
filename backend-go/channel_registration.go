@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -18,10 +19,10 @@ import (
 	"time"
 )
 
-//go:embed contracts/xpertmobi-template-v1.txt
-var xpertmobiAgreementTemplate string
+//go:embed contracts/junglelabs-template-v2.txt
+var junglelabsAgreementTemplate string
 
-const channelAgreementVersion = "xpertmobi-electronic-v1"
+const channelAgreementVersion = "junglelabs-electronic-v2"
 
 type registrationDomainInput struct {
 	Domain string
@@ -50,16 +51,7 @@ type channelRegistrationInput struct {
 var signatureDataPattern = regexp.MustCompile("^data:image/(png|jpeg);base64,")
 
 func publicContractText() string {
-	text := strings.Replace(xpertmobiAgreementTemplate,
-		"甲方：\n联系地址： 业务联系人：\n联系电话：\n电子邮箱：",
-		"乙方：[公司法定名称]\n联系地址：[公司注册地址] 业务联系人：[联系人姓名]\n联系电话：[联系电话]\n电子邮箱：[签约邮箱]\n注册编号：[注册编号]\n注册国家/地区：[注册国家/地区]", 1)
-	text = strings.Replace(text, "起始于： 2025 年10 月 01 日", "起始于：双方电子签署并完成平台复核之日（以系统签署记录为准）", 1)
-	text = strings.Replace(text, "本合同经双方盖章后即告生效", "本合同经双方电子签署并完成平台复核后即告生效", 1)
-	text = strings.Replace(text, "甲方：香港摩比互聯網廣告傳媒有限公司XPERTMOBI INTERNET ADVERTISING MEDIA CO.，LIMITED | 乙方：",
-		"甲方：香港摩比互聯網廣告傳媒有限公司 XPERTMOBI INTERNET ADVERTISING MEDIA CO.，LIMITED | 乙方：[公司法定名称]", 1)
-	text = strings.Replace(text, "联系人： | 联系人：", "联系人：Rinser | 联系人：[签署人姓名]", 1)
-	text = strings.Replace(text, "日期：   2026/6/1 | 日期：2026/5/1", "日期：电子签署时间以系统记录为准 | 日期：电子签署时间以系统记录为准", 1)
-	return text
+	return junglelabsAgreementTemplate
 }
 
 func renderRegistrationContract(input channelRegistrationInput) string {
@@ -320,6 +312,12 @@ func (a *app) channelRegistrationDetail(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	registration["domains"] = domains
+	deliveries, err := queryMaps(a.db, "SELECT purpose,recipient,status,attempts,sent_at sentAt FROM channel_contract_mail_deliveries WHERE registration_id=? ORDER BY purpose", id)
+	if err != nil {
+		writeError(w, 500, "channel_contract_mail_status_unavailable")
+		return
+	}
+	registration["emailDeliveries"] = deliveries
 	writeJSON(w, 200, map[string]any{"ok": true, "item": registration})
 }
 
@@ -517,12 +515,30 @@ func (a *app) approveChannelRegistration(w http.ResponseWriter, r *http.Request)
 		writeError(w, 500, "channel_contract_countersign_failed")
 		return
 	}
+	if err = queueSignedContractEmail(tx, id, "channel", fieldString(signed, "signer_email")); err != nil {
+		writeError(w, 500, "channel_contract_mail_queue_failed")
+		return
+	}
+	if fieldString(signed, "version") == channelAgreementVersion && !strings.EqualFold(fieldString(signed, "signer_email"), partyAContractEmail) {
+		if err = queueSignedContractEmail(tx, id, "party_a", partyAContractEmail); err != nil {
+			writeError(w, 500, "channel_contract_mail_queue_failed")
+			return
+		}
+	}
 	if err = tx.Commit(); err != nil {
 		writeError(w, 500, "channel_registration_approval_failed")
 		return
 	}
 	a.audit(currentUser(r).Email, "channel.registration_approved", "channel_registration", id,
 		marshalText(map[string]any{"channelId": channelID, "domains": domains, "sharePercent": share, "effectiveFrom": effective, "contractVersion": signed["version"]}), clientIP(r))
+	if contractEmailConfigured() {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			_ = a.deliverSignedContractEmail(ctx, id, "channel")
+			_ = a.deliverSignedContractEmail(ctx, id, "party_a")
+		}()
+	}
 	writeJSON(w, 200, map[string]any{"ok": true, "channelId": channelID})
 }
 

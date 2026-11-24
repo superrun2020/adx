@@ -78,11 +78,12 @@ func (a *app) channelContract(w http.ResponseWriter, r *http.Request) {
 		_ = a.db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM soap_accounts WHERE rest_channel_id=?", user.ChannelID.Int64).Scan(&gamAccountCount)
 	}
 	contract, found := a.one("SELECT version,contract_text contractText,contract_hash contractHash,signer_name signerName,signer_title signerTitle,signed_at signedAt,signature_data signatureData,counter_signer counterSigner,counter_signer_title counterSignerTitle,counter_signature_data counterSignatureData,countersigned_at countersignedAt,signed_pdf_sha256 signedPdfSha256 FROM channel_registration_contracts WHERE registration_id=? ORDER BY id DESC LIMIT 1", intMap(registration, "id"))
+	delivery, _ := a.one("SELECT status,attempts,sent_at sentAt FROM channel_contract_mail_deliveries WHERE registration_id=? AND purpose='channel'", intMap(registration, "id"))
 	if !found {
-		writeJSON(w, 200, map[string]any{"ok": true, "contract": map[string]any{"status": registration["status"], "registration": registration, "assignedDomainCount": assignedDomainCount, "gamAccountCount": gamAccountCount, "emailVerificationRequired": contractEmailRequired()}})
+		writeJSON(w, 200, map[string]any{"ok": true, "contract": map[string]any{"status": registration["status"], "registration": registration, "assignedDomainCount": assignedDomainCount, "gamAccountCount": gamAccountCount, "emailVerificationRequired": contractEmailRequired(), "emailDelivery": delivery}})
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "contract": map[string]any{"status": registration["status"], "registration": registration, "agreement": contract, "assignedDomainCount": assignedDomainCount, "gamAccountCount": gamAccountCount, "emailVerificationRequired": contractEmailRequired()}})
+	writeJSON(w, 200, map[string]any{"ok": true, "contract": map[string]any{"status": registration["status"], "registration": registration, "agreement": contract, "assignedDomainCount": assignedDomainCount, "gamAccountCount": gamAccountCount, "emailVerificationRequired": contractEmailRequired(), "emailDelivery": delivery}})
 }
 
 func (a *app) channelRegressionEvents(w http.ResponseWriter, r *http.Request) {

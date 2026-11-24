@@ -59,6 +59,7 @@ function ContractView({ user }) {
   const [submitting, setSubmitting] = useState(false);
   const [codeSending, setCodeSending] = useState(false);
   const [codeSent, setCodeSent] = useState(false);
+  const [codeCooldown, setCodeCooldown] = useState(0);
   const [reading, setReading] = useState(false);
   const [values, setValues] = useState({ registrationNumber:'', country:'', registeredAddress:'', phone:'', signatureTitle:'', signatureData:'', verificationCode:'', accepted:false });
   const set = (field, value) => setValues(current => ({ ...current, [field]:value }));
@@ -76,6 +77,11 @@ function ContractView({ user }) {
     finally { setLoading(false); }
   };
   useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    if (!codeCooldown) return undefined;
+    const timer = window.setTimeout(() => setCodeCooldown(seconds => Math.max(0, seconds - 1)), 1000);
+    return () => window.clearTimeout(timer);
+  }, [codeCooldown]);
   const registration = contract?.registration || {};
   const agreement = contract?.agreement || {};
   const sendCode = async () => {
@@ -93,8 +99,18 @@ function ContractView({ user }) {
         contractVersion:template.version
       }) });
       setCodeSent(true);
-      message.success('验证码已发送到注册邮箱，15 分钟内有效');
-    } catch (error) { message.error('验证码发送失败：' + error.message); }
+      setCodeCooldown(60);
+      message.success('验证码已提交发送到注册邮箱，15 分钟内有效；未收到请检查垃圾邮件。');
+    } catch (error) {
+      if (error.message === 'contract_code_rate_limited') setCodeCooldown(60);
+      const details = {
+        contract_code_rate_limited:'发送过于频繁，请稍后重试。',
+        contract_email_send_failed:'邮件服务未接受本次发送，请稍后重试。',
+        contract_email_unconfigured:'签约邮件服务尚未配置，请联系平台管理员。',
+        invalid_contract_details:'请检查注册编号、国家、地址、电话和签署职务。'
+      };
+      message.error('验证码发送失败：' + (details[error.message] || error.message));
+    }
     finally { setCodeSending(false); }
   };
   const sign = async () => {
@@ -156,7 +172,7 @@ function ContractView({ user }) {
           {contract.emailVerificationRequired && <div className="contract-email-verification">
             <strong>邮箱验证</strong><Text type="secondary">签署验证码将发送至 {registration.email}，15 分钟内有效。</Text>
             <div className="contract-email-code-row"><Input inputMode="numeric" maxLength={6} placeholder="6 位邮箱验证码" value={values.verificationCode}
-              onChange={event => set('verificationCode',event.target.value.replace(/\D/g,''))}/><Button onClick={sendCode} loading={codeSending}>{codeSent?'重新发送':'发送验证码'}</Button></div>
+              onChange={event => set('verificationCode',event.target.value.replace(/\D/g,''))}/><Button onClick={sendCode} loading={codeSending} disabled={codeCooldown>0}>{codeCooldown>0?codeCooldown+' 秒后重发':codeSent?'重新发送':'发送验证码'}</Button></div>
           </div>}
           <SignaturePad width={1200} height={320} onChange={value => set('signatureData',value)}/>
           <Checkbox checked={values.accepted} onChange={event => set('accepted',event.target.checked)} style={{marginTop:16}}>本人已核对主体资料、阅读完整协议，并确认有权代表该公司签署；同意留存签名、签署时间与审计记录。</Checkbox>
@@ -168,6 +184,9 @@ function ContractView({ user }) {
           {template && <AgreementPreview text={template.text} registration={registration} values={values}/>}
         </Modal>
       </> : contract.status === 'registered' ? <Card><Alert type="warning" showIcon message="当前账户尚未创建合同，请联系平台补充主体资料。"/></Card> : <>
+        {contract.status === 'approved' && contract.emailDelivery && <Alert showIcon type={contract.emailDelivery.status === 'sent' ? 'success' : 'info'}
+          message={contract.emailDelivery.status === 'sent' ? '签署版 PDF 已提交邮件发送' : contract.emailDelivery.status === 'failed' && contract.emailDelivery.attempts >= 8 ? '邮件发送失败，可在下方下载签署版 PDF' : '签署版 PDF 邮件正在发送或重试'}
+          description="邮件发往注册邮箱；若未见邮件，请查看垃圾邮件。您也可以在下方直接下载合同。"/>}
         <Card title={<Space><FileProtectOutlined/>签署信息</Space>} extra={<Tag color={contract.status === 'approved' ? 'green' : contract.status === 'rejected' ? 'red' : 'gold'}>{contract.status === 'approved' ? '双方已签署' : contract.status === 'rejected' ? '申请未通过' : '等待平台复核'}</Tag>}>
           <Descriptions column={{xs:1,sm:2}} items={[
             {key:'company',label:'签约主体',children:registration.companyName},

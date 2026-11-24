@@ -139,10 +139,11 @@ function ChannelRegistrationReview({ registration, accounts, user, onClose, onDo
   const [detail,setDetail]=useState(null),[loading,setLoading]=useState(false),[saving,setSaving]=useState(false);
   const [mapping,setMapping]=useState({}),[channelName,setChannelName]=useState(''),[sharePercent,setSharePercent]=useState(null);
   const [effectiveFrom,setEffectiveFrom]=useState(dayjs()),[reviewNote,setReviewNote]=useState('');
-  const [reviewerTitle,setReviewerTitle]=useState('平台主管'),[signatureData,setSignatureData]=useState('');
+  const [reviewerTitle,setReviewerTitle]=useState(''),[signatureData,setSignatureData]=useState('');
+  const [reviewerAccepted,setReviewerAccepted]=useState(false);
   useEffect(()=>{
     let active=true;
-    setDetail(null);setSignatureData('');setReviewNote('');
+    setDetail(null);setSignatureData('');setReviewNote('');setReviewerTitle('');setReviewerAccepted(false);
     if(!registration)return undefined;
     setChannelName(registration.companyName||registration.contactName||'');
     setSharePercent(null);setEffectiveFrom(dayjs());
@@ -159,12 +160,12 @@ function ChannelRegistrationReview({ registration, accounts, user, onClose, onDo
     const domains=(detail?.domains||[]).filter(row=>mapping[row.domain]).map(row=>({domain:row.domain,gamAccountId:Number(mapping[row.domain])}));
     if(domains.length!==(detail?.domains||[]).length)return message.warning('请为每个已有申请域名匹配一个 GAM 账号');
     if(sharePercent===null||sharePercent===undefined)return message.warning('请明确填写渠道结算比例');
-    if(!signatureData||!reviewerTitle.trim())return message.warning('请填写平台签署职务并完成平台手写签名');
+    if(!signatureData||!reviewerTitle.trim()||!reviewerAccepted)return message.warning('请填写甲方签署职务、完成手写签名并确认签署授权');
     setSaving(true);
     try{
       await api('/api/admin/channel-registrations/'+registration.id+'/approve',{method:'POST',body:JSON.stringify({
         channelName,sharePercent,effectiveFrom:effectiveFrom.format('YYYY-MM-DD'),domains,reviewNote,
-        reviewerSignatureName:user?.name||'',reviewerSignatureTitle:reviewerTitle,reviewerSignatureData:signatureData,reviewerAccepted:true
+        reviewerSignatureName:user?.name||'',reviewerSignatureTitle:reviewerTitle,reviewerSignatureData:signatureData,reviewerAccepted
       })});
       message.success('平台签署完成，渠道账号已开通；网站可随后在运营后台关联');
       onDone();
@@ -183,6 +184,11 @@ function ChannelRegistrationReview({ registration, accounts, user, onClose, onDo
         {key:'country',label:'注册国家',children:detail.country},{key:'address',label:'注册地址',children:detail.registeredAddress},
         {key:'phone',label:'电话',children:detail.phone},{key:'signed',label:'渠道方签署时间',children:detail.signedAt}
       ]}/>
+      {registration.status==='approved' && (detail.emailDeliveries||[]).length>0 && <Alert type="info" showIcon
+        message="双方签署 PDF 邮件状态"
+        description={<Space direction="vertical" size={2}>{detail.emailDeliveries.map(item=><span key={item.purpose}>
+          {item.purpose==='party_a'?'甲方':'渠道方'}：{item.recipient} · {item.status==='sent'?'已提交发送':item.status==='failed'?(item.attempts>=8?'邮件发送失败，可下载 PDF':'发送失败，系统会重试'):'等待发送'}
+        </span>)}</Space>}/>}
       {(detail.domains||[]).map(row=><Card size="small" key={row.domain} title={row.domain} extra={<Tag color={row.currentChannelId?'orange':'blue'}>{row.currentChannelName||'未分配'}</Tag>}>
         <Text strong>提交的 adx.txt</Text><pre className="channel-txt-preview">{row.adxTxt||'未提交'}</pre>
         <label className="registration-admin-field">对应 GAM 账号<Select allowClear showSearch optionFilterProp="label" value={mapping[row.domain]} onChange={value=>setMapping(current=>({...current,[row.domain]:value}))} options={accounts.filter(account=>account.status==='active'&&Number(account.enabled)).map(account=>({value:Number(account.id),label:account.name+' · '+account.networkCode}))}/></label>
@@ -199,10 +205,11 @@ function ChannelRegistrationReview({ registration, accounts, user, onClose, onDo
         </div>
         <pre className="contract-preview admin-contract-preview">{detail.contractText}</pre>
       </Card>
-      {registration.status==='signed'&&<Card size="small" title="平台复核签署">
-        <label className="registration-admin-field">平台签署人<Input value={user?.name||''} disabled/></label>
-        <label className="registration-admin-field">平台签署职务<Input value={reviewerTitle} onChange={event=>setReviewerTitle(event.target.value)}/></label>
-        <SignaturePad title="平台主管手写签名" onChange={setSignatureData}/>
+      {registration.status==='signed'&&<Card size="small" title="甲方复核签署">
+        <label className="registration-admin-field">甲方授权签署人<Input value={user?.name||''} disabled/></label>
+        <label className="registration-admin-field">甲方签署职务<Input value={reviewerTitle} onChange={event=>setReviewerTitle(event.target.value)}/></label>
+        <SignaturePad title="甲方授权代表手写签名" onChange={setSignatureData}/>
+        <Checkbox checked={reviewerAccepted} onChange={event=>setReviewerAccepted(event.target.checked)}>本人确认有权代表协议所列甲方签署此协议。</Checkbox>
         <Alert style={{marginTop:12}} type="warning" showIcon message="平台签署后渠道账户才能查看业务数据；若尚未关联网站，报表仍为空。"/>
       </Card>}
     </Space>}</Spin>

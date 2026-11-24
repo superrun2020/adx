@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/mail"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,7 +22,11 @@ func TestContractSMTPLive(t *testing.T) {
 	if os.Getenv("CONTRACT_SMTP_LIVE_TEST") != "1" {
 		t.Skip("live mail test not requested")
 	}
-	if err := sendContractVerificationEmail(context.Background(), os.Getenv("CONTRACT_MAIL_FROM"), "TEST01"); err != nil {
+	recipient := os.Getenv("CONTRACT_SMTP_LIVE_RECIPIENT")
+	if recipient == "" {
+		recipient = os.Getenv("CONTRACT_MAIL_FROM")
+	}
+	if err := sendContractVerificationEmail(context.Background(), recipient, "MIME-TEST-NOT-VALID"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -28,6 +36,25 @@ func TestContractVerificationCanFailClosedWithoutSMTP(t *testing.T) {
 	t.Setenv("CONTRACT_EMAIL_VERIFICATION_REQUIRED", "true")
 	if !contractEmailRequired() || contractEmailConfigured() {
 		t.Fatal("contract verification must remain required when SMTP is unavailable")
+	}
+}
+
+func TestContractVerificationEmailUsesValidUTF8MIME(t *testing.T) {
+	t.Setenv("CONTRACT_MAIL_FROM", "sender@example.test")
+	message, err := mail.ReadMessage(bytes.NewReader(contractVerificationEmailMessage("recipient@example.test", "654321")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	from, err := mail.ParseAddress(message.Header.Get("From"))
+	if err != nil || from.Name != "AdX Admin" || from.Address != "sender@example.test" {
+		t.Fatalf("unexpected sender: %s", message.Header.Get("From"))
+	}
+	if message.Header.Get("To") != "recipient@example.test" || message.Header.Get("Message-Id") == "" || message.Header.Get("Content-Transfer-Encoding") != "base64" {
+		t.Fatalf("invalid verification email headers: %#v", message.Header)
+	}
+	decoded, err := io.ReadAll(base64.NewDecoder(base64.StdEncoding, message.Body))
+	if err != nil || !strings.Contains(string(decoded), "654321") {
+		t.Fatalf("verification code is not recoverable: %v", err)
 	}
 }
 
