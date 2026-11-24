@@ -75,8 +75,8 @@ func contractFromHeader(address string) string {
 
 func contractVerificationEmailMessage(recipient, code string) []byte {
 	from := strings.TrimSpace(os.Getenv("CONTRACT_MAIL_FROM"))
-	body := fmt.Sprintf("您的 AdX 合同签署验证码：%s\n15 分钟内有效。若不是您本人操作，请忽略此邮件。\n", code)
-	content := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: JungleLabs AdX contract verification code\r\nDate: %s\r\nMessage-ID: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n%s", contractFromHeader(from), recipient, time.Now().UTC().Format(time.RFC1123Z), contractMailMessageID(from), base64MailBody([]byte(body)))
+	body := fmt.Sprintf("Your AdX contract verification code is %s.\r\nIt expires in 15 minutes. If you did not request this code, you can ignore this email.\r\n", code)
+	content := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: AdX contract verification\r\nDate: %s\r\nMessage-ID: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=us-ascii\r\nContent-Transfer-Encoding: 7bit\r\n\r\n%s", from, recipient, time.Now().UTC().Format(time.RFC1123Z), contractMailMessageID(from), body)
 	return []byte(content)
 }
 
