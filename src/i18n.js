@@ -4,6 +4,10 @@ let started = false;
 let dictionary = null;
 let fragments = null;
 const overrides = {
+  'GAM 已确认网站':'Site verified in GAM','GAM 仅查到上级网站':'Only the parent site was found in GAM',
+  '链接已保存，GAM 同步未确认':'Link saved. GAM sync could not be confirmed.',
+  '同步 GAM':'Sync to GAM','保存并同步 GAM':'Save and sync to GAM',
+  '新增链接会同步到所选账号的 GAM Sites。':'New links are synchronized to GAM Sites in the selected account.',
   '分配链接':'Assign website','已分配网站':'Assigned websites','网站域名':'Website domain','当前归属':'Current channel','搜索网站或账号':'Search websites or accounts',
   '网站与 GAM 账号':'Website and GAM account','搜索域名或 GAM 账号':'Search domain or GAM account','网站广告授权 TXT':'Ad authorization TXT',
   '保存分配':'Save assignment','网站分配已保存':'Website assignment saved','没有匹配的网站':'No matching websites','待录入':'Not entered',

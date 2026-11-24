@@ -90,7 +90,7 @@ func (u user) allowedRequest(r *http.Request) bool {
 		views = []string{"bot-report"}
 	case path == "/api/admin/link-metadata" && method == http.MethodGet:
 		views = []string{"links", "channels"}
-	case path == "/api/admin/link-metadata":
+	case path == "/api/admin/link-metadata" || path == "/api/admin/link-metadata/sync":
 		views = []string{"links"}
 	case path == "/api/admin/gam-accounts" && method == http.MethodGet:
 		views = []string{"gam", "links", "ad-units", "regression", "channels"}

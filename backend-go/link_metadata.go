@@ -117,7 +117,11 @@ func (a *app) createLinkMetadata(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	a.audit(currentUser(r).Email, "gam.link_create", "link", fields.network+":"+fields.domain, "{}", clientIP(r))
-	writeJSON(w, 201, map[string]any{"ok": true})
+	response := map[string]any{"ok": true}
+	if sync, _ := input["syncToGam"].(bool); sync {
+		response["sync"] = a.linkSiteSyncResult(r, fields)
+	}
+	writeJSON(w, 201, response)
 	return nil
 }
 

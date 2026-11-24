@@ -71,6 +71,7 @@ export default function LinkManager({ user }) {
   const [issues, setIssues] = useState(lastSnapshot?.issues || []);
   const [lastLoaded, setLastLoaded] = useState(lastSnapshot?.lastLoaded || '');
   const [busy, setBusy] = useState(false), [saving, setSaving] = useState(false);
+  const [syncing,setSyncing] = useState(null);
   const [progress, setProgress] = useState([0, 0]);
   const [keyword, setKeyword] = useState('');
   const [types, setTypes] = useState(['main', 'sub']), [accountId, setAccountId] = useState(null);
@@ -167,6 +168,26 @@ export default function LinkManager({ user }) {
     form.setFieldsValue({ domain: row.domain, gamAccountId: row.accountId,
       monitorDomains: row.monitorDomains, channelId: row.channelId ?? undefined, notes: row.notes });
   };
+  const reportSync = result => {
+    const domain = result?.site?.url || '';
+    if (result?.status === 'created' || result?.status === 'verified') {
+      message.success(['GAM 已确认网站',domain,result.site.approvalStatus].filter(Boolean).join(' · '));
+    } else if (result?.status === 'parent_only') {
+      Modal.info({title:'GAM 仅查到上级网站',content:[domain,result.site.approvalStatus].filter(Boolean).join(' · ')});
+    } else {
+      Modal.warning({title:'链接已保存，GAM 同步未确认',content:result?.error || '请刷新后重试'});
+    }
+  };
+  const retrySync = async row => {
+    setSyncing(row.key);
+    try {
+      const result = await api('/api/admin/link-metadata/sync',undefined,{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({gamAccountId:row.accountId,domain:row.domain})});
+      reportSync(result.sync);
+      await load(true);
+    } catch(error){ message.error(error.message); }
+    finally { setSyncing(null); }
+  };
   const save = async () => {
     let values;
     try { values = await form.validateFields(); } catch { return; }
@@ -176,7 +197,7 @@ export default function LinkManager({ user }) {
     if (monitorDomains.some(value => !value)) {
       form.setFields([{ name: 'monitorDomains', errors: ['请输入有效的广告监测域名'] }]); return;
     }
-    const body = { gamAccountId: values.gamAccountId, domain, monitorDomains,
+    const body = { syncToGam: editing.mode === 'create', gamAccountId: values.gamAccountId, domain, monitorDomains,
       channelId: values.channelId || null, notes: values.notes || '' };
     if (editing.mode === 'edit') Object.assign(body, {
       originalNetworkCode: editing.row.networkCode, originalDomain: editing.row.domain,
@@ -184,11 +205,12 @@ export default function LinkManager({ user }) {
     });
     setSaving(true);
     try {
-      await api('/api/admin/link-metadata', undefined, { method: editing.mode === 'create' ? 'POST' : 'PUT',
+      const result = await api('/api/admin/link-metadata', undefined, { method: editing.mode === 'create' ? 'POST' : 'PUT',
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      message.success(editing.mode === 'create' ? '链接已新增到本站目录' : '链接信息已保存');
+      if (editing.mode === 'create') reportSync(result.sync);
+      else message.success('链接信息已保存');
       setEditing(null);
-      await load();
+      await load(editing.mode === 'create');
     } catch (error) { message.error(errors[error.message] || error.message); }
     finally { setSaving(false); }
   };
@@ -200,7 +222,7 @@ export default function LinkManager({ user }) {
     { title: '渠道', width: 160, render: (_, row) => row.channelName ? <Space direction="vertical" size={0}><strong>{row.channelName}</strong><Text type="secondary" style={{fontSize:11}}>{row.assignmentSource}</Text></Space> : '—' },
     { title: '备注', dataIndex: 'notes', width: 210, ellipsis: true, render: value => value || '—' },
     { title: '来源', dataIndex: 'source', width: 100 },
-    { title: '操作', key: 'actions', width: 90, fixed: 'right', render: (_, row) => <Button type="link" icon={<EditOutlined/>} onClick={() => openEdit(row)}>{row.source === 'GAM 报表' && !row.isSaved ? '登记' : '编辑'}</Button> }
+    { title: '操作', key: 'actions', width: 145, fixed: 'right', render: (_, row) => <Space size={0}><Button type="link" icon={<EditOutlined/>} onClick={() => openEdit(row)}>{row.source === 'GAM 报表' && !row.isSaved ? '登记' : '编辑'}</Button>{row.isSaved && row.source !== 'GAM Sites' && <Button type="link" disabled={syncing!==null} loading={syncing===row.key} onClick={()=>retrySync(row)}>同步 GAM</Button>}</Space> }
   ];
 
   return <Space direction="vertical" size={16} className="page-stack link-manager">
@@ -208,7 +230,7 @@ export default function LinkManager({ user }) {
       <Space><Button icon={<ReloadOutlined/>} loading={busy} onClick={() => load(true)}>刷新 GAM 链接</Button>
         <Button type="primary" icon={<PlusOutlined/>} onClick={openCreate}>新增链接</Button></Space></div>
     <Alert type="info" showIcon message="GAM 网站与报表子域名"
-      description="GAM Sites 中登记的网站直接显示；对应账号 REST 报表 SITE 维度出现的子域名也会列出，并标为“GAM 报表”。报表子域名不代表已在 GAM Sites 单独过审；新增链接只记录到本站目录。"/>
+      description="GAM Sites 中登记的网站直接显示；对应账号 REST 报表 SITE 维度出现的子域名也会列出，并标为“GAM 报表”。报表子域名不代表已在 GAM Sites 单独过审；新增链接会同步到所选账号的 GAM Sites。"/>
     {issues.length > 0 && <Alert type="warning" showIcon message="部分账号网站读取不完整" description={issues.join('；')} />}
     <Row gutter={[12, 12]}>
       <Col xs={12} md={6}><Card><Statistic title="已发现链接" value={rows.length}/></Card></Col>
@@ -227,7 +249,7 @@ export default function LinkManager({ user }) {
       <Table rowKey="key" size="middle" loading={busy && !rows.length} dataSource={filtered} columns={columns} pagination={{ current: page, pageSize, onChange: (next, size) => { setPage(next); setPageSize(size); }, showSizeChanger: true, pageSizeOptions: [20, 50, 100] }} scroll={{ x: 1350 }} locale={{ emptyText: <Empty description={busy ? '正在读取 GAM Sites' : '没有符合条件的链接'} /> }}/>
     </Card>
     <Modal title={editing?.mode === 'create' ? editing?.row ? '登记报表子域名' : '新增链接' : '编辑链接'} open={!!editing} onCancel={() => setEditing(null)} onOk={save}
-      okText={editing?.mode === 'create' ? '创建链接' : '保存修改'} confirmLoading={saving} forceRender width={560}>
+      okText={editing?.mode === 'create' ? '保存并同步 GAM' : '保存修改'} confirmLoading={saving} forceRender width={560}>
       {editing?.mode === 'edit' && editing.row.source === 'GAM Sites' && <Alert type="info" showIcon style={{ marginBottom: 16 }}
         message="GAM 站点的账号和域名由 Google 管理；这里只能修改本站的监测域名、渠道和备注。"/>}
       <Form form={form} layout="vertical">
