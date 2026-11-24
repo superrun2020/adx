@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"database/sql"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -16,6 +18,7 @@ import (
 	"net/mail"
 	"net/smtp"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -63,7 +66,43 @@ func (auth *smtpLoginAuth) Next(_ []byte, more bool) ([]byte, error) {
 	return nil, errors.New("smtp_login_unexpected_challenge")
 }
 
+//go:embed contract_qq_mail.py
+var qqVerificationMailer string
+
+func sendQQVerificationEmail(ctx context.Context, recipient, code string) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	address, err := mail.ParseAddress(recipient)
+	if err != nil || address.Address != recipient || strings.ContainsAny(recipient, "\r\n") {
+		return errors.New("invalid_contract_mail_address")
+	}
+	payload, err := json.Marshal(map[string]string{"recipient": recipient, "code": code})
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, "python3", "-I", "-c", qqVerificationMailer)
+	cmd.Env = []string{"PATH=/usr/bin:/bin"}
+	for _, key := range []string{"CONTRACT_MAIL_FROM", "CONTRACT_SMTP_USER", "CONTRACT_SMTP_PASSWORD"} {
+		cmd.Env = append(cmd.Env, key+"="+os.Getenv(key))
+	}
+	cmd.Stdin = bytes.NewReader(payload)
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("qq_verification_mail: %w", err)
+	}
+	return nil
+}
+
 func sendContractVerificationEmail(ctx context.Context, recipient, code string) error {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("CONTRACT_SMTP_HOST")), "smtp.qq.com") &&
+		os.Getenv("CONTRACT_SMTP_PORT") == "465" && strings.EqualFold(os.Getenv("CONTRACT_SMTP_TLS_MODE"), "implicit") {
+		if !contractEmailConfigured() {
+			return errors.New("contract_email_unconfigured")
+		}
+		return sendQQVerificationEmail(ctx, recipient, code)
+	}
 	return sendContractRawEmail(ctx, recipient, contractVerificationEmailMessage(recipient, code))
 }
 
