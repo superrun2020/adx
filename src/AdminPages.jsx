@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert, Button, Card, Checkbox, Col, Collapse, DatePicker, Descriptions, Drawer, Dropdown, Empty, Form,
-  Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Statistic, Switch,
+  Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Spin, Statistic, Switch,
   Tag, Typography, message
 } from 'antd';
 import {
@@ -289,7 +289,6 @@ function Channels({ user }) {
   const columns=[{title:'渠道',dataIndex:'name'},accountColumn,domainColumn,{title:'登录邮箱',dataIndex:'email',render:v=>v||'仅内部管理'},{title:'分成比例',dataIndex:'sharePercent',render:v=>`${v}%`},{title:'API',dataIndex:'apiConfigured',render:(v,r)=>r.internalOnly?<Tag>仅内部</Tag>:<Tag color={v?'green':'orange'}>{v?'已配置':'未生成'}</Tag>},{title:'状态',dataIndex:'status',render:v=><Tag color={v==='active'?'green':'default'}>{v==='active'?'启用':'停用'}</Tag>},{title:'操作',render:(_,r)=><Space><Button type="link" onClick={()=>show(r)}>编辑</Button>{!r.internalOnly&&<><Button type="link" icon={<KeyOutlined/>} onClick={()=>resetPassword(r)}>密码</Button><Button type="link" onClick={()=>rotateSecret(r)}>API密钥</Button></>}</Space>}];
   return <Space direction="vertical" size={16} className="page-stack">
     <div className="page-heading"><div><Title level={2}>渠道管理</Title><Text type="secondary">创建渠道时选择 GAM 账号，自动关联该账号的域名、广告单元、报表和飞书汇报</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={()=>show(null)}>新建渠道</Button></div>
-    <Card><Table rowKey="id" dataSource={items} numericKeys={['sharePercent']} columns={columns} scroll={{x:1200}}/></Card>
     <Card title={<Space><FileProtectOutlined/>渠道注册与合同审核<Tag color="blue">待签约 {registrations.filter(row=>row.status==='registered').length}</Tag><Tag color="gold">待复核 {registrations.filter(row=>row.status==='signed').length}</Tag></Space>} extra={<Button icon={<ReloadOutlined/>} loading={registrationLoading} onClick={()=>void loadRegistrations()}>刷新申请</Button>}>
       <Alert type="info" showIcon style={{marginBottom:16}} message="注册资料和合同状态与渠道后台同步；平台复签后，到本页编辑渠道关联 GAM 账号，或到链接管理按网站分配归属。"/>
       <Table rowKey="id" dataSource={registrations} loading={registrationLoading} pagination={{pageSize:8,showSizeChanger:false}} scroll={{x:1050}} columns={[
@@ -302,6 +301,7 @@ function Channels({ user }) {
         {title:'操作',width:130,fixed:'right',render:(_,row)=>row.status==='registered'?<Text type="secondary">等待签署</Text>:<Button type="link" onClick={()=>setReviewingRegistration(row)}>{row.status==='signed'?'复核并签署':'查看合同'}</Button>}
       ]}/>
     </Card>
+    <Card title="现有渠道"><Table rowKey="id" dataSource={items} numericKeys={['sharePercent']} columns={columns} scroll={{x:1200}}/></Card>
     <ChannelRegistrationReview registration={reviewingRegistration} accounts={gamAccounts} user={user} onClose={()=>setReviewingRegistration(null)} onDone={()=>{setReviewingRegistration(null);void loadRegistrations();void load();void loadDomains()}}/>
     <ChannelDomainModal channel={items.find(item=>item.id===domainModalChannel?.id)||domainModalChannel} domains={domainsByChannel} issues={domainIssues} busy={domainBusy} onClose={()=>setDomainModalChannel(null)}/>
     <Drawer title={editing?'编辑渠道':'新建渠道'} open={open} onClose={()=>setOpen(false)} width={520} destroyOnClose>

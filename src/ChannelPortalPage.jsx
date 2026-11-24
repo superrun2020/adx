@@ -144,11 +144,11 @@ function ContractView({ user }) {
         </Card>
         <div className="contract-signing-layout">
         <Card className="contract-reading-card" title={<Space><FileProtectOutlined/>合作协议</Space>} extra={<Button type="text" icon={<ExpandOutlined/>} onClick={() => setReading(true)} disabled={!template}>展开阅读</Button>}>
-          <div className="contract-document-toolbar"><span>协议正文</span><span>{template?.version || '—'}</span></div>
+          <div className="contract-document-toolbar"><span>协议正文</span></div>
           <div className="contract-reading-area" tabIndex={0} aria-label="阅读合作协议">{template ? <AgreementPreview text={template.text} registration={registration} values={values}/> : <Spin/>}</div>
         </Card>
         <Card className="contract-signing-card" title="渠道方签署">
-          <p className="contract-signing-hint">核对左侧协议及主体资料后，完成以下签署信息。</p>
+          <p className="contract-signing-hint">核对上方协议及主体资料后，完成以下签署信息。</p>
           <div className="registration-grid registration-signer contract-signer-fields">
             <label>签署人<Input value={registration.contactName || ''} disabled/></label>
             <label>签署人职务<Input maxLength={150} value={values.signatureTitle} onChange={event => set('signatureTitle',event.target.value)}/></label>
@@ -158,7 +158,7 @@ function ContractView({ user }) {
             <div className="contract-email-code-row"><Input inputMode="numeric" maxLength={6} placeholder="6 位邮箱验证码" value={values.verificationCode}
               onChange={event => set('verificationCode',event.target.value.replace(/\D/g,''))}/><Button onClick={sendCode} loading={codeSending}>{codeSent?'重新发送':'发送验证码'}</Button></div>
           </div>}
-          <SignaturePad onChange={value => set('signatureData',value)}/>
+          <SignaturePad width={1200} height={320} onChange={value => set('signatureData',value)}/>
           <Checkbox checked={values.accepted} onChange={event => set('accepted',event.target.checked)} style={{marginTop:16}}>本人已核对主体资料、阅读完整协议，并确认有权代表该公司签署；同意留存签名、签署时间与审计记录。</Checkbox>
           <div className="registration-actions"><Button type="primary" size="large" block loading={submitting} onClick={sign}>签署合同并提交审核</Button></div>
           <div className="contract-signing-security"><SafetyCertificateOutlined/><span>签名与签署时间将安全留存</span></div>
@@ -185,7 +185,7 @@ function ContractView({ user }) {
           {agreement.counterSignatureData && <div className="channel-signature"><Text strong>平台签名</Text><img src={agreement.counterSignatureData} alt="平台电子签名"/></div>}
           {registration.reviewNote && <Alert type="warning" showIcon message="审核说明" description={registration.reviewNote}/>}
         </Card>
-        <Card className="contract-reading-card" title="已签署协议全文" extra={contract.status === 'approved' && agreement.counterSignatureData && <Button type="primary" href="/api/channel/contract/pdf" download>下载双方签署 PDF</Button>}><div className="contract-document-toolbar"><span>原始签署正文</span><span>{agreement.version || '—'}</span></div><div className="contract-reading-area" tabIndex={0}><ContractDocument text={agreement.contractText || '合同内容暂不可用'}/></div></Card>
+        <Card className="contract-reading-card" title="已签署协议全文" extra={contract.status === 'approved' && agreement.counterSignatureData && <Button type="primary" href="/api/channel/contract/pdf" download>下载双方签署 PDF</Button>}><div className="contract-document-toolbar"><span>原始签署正文</span></div><div className="contract-reading-area" tabIndex={0}><ContractDocument text={agreement.contractText || '合同内容暂不可用'}/></div></Card>
       </>}
     </>}
   </Space>;

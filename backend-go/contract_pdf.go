@@ -92,7 +92,7 @@ func buildSignedContractPDF(record signedContractPDF) ([]byte, error) {
 	pdf.MultiCell(0, 10, "合作协议", "", "C", false)
 	pdf.SetFont("NotoSC", "", 9)
 	pdf.SetTextColor(113, 128, 142)
-	pdf.MultiCell(0, 6, "协议版本："+record.Version+"    签约主体："+record.CompanyName, "", "C", false)
+	pdf.MultiCell(0, 6, "签约主体："+record.CompanyName, "", "C", false)
 	pdf.Ln(5)
 	for _, raw := range strings.Split(strings.ReplaceAll(record.Text, "\r\n", "\n"), "\n") {
 		line := strings.TrimSpace(raw)
@@ -183,7 +183,10 @@ func (a *app) sendContractPDF(w http.ResponseWriter, r *http.Request, registrati
 		storedHash = hex.EncodeToString(digest[:])
 	}
 	verified := sha256.Sum256(stored)
-	if hex.EncodeToString(verified[:]) != storedHash { writeError(w,500,"signed_contract_integrity_failed"); return }
+	if hex.EncodeToString(verified[:]) != storedHash {
+		writeError(w, 500, "signed_contract_integrity_failed")
+		return
+	}
 	w.Header().Set("Content-Type", "application/pdf")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=adx-contract-%d.pdf", record.RegistrationID))
 	w.Header().Set("Cache-Control", "private, no-store")

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { Button, Typography } from 'antd';
 
-export default function SignaturePad({ onChange, title = '电子手写签名' }) {
+export default function SignaturePad({ onChange, title = '电子手写签名', width = 840, height = 220 }) {
   const canvasRef = useRef(null);
   const drawing = useRef(false);
   useEffect(() => {
@@ -56,7 +56,7 @@ export default function SignaturePad({ onChange, title = '电子手写签名' })
   };
   return <div className="registration-signature">
     <div className="registration-signature-heading"><strong>{title}</strong><Button type="link" size="small" onClick={clear}>清除重签</Button></div>
-    <canvas ref={canvasRef} width={840} height={220} onPointerDown={start} onPointerMove={move} onPointerUp={finish} onPointerCancel={finish} aria-label="请在此手写签名"/>
+    <canvas ref={canvasRef} width={width} height={height} onPointerDown={start} onPointerMove={move} onPointerUp={finish} onPointerCancel={finish} aria-label="请在此手写签名"/>
     <Typography.Text type="secondary">使用鼠标、触控板或手指签名。签名图与签署时间会留存。</Typography.Text>
   </div>;
 }
