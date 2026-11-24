@@ -177,7 +177,7 @@ function ChannelRegistrationReview({ registration, accounts, user, onClose, onDo
     onOk:async()=>{const note=document.getElementById('registration-reject-note')?.value||'';await api('/api/admin/channel-registrations/'+registration.id+'/reject',{method:'POST',body:JSON.stringify({reviewNote:note})});message.success('申请已拒绝');onDone()}});
   return <Modal open={Boolean(registration)} width={960} title={registration?'注册申请 · '+registration.companyName:''} onCancel={onClose}
     footer={registration?.status==='signed'?<Space><Button onClick={onClose}>取消</Button><Button danger onClick={reject}>拒绝</Button><Button type="primary" loading={saving} onClick={approve}>复核并双方签署</Button></Space>:<Space>{registration?.status==='approved' && detail?.counterSignatureData && <Button type="primary" href={'/api/admin/channel-registrations/'+registration.id+'/pdf'} download>下载双方签署 PDF</Button>}<Button onClick={onClose}>关闭</Button></Space>}>
-    <Spin spinning={loading||saving}>{detail&&<Space direction="vertical" style={{width:'100%'}} size={14}>
+    <Spin spinning={loading||saving}>{registration&&detail&&<Space direction="vertical" style={{width:'100%'}} size={14}>
       <Alert type="info" showIcon message="渠道方已签署合同；平台复核主体资料、明确分成并签署后开通账号。网站和 GAM 账号可在运营后台另行关联。" />
       <Descriptions size="small" bordered column={{xs:1,sm:2}} items={[
         {key:'contact',label:'联系人',children:detail.contactName},{key:'email',label:'邮箱',children:detail.email},
@@ -306,7 +306,33 @@ function Channels({ user }) {
       message.success('网站分配已保存');setAssignTo(null);void loadDomains();void loadRegistrations();
     }catch(error){message.error(error.message)}finally{setAssignBusy(false)}
   };
-  const resetPassword=r=>Modal.confirm({title:`重置 ${r.name} 的登录密码`,content:<Input.Password id="channel-new-password" placeholder="至少10位"/>,onOk:async()=>{const password=document.getElementById('channel-new-password')?.value||'';await api(`/api/admin/channels/${r.id}/password`,{method:'POST',body:JSON.stringify({password})});message.success('密码已更新，旧会话已退出')}});
+  const deleteChannel=row=>Modal.confirm({
+    title:'删除渠道 '+row.name+'？',
+    content:'删除后该渠道将从列表移除，登录和 API 访问立即停用。历史报表与已签合同保留。',
+    okText:'删除渠道',okButtonProps:{danger:true},cancelText:'取消',
+    onOk:async()=>{
+      try{
+        await api('/api/admin/channels/'+row.id,{method:'DELETE'});
+        message.success('渠道已删除');await load();void loadRegistrations();void loadDomains();
+      }catch(error){
+        message.error(error.message==='channel_has_gam_accounts'?'此渠道仍关联 GAM 账号，请先将账号转移到其他渠道后删除':error.message);
+        throw error;
+      }
+    }
+  });
+  const resetPassword=row=>{
+    let password='';
+    Modal.confirm({
+      title:'重置 '+(row.email||row.name)+' 的登录密码',
+      content:<Input.Password autoComplete="new-password" placeholder="输入新密码" onChange={event=>{password=event.target.value}}/>,
+      okText:'确认重置',cancelText:'取消',
+      onOk:async()=>{
+        if(!password){message.warning('请输入新密码');throw new Error('password_required')}
+        await api('/api/admin/channels/'+row.id+'/password',{method:'POST',body:JSON.stringify({password})});
+        message.success('密码已更新，旧会话已退出');
+      }
+    });
+  };
   const rotateSecret=async r=>{const {secret}=await api(`/api/admin/channels/${r.id}/api-secret`,{method:'POST'});Modal.info({title:'新的渠道 API 密钥',width:620,content:<><Alert type="warning" showIcon message="密钥只显示这一次，请立即交付给渠道并妥善保存"/><Input.TextArea value={secret} readOnly autoSize style={{marginTop:16}}/></>});load()};
   const showDomainList=row=>setDomainModalChannel(row);
   const domainColumn={title:<Space size={4}>真实 GAM 域名<Button type="text" size="small" icon={<ReloadOutlined/>} loading={domainBusy} onClick={()=>void loadDomains()}/></Space>,width:290,
@@ -319,7 +345,7 @@ function Channels({ user }) {
   const ownerNames=new Map(items.map(row=>[Number(row.id),row.name]));
   const accountOptions=gamAccounts.map(account=>({value:Number(account.id),label:account.name+' · Network '+account.networkCode+(account.channelId?' · 当前 '+(ownerNames.get(Number(account.channelId))||'其他渠道'):''),disabled:account.status!=='active'||!Number(account.enabled)||!Number(account.reportConfigured)||Boolean(editing&&Number(account.channelId)===Number(editing.id))}));
   const accountColumn={title:'关联 GAM 账号',width:270,render:(_,row)=>{const ids=accountIdsFor(row);return ids.length?<Space wrap size={4}>{ids.map(id=><Tag key={id}>{accountNames.get(id)||('账号 '+id)}</Tag>)}</Space>:<Text type="secondary">未关联</Text>}};
-  const columns=[{title:'渠道',dataIndex:'name'},accountColumn,domainColumn,{title:'登录邮箱',dataIndex:'email',render:v=>v||'仅内部管理'},{title:'分成比例',dataIndex:'sharePercent',render:v=>`${v}%`},{title:'API',dataIndex:'apiConfigured',render:(v,r)=>r.internalOnly?<Tag>仅内部</Tag>:<Tag color={v?'green':'orange'}>{v?'已配置':'未生成'}</Tag>},{title:'状态',dataIndex:'status',render:v=><Tag color={v==='active'?'green':'default'}>{v==='active'?'启用':'停用'}</Tag>},{title:'操作',render:(_,r)=><Space><Button type="link" onClick={()=>show(r)}>编辑</Button><Button type="link" disabled={r.status!=='active'} onClick={()=>openAssignment(r)}>分配链接</Button>{!r.internalOnly&&<><Button type="link" icon={<KeyOutlined/>} onClick={()=>resetPassword(r)}>密码</Button><Button type="link" onClick={()=>rotateSecret(r)}>API密钥</Button></>}</Space>}];
+  const columns=[{title:'渠道',dataIndex:'name'},accountColumn,domainColumn,{title:'登录邮箱',dataIndex:'email',render:v=>v||'仅内部管理'},{title:'分成比例',dataIndex:'sharePercent',render:v=>`${v}%`},{title:'API',dataIndex:'apiConfigured',render:(v,r)=>r.internalOnly?<Tag>仅内部</Tag>:<Tag color={v?'green':'orange'}>{v?'已配置':'未生成'}</Tag>},{title:'状态',dataIndex:'status',render:v=><Tag color={v==='active'?'green':'default'}>{v==='active'?'启用':'停用'}</Tag>},{title:'操作',render:(_,r)=><Space><Button type="link" onClick={()=>show(r)}>编辑</Button><Button type="link" disabled={r.status!=='active'} onClick={()=>openAssignment(r)}>分配链接</Button>{!r.internalOnly&&<><Button type="link" icon={<KeyOutlined/>} onClick={()=>resetPassword(r)}>重置密码</Button><Button type="link" onClick={()=>rotateSecret(r)}>API密钥</Button></>}<Button type="link" danger onClick={()=>deleteChannel(r)}>删除</Button></Space>}];
   return <Space direction="vertical" size={16} className="page-stack">
     <div className="page-heading"><div><Title level={2}>渠道管理</Title><Text type="secondary">创建渠道时选择 GAM 账号，自动关联该账号的域名、广告单元、报表和飞书汇报</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={()=>show(null)}>新建渠道</Button></div>
     <Card title={<Space><FileProtectOutlined/>渠道注册与合同审核<Tag color="blue">待签约 {registrations.filter(row=>row.status==='registered').length}</Tag><Tag color="gold">待复核 {registrations.filter(row=>row.status==='signed').length}</Tag></Space>} extra={<Button icon={<ReloadOutlined/>} loading={registrationLoading} onClick={()=>void loadRegistrations()}>刷新申请</Button>}>
@@ -331,9 +357,11 @@ function Channels({ user }) {
         {title:'GAM 账号',dataIndex:'gamAccountCount',width:105,render:value=>Number(value||0)},
         {title:'已关联网站',dataIndex:'assignedDomains',width:260,render:(value,row)=>value||<Text type="secondary">{row.status==='approved'?'待运营分配':'签约后分配'}</Text>},
         {title:'状态',dataIndex:'status',width:115,render:value=><Tag color={value==='approved'?'green':value==='rejected'?'red':value==='registered'?'blue':'gold'}>{value==='approved'?'已开通':value==='rejected'?'已拒绝':value==='registered'?'待渠道签约':'待平台复核'}</Tag>},
-        {title:'操作',width:220,fixed:'right',render:(_,row)=>row.status==='registered'?<Text type="secondary">等待签署</Text>:<Space size={0}>
+        {title:'操作',width:360,fixed:'right',render:(_,row)=>row.status==='registered'?<Text type="secondary">等待签署</Text>:<Space size={0}>
           <Button type="link" onClick={()=>setReviewingRegistration(row)}>{row.status==='signed'?'复核并签署':'查看合同'}</Button>
           {row.status==='approved'&&row.channelId&&<Button type="link" onClick={()=>openAssignment({id:Number(row.channelId),name:row.channelName||row.companyName})}>分配链接</Button>}
+          {row.status==='approved'&&row.channelId&&<Button type="link" onClick={()=>resetPassword({id:Number(row.channelId),name:row.channelName||row.companyName,email:row.email})}>重置密码</Button>}
+          {row.status==='approved'&&row.channelId&&<Button type="link" danger onClick={()=>deleteChannel({id:Number(row.channelId),name:row.channelName||row.companyName})}>删除</Button>}
         </Space>}
       ]}/>
     </Card>

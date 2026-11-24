@@ -9,7 +9,7 @@ import (
 )
 
 func (a *app) channels(w http.ResponseWriter, r *http.Request) {
-	a.sendItems(w, "SELECT c.id,c.name,CASE WHEN c.internal_only=1 THEN '' ELSE c.email END email,c.internal_only internalOnly,c.share_percent sharePercent,c.status,c.created_at createdAt,(SELECT COUNT(*) FROM channel_domains d WHERE d.channel_id=c.id) domainCount,COALESCE((SELECT json_group_array(s.id) FROM soap_accounts s WHERE s.rest_channel_id=c.id),'[]') gamAccountIds,CASE WHEN c.api_secret_hash IS NULL THEN 0 ELSE 1 END apiConfigured FROM channels c ORDER BY c.id DESC")
+	a.sendItems(w, "SELECT c.id,c.name,CASE WHEN c.internal_only=1 THEN '' ELSE c.email END email,c.internal_only internalOnly,c.share_percent sharePercent,c.status,c.created_at createdAt,(SELECT COUNT(*) FROM channel_domains d WHERE d.channel_id=c.id) domainCount,COALESCE((SELECT json_group_array(s.id) FROM soap_accounts s WHERE s.rest_channel_id=c.id),'[]') gamAccountIds,CASE WHEN c.api_secret_hash IS NULL THEN 0 ELSE 1 END apiConfigured FROM channels c WHERE c.status<>'deleted' ORDER BY c.id DESC")
 }
 
 func (a *app) createChannel(w http.ResponseWriter, r *http.Request) {
@@ -155,7 +155,7 @@ func (a *app) updateChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_effective_date")
 		return
 	}
-	before, found := a.one("SELECT id,name,CASE WHEN internal_only=1 THEN '' ELSE email END email,internal_only internalOnly,share_percent sharePercent,status FROM channels WHERE id=?", id)
+	before, found := a.one("SELECT id,name,CASE WHEN internal_only=1 THEN '' ELSE email END email,internal_only internalOnly,share_percent sharePercent,status FROM channels WHERE id=? AND status<>'deleted'", id)
 	if !found {
 		writeError(w, 404, "channel_not_found")
 		return
@@ -177,8 +177,16 @@ func (a *app) updateChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec("UPDATE channels SET name=?,share_percent=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", name, share, status, id); err != nil {
+	result, err := tx.Exec("UPDATE channels SET name=?,share_percent=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status<>'deleted'", name, share, status, id)
+	if err != nil {
 		serverError(w, err)
+		return
+	}
+	if count, err := result.RowsAffected(); err != nil {
+		serverError(w, err)
+		return
+	} else if count == 0 {
+		writeError(w, 404, "channel_not_found")
 		return
 	}
 	if _, err = tx.Exec("UPDATE users SET name=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE channel_id=? AND role='channel'", name, status, id); err != nil {
@@ -221,9 +229,10 @@ func (a *app) resetChannelPassword(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	id, password := pathID(r), fieldString(input, "password")
-	if len(password) < 10 {
-		writeError(w, 400, "weak_password")
+	id := pathID(r)
+	password, _ := input["password"].(string)
+	if password == "" || len(password) > 72 {
+		writeError(w, 400, "invalid_password")
 		return
 	}
 	hash, err := passwordHash(password)
@@ -231,16 +240,31 @@ func (a *app) resetChannelPassword(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err)
 		return
 	}
-	changed, err := updated(a.db, "UPDATE users SET password_hash=?,updated_at=CURRENT_TIMESTAMP WHERE channel_id=? AND role='channel'", hash, id)
+	tx, err := a.db.BeginTx(r.Context(), nil)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
-	if !changed {
+	defer tx.Rollback()
+	result, err := tx.ExecContext(r.Context(), "UPDATE users SET password_hash=?,updated_at=CURRENT_TIMESTAMP WHERE channel_id=? AND role='channel' AND EXISTS(SELECT 1 FROM channels c WHERE c.id=users.channel_id AND c.status<>'deleted')", hash, id)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	if count == 0 {
 		writeError(w, 404, "channel_not_found")
 		return
 	}
-	if _, err = a.db.Exec("DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE channel_id=? AND role='channel')", id); err != nil {
+	if _, err = tx.ExecContext(r.Context(), "DELETE FROM sessions WHERE user_id IN(SELECT id FROM users WHERE channel_id=? AND role='channel')", id); err != nil {
+		serverError(w, err)
+		return
+	}
+	if err = tx.Commit(); err != nil {
 		serverError(w, err)
 		return
 	}
@@ -260,7 +284,7 @@ func (a *app) rotateChannelSecret(w http.ResponseWriter, r *http.Request) {
 		serverError(w, err)
 		return
 	}
-	changed, err := updated(a.db, "UPDATE channels SET api_secret_hash=?,api_secret_ciphertext=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", sha256Hex(secret), cipher, id)
+	changed, err := updated(a.db, "UPDATE channels SET api_secret_hash=?,api_secret_ciphertext=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status<>'deleted'", sha256Hex(secret), cipher, id)
 	if err != nil {
 		serverError(w, err)
 		return
@@ -490,5 +514,63 @@ func (a *app) resetAdminPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.audit(currentUser(r).Email, "admin.password_reset", "user", id, fieldString(target, "email"), clientIP(r))
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// Retain financial facts and signed contracts when removing a channel.
+func (a *app) deleteChannel(w http.ResponseWriter, r *http.Request) {
+	id := pathID(r)
+	if id < 1 {
+		writeError(w, 400, "invalid_channel")
+		return
+	}
+	tx, err := a.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	defer tx.Rollback()
+	var name, status string
+	if err = tx.QueryRowContext(r.Context(), "SELECT name,status FROM channels WHERE id=?", id).Scan(&name, &status); err == sql.ErrNoRows {
+		writeError(w, 404, "channel_not_found")
+		return
+	} else if err != nil {
+		serverError(w, err)
+		return
+	}
+	if status == "deleted" {
+		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
+	var accounts int
+	if err = tx.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM soap_accounts WHERE rest_channel_id=?", id).Scan(&accounts); err != nil {
+		serverError(w, err)
+		return
+	}
+	if accounts > 0 {
+		writeError(w, 409, "channel_has_gam_accounts")
+		return
+	}
+	statements := []string{
+		"UPDATE channels SET status='deleted',api_secret_hash=NULL,api_secret_ciphertext=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+		"UPDATE users SET status='disabled',updated_at=CURRENT_TIMESTAMP WHERE channel_id=? AND role='channel'",
+		"DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE channel_id=? AND role='channel')",
+		"DELETE FROM channel_contract_email_codes WHERE user_id IN (SELECT id FROM users WHERE channel_id=? AND role='channel')",
+	}
+	for _, query := range statements {
+		if _, err = tx.ExecContext(r.Context(), query, id); err != nil {
+			serverError(w, err)
+			return
+		}
+	}
+	if _, err = tx.ExecContext(r.Context(), "INSERT INTO audit_logs(actor_email,action,target_type,target_id,detail,ip) VALUES(?,'channel.delete','channel',?,?,?)", currentUser(r).Email, id, marshalText(map[string]any{"name": name, "historyRetained": true}), clientIP(r)); err != nil {
+		serverError(w, err)
+		return
+	}
+	if err = tx.Commit(); err != nil {
+		serverError(w, err)
+		return
+	}
+	a.invalidateReportCache()
 	writeJSON(w, 200, map[string]any{"ok": true})
 }

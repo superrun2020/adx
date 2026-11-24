@@ -4,6 +4,9 @@ let started = false;
 let dictionary = null;
 let fragments = null;
 const overrides = {
+  '确认重置':'Reset password','删除渠道':'Delete channel','渠道已删除':'Channel deleted','输入新密码':'Enter a new password',
+  '删除后该渠道将从列表移除，登录和 API 访问立即停用。历史报表与已签合同保留。':'The channel will be removed from the list and its sign-in and API access revoked. Historical reports and signed agreements will be retained.',
+  '此渠道仍关联 GAM 账号，请先将账号转移到其他渠道后删除':'Transfer the linked GAM accounts to another channel before deleting this channel.',
   'GAM 已确认网站':'Site verified in GAM','GAM 仅查到上级网站':'Only the parent site was found in GAM',
   '链接已保存，GAM 同步未确认':'Link saved. GAM sync could not be confirmed.',
   '同步 GAM':'Sync to GAM','保存并同步 GAM':'Save and sync to GAM',

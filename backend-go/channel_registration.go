@@ -278,7 +278,7 @@ func (a *app) channelRegistrations(w http.ResponseWriter, r *http.Request) {
 		"(SELECT COUNT(*) FROM soap_accounts s WHERE s.rest_channel_id=r.channel_id) gamAccountCount,"+
 		"COALESCE(sc.domains,'') assignedDomains "+
 		"FROM users u LEFT JOIN channel_registrations r ON r.user_id=u.id LEFT JOIN channels c ON c.id=r.channel_id LEFT JOIN site_counts sc ON sc.channelId=r.channel_id "+
-		"LEFT JOIN channel_registration_contracts co ON co.registration_id=r.id WHERE u.role='channel' AND (r.id IS NOT NULL OR u.status='pending') "+
+		"LEFT JOIN channel_registration_contracts co ON co.registration_id=r.id WHERE u.role='channel' AND COALESCE(c.status,'')<>'deleted' AND (r.id IS NOT NULL OR u.status='pending') "+
 		"ORDER BY u.id DESC LIMIT 300")
 	if err != nil {
 		writeError(w, 500, "channel_registrations_unavailable")
