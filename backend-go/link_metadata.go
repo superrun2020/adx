@@ -8,7 +8,7 @@ import (
 )
 
 func (a *app) listLinkMetadata(w http.ResponseWriter, r *http.Request) error {
-	fields := "m.network_code networkCode,m.domain,m.is_manual isManual,m.channel_id channelId"
+	fields := "m.network_code networkCode,m.domain,m.is_manual isManual,m.channel_id channelId,m.channel_assigned channelAssigned,m.adx_txt adxTxt"
 	if currentUser(r).canView("links") {
 		fields += ",m.monitor_domains_json monitorDomainsJson,COALESCE(c.name,'') channelName,m.notes"
 	}
@@ -177,6 +177,51 @@ func (a *app) updateLinkMetadata(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	a.audit(currentUser(r).Email, "gam.link_update", "link", fields.network+":"+fields.domain, "{}", clientIP(r))
+	writeJSON(w, 200, map[string]any{"ok": true})
+	return nil
+}
+
+func (a *app) assignChannelLink(w http.ResponseWriter, r *http.Request) error {
+	input, ok := bodyMap(w, r)
+	if !ok {
+		return nil
+	}
+	channelID := pathID(r)
+	if !a.exists("SELECT 1 FROM channels WHERE id=? AND status='active'", channelID) {
+		return errors.New("invalid_channel_id")
+	}
+	fields, err := a.parseLinkFields(map[string]any{"gamAccountId": input["gamAccountId"], "domain": input["domain"]})
+	if err != nil {
+		return err
+	}
+	txt := strings.TrimSpace(fieldString(input, "adxTxt"))
+	if len(txt) > 16000 {
+		return errors.New("invalid_link_txt")
+	}
+	known := a.exists("SELECT 1 FROM link_metadata WHERE network_code=? AND domain=? UNION ALL SELECT 1 FROM revenue_facts WHERE domain=? COLLATE NOCASE AND source_file LIKE ? LIMIT 1", fields.network, fields.domain, fields.domain, "gam-rest:"+fields.network+":%")
+	if !known {
+		siteName := fieldString(input, "siteName")
+		if siteName == "" {
+			return errors.New("invalid_gam_site_domain")
+		}
+		token, err := a.tokenFor(r.Context(), fields.account)
+		if err != nil {
+			return err
+		}
+		site, err := a.getGamSite(r, fields.network, token, siteName)
+		if err != nil {
+			return err
+		}
+		if site["name"] != siteName || normalizedDomain(importString(site["url"])) != fields.domain {
+			return errors.New("invalid_gam_site_domain")
+		}
+	}
+	_, err = a.db.ExecContext(r.Context(), `INSERT INTO link_metadata(network_code,domain,channel_id,channel_assigned,adx_txt,updated_by) VALUES(?,?,?,1,?,?)
+ ON CONFLICT(network_code,domain) DO UPDATE SET channel_id=excluded.channel_id,channel_assigned=1,adx_txt=excluded.adx_txt,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`, fields.network, fields.domain, channelID, txt, currentUser(r).Email)
+	if err != nil {
+		return err
+	}
+	a.audit(currentUser(r).Email, "channel.link_assigned", "channel", channelID, fields.network+":"+fields.domain, clientIP(r))
 	writeJSON(w, 200, map[string]any{"ok": true})
 	return nil
 }

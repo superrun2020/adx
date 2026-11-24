@@ -11,13 +11,14 @@ type gamChannelAssignment struct {
 }
 
 type gamDomainChannelAssignment struct {
+	Exact      bool
 	RootDomain string
 	Date       string
 	ChannelID  int64
 }
 
-func (a *app) gamDomainChannelAssignments(end string) ([]gamDomainChannelAssignment, error) {
-	rows, err := a.db.Query("SELECT root_domain,effective_from,channel_id FROM gam_domain_channel_assignments WHERE effective_from<=? ORDER BY root_domain,effective_from", end)
+func (a *app) gamDomainChannelAssignments(end string, accountID int64) ([]gamDomainChannelAssignment, error) {
+	rows, err := a.db.Query("SELECT root_domain,effective_from,channel_id,0 FROM gam_domain_channel_assignments WHERE effective_from<=? UNION ALL SELECT m.domain,'1900-01-01',m.channel_id,1 FROM link_metadata m JOIN soap_accounts s ON s.network_code=m.network_code WHERE m.channel_assigned=1 AND m.channel_id IS NOT NULL AND s.id=?", end, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -25,7 +26,7 @@ func (a *app) gamDomainChannelAssignments(end string) ([]gamDomainChannelAssignm
 	assignments := []gamDomainChannelAssignment{}
 	for rows.Next() {
 		var item gamDomainChannelAssignment
-		if err := rows.Scan(&item.RootDomain, &item.Date, &item.ChannelID); err != nil {
+		if err := rows.Scan(&item.RootDomain, &item.Date, &item.ChannelID, &item.Exact); err != nil {
 			return nil, err
 		}
 		assignments = append(assignments, item)
@@ -39,6 +40,12 @@ func channelForGamDomainDate(assignments []gamDomainChannelAssignment, date, dom
 	channelID := fallback
 	for _, item := range assignments {
 		root := strings.ToLower(item.RootDomain)
+		if item.Exact {
+			if domain == root {
+				return item.ChannelID
+			}
+			continue
+		}
 		if item.Date > date || (domain != root && !strings.HasSuffix(domain, "."+root)) {
 			continue
 		}
@@ -54,7 +61,7 @@ func (a *app) gamChannelForDomainDate(accountID, fallback int64, date, domain st
 	if err != nil {
 		return 0, err
 	}
-	assignments, err := a.gamDomainChannelAssignments(date)
+	assignments, err := a.gamDomainChannelAssignments(date, accountID)
 	if err != nil {
 		return 0, err
 	}

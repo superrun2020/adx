@@ -4,6 +4,11 @@ let started = false;
 let dictionary = null;
 let fragments = null;
 const overrides = {
+  '分配链接':'Assign website','已分配网站':'Assigned websites','网站域名':'Website domain','当前归属':'Current channel','搜索网站或账号':'Search websites or accounts',
+  '网站与 GAM 账号':'Website and GAM account','搜索域名或 GAM 账号':'Search domain or GAM account','网站广告授权 TXT':'Ad authorization TXT',
+  '保存分配':'Save assignment','网站分配已保存':'Website assignment saved','没有匹配的网站':'No matching websites','待录入':'Not entered',
+  '粘贴对应账号的 TXT，每行一条':'Paste the account’s TXT entries, one per line','渠道管理分配':'Channel assignment',
+  '保存后，所选域名在此 GAM 账号下的历史报表和回退记录对目标渠道可见。':'Saving grants the selected channel access to historical reports and rollback records for this domain on this GAM account.',
   '姓名':'Name',
   '密码（至少 10 位）':'Password (at least 10 characters)',
   '创建账号并进入合同管理':'Create account',

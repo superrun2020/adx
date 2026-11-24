@@ -14,6 +14,7 @@ import GamAdUnitCreator from './GamAdUnitCreator.jsx';
 import NumericSortableTable from './NumericSortableTable.jsx';
 import { adminPermissionOptions } from './navigation.js';
 import { reportPresetRange } from './reportDatePresets.js';
+import { catalogLinksWithManual } from './link-catalog.mjs';
 import { channelGAMDomains } from './channel-domain-catalog.mjs';
 import { sessionFetch } from './sessionFetch.js';
 import SignaturePad from './SignaturePad.jsx';
@@ -224,6 +225,11 @@ function Channels({ user }) {
   const [gamAccounts,setGamAccounts]=useState(()=>initialDomainCache?.accounts || []);
   const [domainsByChannel,setDomainsByChannel]=useState(()=>initialDomainCache?.domains || new Map());
   const [domainIssues,setDomainIssues]=useState([]),[domainBusy,setDomainBusy]=useState(true);
+  const [linkOptions,setLinkOptions]=useState([]);
+  const [assignTo,setAssignTo]=useState(null);
+  const [linkKey,setLinkKey]=useState(null);
+  const [linkTxt,setLinkTxt]=useState('');
+  const [assignBusy,setAssignBusy]=useState(false);
   const [domainModalChannel,setDomainModalChannel]=useState(null);
   const [registrations,setRegistrations]=useState([]);
   const [registrationLoading,setRegistrationLoading]=useState(false);
@@ -254,6 +260,14 @@ function Channels({ user }) {
       const publish=()=>{
         if(controller.signal.aborted)return;
         const domains=channelGAMDomains(accounts,sites,reported,metadata,assignments,domainAssignments);
+        const assignedRows=new Map([...domains].flatMap(([channel,rows])=>rows.map(row=>[row.key,channel])));
+        const bySite=new Map(metadata.map(row=>[row.networkCode+':'+row.domain,row]));
+        setLinkOptions(accounts.filter(account=>account.status==='active').flatMap(account=>
+          catalogLinksWithManual(account,sites[account.id]||[],[],reported[account.id]||[]).map(row=>({
+            ...row,owner:assignedRows.get(row.key),txt:bySite.get(row.networkCode+':'+row.domain)?.adxTxt||'',
+            label:row.domain+' · '+row.accountName+' ('+row.networkCode+')',value:row.key
+          }))
+        ));
         setDomainsByChannel(domains); setDomainIssues([...issues]);
         if(cacheKey)channelDomainCache.set(cacheKey,{accounts,sites:{...sites},reported:{...reported},metadata,assignments,domainAssignments,domains});
       };
@@ -280,6 +294,18 @@ function Channels({ user }) {
   useEffect(()=>{let active=true;const channelLoad=load();void loadRegistrations();if(cacheKey&&channelRowsCache.has(cacheKey))void loadDomains();else void channelLoad.finally(()=>{if(active)void loadDomains();});return()=>{active=false;domainRequest.current?.abort();}},[]);
   const save=async values=>{try{const payload={...values,effectiveFrom:values.effectiveFrom?.format('YYYY-MM-DD')};await api(editing?`/api/admin/channels/${editing.id}`:'/api/admin/channels',{method:editing?'PUT':'POST',body:JSON.stringify(payload)});message.success('渠道和账号归属已更新');setOpen(false);await load();void loadDomains()}catch(e){message.error(e.message)}};
   const show=item=>{setEditing(item||null);form.resetFields();form.setFieldsValue(item?{...item,gamAccountIds:accountIdsFor(item),effectiveFrom:dayjs()}:{sharePercent:80,status:'active',effectiveFrom:dayjs(),gamAccountIds:[]});setOpen(true)};
+  const selectedLink=linkOptions.find(row=>row.key===linkKey);
+  const openAssignment=channel=>{setAssignTo(channel);setLinkKey(null);setLinkTxt('');};
+  const saveAssignment=async()=>{
+    if(!selectedLink||!assignTo)return;
+    setAssignBusy(true);
+    try{
+      await api('/api/admin/channels/'+assignTo.id+'/link',{method:'PUT',body:JSON.stringify({
+        gamAccountId:selectedLink.accountId,domain:selectedLink.domain,siteName:selectedLink.siteName,adxTxt:linkTxt
+      })});
+      message.success('网站分配已保存');setAssignTo(null);void loadDomains();void loadRegistrations();
+    }catch(error){message.error(error.message)}finally{setAssignBusy(false)}
+  };
   const resetPassword=r=>Modal.confirm({title:`重置 ${r.name} 的登录密码`,content:<Input.Password id="channel-new-password" placeholder="至少10位"/>,onOk:async()=>{const password=document.getElementById('channel-new-password')?.value||'';await api(`/api/admin/channels/${r.id}/password`,{method:'POST',body:JSON.stringify({password})});message.success('密码已更新，旧会话已退出')}});
   const rotateSecret=async r=>{const {secret}=await api(`/api/admin/channels/${r.id}/api-secret`,{method:'POST'});Modal.info({title:'新的渠道 API 密钥',width:620,content:<><Alert type="warning" showIcon message="密钥只显示这一次，请立即交付给渠道并妥善保存"/><Input.TextArea value={secret} readOnly autoSize style={{marginTop:16}}/></>});load()};
   const showDomainList=row=>setDomainModalChannel(row);
@@ -293,7 +319,7 @@ function Channels({ user }) {
   const ownerNames=new Map(items.map(row=>[Number(row.id),row.name]));
   const accountOptions=gamAccounts.map(account=>({value:Number(account.id),label:account.name+' · Network '+account.networkCode+(account.channelId?' · 当前 '+(ownerNames.get(Number(account.channelId))||'其他渠道'):''),disabled:account.status!=='active'||!Number(account.enabled)||!Number(account.reportConfigured)||Boolean(editing&&Number(account.channelId)===Number(editing.id))}));
   const accountColumn={title:'关联 GAM 账号',width:270,render:(_,row)=>{const ids=accountIdsFor(row);return ids.length?<Space wrap size={4}>{ids.map(id=><Tag key={id}>{accountNames.get(id)||('账号 '+id)}</Tag>)}</Space>:<Text type="secondary">未关联</Text>}};
-  const columns=[{title:'渠道',dataIndex:'name'},accountColumn,domainColumn,{title:'登录邮箱',dataIndex:'email',render:v=>v||'仅内部管理'},{title:'分成比例',dataIndex:'sharePercent',render:v=>`${v}%`},{title:'API',dataIndex:'apiConfigured',render:(v,r)=>r.internalOnly?<Tag>仅内部</Tag>:<Tag color={v?'green':'orange'}>{v?'已配置':'未生成'}</Tag>},{title:'状态',dataIndex:'status',render:v=><Tag color={v==='active'?'green':'default'}>{v==='active'?'启用':'停用'}</Tag>},{title:'操作',render:(_,r)=><Space><Button type="link" onClick={()=>show(r)}>编辑</Button>{!r.internalOnly&&<><Button type="link" icon={<KeyOutlined/>} onClick={()=>resetPassword(r)}>密码</Button><Button type="link" onClick={()=>rotateSecret(r)}>API密钥</Button></>}</Space>}];
+  const columns=[{title:'渠道',dataIndex:'name'},accountColumn,domainColumn,{title:'登录邮箱',dataIndex:'email',render:v=>v||'仅内部管理'},{title:'分成比例',dataIndex:'sharePercent',render:v=>`${v}%`},{title:'API',dataIndex:'apiConfigured',render:(v,r)=>r.internalOnly?<Tag>仅内部</Tag>:<Tag color={v?'green':'orange'}>{v?'已配置':'未生成'}</Tag>},{title:'状态',dataIndex:'status',render:v=><Tag color={v==='active'?'green':'default'}>{v==='active'?'启用':'停用'}</Tag>},{title:'操作',render:(_,r)=><Space><Button type="link" onClick={()=>show(r)}>编辑</Button><Button type="link" disabled={r.status!=='active'} onClick={()=>openAssignment(r)}>分配链接</Button>{!r.internalOnly&&<><Button type="link" icon={<KeyOutlined/>} onClick={()=>resetPassword(r)}>密码</Button><Button type="link" onClick={()=>rotateSecret(r)}>API密钥</Button></>}</Space>}];
   return <Space direction="vertical" size={16} className="page-stack">
     <div className="page-heading"><div><Title level={2}>渠道管理</Title><Text type="secondary">创建渠道时选择 GAM 账号，自动关联该账号的域名、广告单元、报表和飞书汇报</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={()=>show(null)}>新建渠道</Button></div>
     <Card title={<Space><FileProtectOutlined/>渠道注册与合同审核<Tag color="blue">待签约 {registrations.filter(row=>row.status==='registered').length}</Tag><Tag color="gold">待复核 {registrations.filter(row=>row.status==='signed').length}</Tag></Space>} extra={<Button icon={<ReloadOutlined/>} loading={registrationLoading} onClick={()=>void loadRegistrations()}>刷新申请</Button>}>
@@ -310,6 +336,17 @@ function Channels({ user }) {
     </Card>
     <Card title="现有渠道"><Table rowKey="id" dataSource={items} numericKeys={['sharePercent']} columns={columns} scroll={{x:1200}}/></Card>
     <ChannelRegistrationReview registration={reviewingRegistration} accounts={gamAccounts} user={user} onClose={()=>setReviewingRegistration(null)} onDone={()=>{setReviewingRegistration(null);void loadRegistrations();void load();void loadDomains()}}/>
+    <Modal open={Boolean(assignTo)} title={<Space>分配链接<Tag>{assignTo?.name}</Tag></Space>} okText="保存分配"
+      onOk={saveAssignment} okButtonProps={{disabled:!selectedLink}} confirmLoading={assignBusy} onCancel={()=>{if(!assignBusy)setAssignTo(null)}}>
+      <Form layout="vertical">
+        <Form.Item label="网站与 GAM 账号"><Select showSearch optionFilterProp="label" placeholder="搜索域名或 GAM 账号"
+          value={linkKey} loading={domainBusy} options={linkOptions} onChange={(key,row)=>{setLinkKey(key);setLinkTxt(row.txt)}}/></Form.Item>
+        {selectedLink&&<Alert showIcon style={{marginBottom:16}} type={selectedLink.owner&&selectedLink.owner!==assignTo?.id?'warning':'info'}
+          message={<Space><span>当前归属</span><b>{ownerNames.get(selectedLink.owner)||'未分配'}</b></Space>}
+          description="保存后，所选域名在此 GAM 账号下的历史报表和回退记录对目标渠道可见。"/>}
+        <Form.Item label="网站广告授权 TXT"><Input.TextArea rows={4} maxLength={16000} value={linkTxt} onChange={e=>setLinkTxt(e.target.value)} placeholder="粘贴对应账号的 TXT，每行一条"/></Form.Item>
+      </Form>
+    </Modal>
     <ChannelDomainModal channel={items.find(item=>item.id===domainModalChannel?.id)||domainModalChannel} domains={domainsByChannel} issues={domainIssues} busy={domainBusy} onClose={()=>setDomainModalChannel(null)}/>
     <Drawer title={editing?'编辑渠道':'新建渠道'} open={open} onClose={()=>setOpen(false)} width={520} destroyOnClose>
       <Form form={form} layout="vertical" onFinish={save}>

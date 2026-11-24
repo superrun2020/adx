@@ -374,7 +374,7 @@ func (a *app) listRegressionEvents(w http.ResponseWriter, r *http.Request, chann
 		args = append(args, id)
 	}
 	if channelID > 0 {
-		where = append(where, channelDomainOwnerAtSQL("e.domain", "e.period_end")+"=?")
+		where = append(where, channelDomainOwnerAtSQL("e.domain", "e.period_end", "(SELECT network_code FROM soap_accounts WHERE id=e.soap_account_id)")+"=?")
 		args = append(args, channelID)
 	}
 	if domain := strings.TrimSpace(q.Get("domain")); domain != "" {
@@ -1088,7 +1088,7 @@ func (a *app) deliverRegressionAlertsAt(ctx context.Context, account map[string]
 	if today < window.End {
 		today = window.End
 	}
-	domainAssignments, err := a.gamDomainChannelAssignments(today)
+	domainAssignments, err := a.gamDomainChannelAssignments(today, accountID)
 	if err != nil {
 		log.Printf("regression_domain_assignment_failed account=%d error=%v", accountID, err)
 		return

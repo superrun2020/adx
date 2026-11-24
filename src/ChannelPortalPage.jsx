@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Button, Card, Checkbox, Descriptions, Empty, Input, Modal, Select, Space, Spin, Steps, Tag, Typography, message } from 'antd';
-import { ExpandOutlined, FileProtectOutlined, LinkOutlined, ReloadOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Checkbox, Descriptions, Empty, Input, Modal, Select, Space, Spin, Steps, Table, Tag, Typography, message } from 'antd';
+import { BarChartOutlined, HistoryOutlined, ExpandOutlined, FileProtectOutlined, LinkOutlined, ReloadOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import SignaturePad from './SignaturePad.jsx';
 import ContractDocument from './ContractDocument.jsx';
+import { viewPaths } from './navigation.js';
 import { countryOptions } from './countries.js';
 import { getLocale } from './i18n.js';
 import { sessionFetch } from './sessionFetch.js';
@@ -21,6 +22,7 @@ async function request(path, options = {}) {
 
 function AccountDomains() {
   const [items, setItems] = useState([]);
+  const [search,setSearch]=useState('');
   const [loading, setLoading] = useState(false);
   const load = async () => {
     setLoading(true);
@@ -31,13 +33,19 @@ function AccountDomains() {
   useEffect(() => { void load(); }, []);
   return <Space direction="vertical" size={16} className="page-stack">
     <div className="page-heading"><div><Title level={2}>我的链接</Title><Text type="secondary">仅显示后台已分配到本渠道的网站与对应账号 TXT</Text></div><Button icon={<ReloadOutlined/>} loading={loading} onClick={load}>刷新</Button></div>
-    {items.length ? items.map(item => <Card key={item.networkCode + ':' + item.domain} title={<Space><LinkOutlined/><span>{item.domain}</span></Space>} extra={item.accountName || item.networkCode || '账号待匹配'}>
-      <Descriptions size="small" column={{xs:1,sm:2}} items={[
-        {key:'status',label:'归属',children:<Tag color="green">已分配</Tag>},
-        {key:'assigned',label:'分配时间',children:item.assignedAt || '—'}
-      ]}/>
-      <div className="channel-txt"><Text strong>adx.txt</Text><pre>{item.adxTxt || '后台尚未录入此域名的 adx.txt 内容'}</pre></div>
-    </Card>) : <Card loading={loading}><Empty description="后台尚未分配网站"/></Card>}
+    <Card className="publisher-site-list" title={<Space><LinkOutlined/>已分配网站<Tag>{items.length}</Tag></Space>}
+      extra={<Input.Search allowClear placeholder="搜索网站或账号" value={search} onChange={e=>setSearch(e.target.value)}/>}>
+      <Table size="middle" loading={loading} rowKey={row=>row.networkCode+':'+row.domain}
+        pagination={{pageSize:12,hideOnSinglePage:true}} scroll={{x:650}}
+        locale={{emptyText:<Empty description={search?'没有匹配的网站':'后台尚未分配网站'}/>}}
+        dataSource={items.filter(row=>[row.domain,row.accountName,row.networkCode].some(v=>String(v||'').toLowerCase().includes(search.trim().toLowerCase())))}
+        columns={[
+          {title:'网站域名',dataIndex:'domain',render:value=><Text strong copyable>{value}</Text>},
+          {title:'GAM 账号',render:(_,row)=><Space direction="vertical" size={0}><Text>{row.accountName||'—'}</Text><Text type="secondary">{row.networkCode}</Text></Space>},
+          {title:'网站广告授权 TXT',dataIndex:'adxTxt',render:value=>value?<Text className="publisher-txt" copyable={{text:value}}>{value}</Text>:<Text type="secondary">待录入</Text>},
+          {title:'分配时间',dataIndex:'assignedAt'}
+        ]}/>
+    </Card>
   </Space>;
 }
 
@@ -143,6 +151,11 @@ function ContractView({ user }) {
         <Steps size="small" current={contract.status === 'registered' ? 0 : contract.status === 'approved' ? 2 : 1} status={contract.status === 'rejected' ? 'error' : undefined}
           items={[{title:'完善资料与签署'},{title:'平台复核与签署'},{title:'开通工作台',status:contract.status === 'approved' ? 'finish' : undefined}]}/>
       </section>
+      {contract.status === 'approved' && <nav className="publisher-tools">
+        <a href={viewPaths['channel-links']}><LinkOutlined/>我的链接</a>
+        <a href={viewPaths.reports}><BarChartOutlined/>数据报告</a>
+        <a href={viewPaths['channel-regression']}><HistoryOutlined/>数据回退</a>
+      </nav>}
       {contract.status === 'registered' && user?.status === 'pending' ? <>
         <Card className="contract-profile-card" title={<Space><FileProtectOutlined/>签约主体资料</Space>} extra={<Tag color="blue">签约主体</Tag>}>
           <Descriptions size="small" column={{xs:1,sm:2}} items={[

@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS gam_ad_unit_creations (
 );
 CREATE TABLE IF NOT EXISTS link_metadata (
   network_code TEXT NOT NULL, domain TEXT NOT NULL COLLATE NOCASE, is_manual INTEGER NOT NULL DEFAULT 0,
+  channel_assigned INTEGER NOT NULL DEFAULT 0, adx_txt TEXT NOT NULL DEFAULT '',
   monitor_domains_json TEXT NOT NULL DEFAULT '[]', channel_id INTEGER, notes TEXT NOT NULL DEFAULT '',
   updated_by TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY(network_code,domain), FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE SET NULL

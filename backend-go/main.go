@@ -157,6 +157,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /api/channel/regression/coverage-events", a.auth("channel", a.channelCoverageEvents))
 	mux.HandleFunc("POST /api/admin/channels", a.auth("admin", a.createChannel))
 	mux.HandleFunc("PUT /api/admin/channels/{id}", a.auth("admin", a.updateChannel))
+	mux.HandleFunc("PUT /api/admin/channels/{id}/link", a.auth("admin", gamRoute(a.assignChannelLink)))
 	mux.HandleFunc("POST /api/admin/channels/{id}/password", a.auth("admin", a.resetChannelPassword))
 	mux.HandleFunc("POST /api/admin/channels/{id}/api-secret", a.auth("admin", a.rotateChannelSecret))
 	mux.HandleFunc("GET /api/channel/api-secret", a.auth("", a.channelAPISecret))

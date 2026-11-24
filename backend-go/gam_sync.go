@@ -190,7 +190,7 @@ func (a *app) executeGam(ctx context.Context, account map[string]any, start, end
 	if err != nil {
 		return nil, err
 	}
-	domainAssignments, err := a.gamDomainChannelAssignments(end)
+	domainAssignments, err := a.gamDomainChannelAssignments(end, id)
 	if err != nil {
 		return nil, err
 	}

@@ -268,16 +268,16 @@ func (a *app) signChannelContract(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) channelRegistrations(w http.ResponseWriter, r *http.Request) {
-	items, err := queryMaps(a.db, "SELECT COALESCE(r.id,-u.id) id,u.id userId,COALESCE(r.company_name,u.company_name) companyName,"+
+	items, err := queryMaps(a.db, "WITH site_counts AS (SELECT channelId,COUNT(*) n,group_concat(domain,', ') domains FROM ("+assignedSitesSQL()+") GROUP BY channelId) SELECT COALESCE(r.id,-u.id) id,u.id userId,COALESCE(r.company_name,u.company_name) companyName,"+
 		"COALESCE(r.contact_name,u.name) contactName,COALESCE(r.registration_number,'') registrationNumber,COALESCE(r.country,'') country,"+
 		"COALESCE(r.registered_address,'') registeredAddress,u.email,COALESCE(r.phone,'') phone,COALESCE(r.status,'registered') status,"+
 		"r.channel_id channelId,COALESCE(r.review_note,'') reviewNote,COALESCE(r.created_at,u.created_at) createdAt,"+
 		"COALESCE(c.name,'') channelName,co.version contractVersion,co.signer_name signerName,co.signer_title signerTitle,"+
 		"co.signed_at signedAt,co.contract_hash contractHash,"+
-		"(SELECT COUNT(*) FROM channel_domains cd WHERE cd.channel_id=r.channel_id) assignedDomainCount,"+
+		"COALESCE(sc.n,0) assignedDomainCount,"+
 		"(SELECT COUNT(*) FROM soap_accounts s WHERE s.rest_channel_id=r.channel_id) gamAccountCount,"+
-		"COALESCE((SELECT group_concat(cd.domain,', ') FROM channel_domains cd WHERE cd.channel_id=r.channel_id),'') assignedDomains "+
-		"FROM users u LEFT JOIN channel_registrations r ON r.user_id=u.id LEFT JOIN channels c ON c.id=r.channel_id "+
+		"COALESCE(sc.domains,'') assignedDomains "+
+		"FROM users u LEFT JOIN channel_registrations r ON r.user_id=u.id LEFT JOIN channels c ON c.id=r.channel_id LEFT JOIN site_counts sc ON sc.channelId=r.channel_id "+
 		"LEFT JOIN channel_registration_contracts co ON co.registration_id=r.id WHERE u.role='channel' AND (r.id IS NOT NULL OR u.status='pending') "+
 		"ORDER BY u.id DESC LIMIT 300")
 	if err != nil {

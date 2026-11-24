@@ -5,22 +5,23 @@ import (
 	"strconv"
 )
 
-func channelDomainOwnerAtSQL(domainExpr, dateExpr string) string {
+func channelDomainOwnerAtSQL(domainExpr, dateExpr, networkExpr string) string {
 	domain := "LOWER(RTRIM(SUBSTR(" + domainExpr + ",1,INSTR(" + domainExpr + "||'/', '/')-1),'.'))"
 	return "(SELECT owner.channel_id FROM (" +
-		"SELECT m.channel_id,m.domain,3 priority,m.updated_at stamp FROM link_metadata m WHERE m.channel_id IS NOT NULL " +
-		"UNION ALL SELECT d.channel_id,d.root_domain,2 priority,d.effective_from stamp FROM gam_domain_channel_assignments d WHERE d.effective_from<=" + dateExpr + " " +
-		"UNION ALL SELECT cd.channel_id,cd.domain,1 priority,cd.created_at stamp FROM channel_domains cd" +
-		") owner WHERE " + domain + "=LOWER(owner.domain) OR " + domain + " LIKE '%.'||LOWER(owner.domain) " +
+		"SELECT m.channel_id,m.domain,3 priority,m.updated_at stamp,m.network_code network,m.channel_assigned explicit FROM link_metadata m WHERE m.channel_id IS NOT NULL " +
+		"UNION ALL SELECT d.channel_id,d.root_domain,2 priority,d.effective_from stamp,NULL network,0 explicit FROM gam_domain_channel_assignments d WHERE d.effective_from<=" + dateExpr + " " +
+		"UNION ALL SELECT cd.channel_id,cd.domain,1 priority,cd.created_at stamp,s.network_code network,0 explicit FROM channel_domains cd LEFT JOIN soap_accounts s ON s.id=cd.gam_account_id" +
+		") owner WHERE (owner.network IS NULL OR owner.network=" + networkExpr + ") AND (" + domain + "=LOWER(owner.domain) OR (owner.explicit=0 AND " + domain + " LIKE '%.'||LOWER(owner.domain))) " +
 		"ORDER BY LENGTH(owner.domain) DESC,owner.priority DESC,owner.stamp DESC LIMIT 1)"
 }
 
-func channelDomainOwnerSQL(domainExpr string) string {
-	return channelDomainOwnerAtSQL(domainExpr, "'9999-12-31'")
+func factNetworkSQL(alias string) string {
+	source := alias + ".source_file"
+	return "CASE WHEN " + source + " LIKE 'gam-rest:%' THEN substr(" + source + ",10,instr(substr(" + source + ",10)||':',':')-1) ELSE '' END"
 }
 
 func channelDomainScopeSQL(alias string, channelID int64) string {
-	return "COALESCE(" + channelDomainOwnerAtSQL(mappedDomainSQL(alias), alias+".report_date") + "," + alias + ".channel_id)=" + strconv.FormatInt(channelID, 10)
+	return "COALESCE(" + channelDomainOwnerAtSQL(mappedDomainSQL(alias), alias+".report_date", factNetworkSQL(alias)) + "," + alias + ".channel_id)=" + strconv.FormatInt(channelID, 10)
 }
 
 func channelRuleShareForSQL(alias string, channelID int64) string {
@@ -42,20 +43,24 @@ func settledRevenueForChannelSQL(alias string, channelID int64) string {
 	return "(" + alias + ".revenue*(" + upstreamShareSQL(alias) + "/100.0)*(" + channelRuleShareForSQL(alias, channelID) + "/100.0))"
 }
 
-func (a *app) channelDomains(w http.ResponseWriter, r *http.Request) {
-	channelID := currentUser(r).ChannelID.Int64
-	sql := "WITH assigned AS (" +
-		"SELECT m.domain,m.channel_id,m.network_code,s.id gam_account_id,m.updated_at assigned_at " +
+func assignedSitesSQL() string {
+	return "WITH assigned AS (" +
+		"SELECT m.domain,m.channel_id,m.network_code,s.id gam_account_id,m.updated_at assigned_at,m.adx_txt link_txt " +
 		"FROM link_metadata m LEFT JOIN soap_accounts s ON s.network_code=m.network_code " +
-		"UNION ALL SELECT d.domain,d.channel_id,COALESCE(s.network_code,''),d.gam_account_id,d.created_at " +
+		"UNION ALL SELECT d.domain,d.channel_id,COALESCE(s.network_code,''),d.gam_account_id,d.created_at,'' " +
 		"FROM channel_domains d LEFT JOIN soap_accounts s ON s.id=d.gam_account_id " +
 		"WHERE NOT EXISTS (SELECT 1 FROM link_metadata m WHERE lower(m.domain)=lower(d.domain) AND m.channel_id=d.channel_id)) " +
-		"SELECT DISTINCT a.domain,COALESCE(cd.adx_txt,'') adxTxt,a.gam_account_id gamAccountId," +
+		"SELECT DISTINCT a.channel_id channelId,a.domain,COALESCE(NULLIF(a.link_txt,''),cd.adx_txt,'') adxTxt,a.gam_account_id gamAccountId," +
 		"COALESCE(s.name,'') accountName,a.network_code networkCode,a.assigned_at assignedAt " +
-		"FROM assigned a LEFT JOIN channel_domains cd ON lower(cd.domain)=lower(a.domain) AND cd.channel_id=a.channel_id " +
-		"LEFT JOIN soap_accounts s ON s.id=a.gam_account_id WHERE a.channel_id=? AND " +
-		channelDomainOwnerSQL("a.domain") + "=? ORDER BY a.domain"
-	rows, err := queryMaps(a.db, sql, channelID, channelID)
+		"FROM assigned a LEFT JOIN channel_domains cd ON lower(cd.domain)=lower(a.domain) AND cd.channel_id=a.channel_id AND (cd.gam_account_id IS NULL OR cd.gam_account_id=a.gam_account_id) " +
+		"LEFT JOIN soap_accounts s ON s.id=a.gam_account_id WHERE a.channel_id IS NOT NULL AND " +
+		channelDomainOwnerAtSQL("a.domain", "date('now','+8 hours')", "a.network_code") + "=a.channel_id"
+}
+
+func (a *app) channelDomains(w http.ResponseWriter, r *http.Request) {
+	channelID := currentUser(r).ChannelID.Int64
+	sql := "SELECT * FROM (" + assignedSitesSQL() + ") WHERE channelId=? ORDER BY domain"
+	rows, err := queryMaps(a.db, sql, channelID)
 	if err != nil {
 		writeError(w, 500, "channel_domains_unavailable")
 		return
@@ -74,7 +79,7 @@ func (a *app) channelContract(w http.ResponseWriter, r *http.Request) {
 	}
 	var assignedDomainCount, gamAccountCount int
 	if user.ChannelID.Valid {
-		_ = a.db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM channel_domains WHERE channel_id=?", user.ChannelID.Int64).Scan(&assignedDomainCount)
+		_ = a.db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM ("+assignedSitesSQL()+") WHERE channelId=?", user.ChannelID.Int64).Scan(&assignedDomainCount)
 		_ = a.db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM soap_accounts WHERE rest_channel_id=?", user.ChannelID.Int64).Scan(&gamAccountCount)
 	}
 	contract, found := a.one("SELECT version,contract_text contractText,contract_hash contractHash,signer_name signerName,signer_title signerTitle,signed_at signedAt,signature_data signatureData,counter_signer counterSigner,counter_signer_title counterSignerTitle,counter_signature_data counterSignatureData,countersigned_at countersignedAt,signed_pdf_sha256 signedPdfSha256 FROM channel_registration_contracts WHERE registration_id=? ORDER BY id DESC LIMIT 1", intMap(registration, "id"))

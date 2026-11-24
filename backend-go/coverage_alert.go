@@ -130,7 +130,7 @@ func (a *app) listCoverageEvents(w http.ResponseWriter, r *http.Request, channel
 	where := []string{"1=1"}
 	args := []any{}
 	if channelID > 0 {
-		where = append(where, channelDomainOwnerAtSQL("e.domain", "e.report_date")+"=?")
+		where = append(where, channelDomainOwnerAtSQL("e.domain", "e.report_date", "(SELECT network_code FROM soap_accounts WHERE id=e.soap_account_id)")+"=?")
 		args = append(args, channelID)
 	}
 	if raw := q.Get("accountId"); raw != "" {
@@ -214,7 +214,7 @@ func (a *app) runCoverageAlertsAt(ctx context.Context, account map[string]any, n
 	if err != nil {
 		return err
 	}
-	assignments, err := a.gamDomainChannelAssignments(date)
+	assignments, err := a.gamDomainChannelAssignments(date, accountID)
 	if err != nil {
 		return err
 	}

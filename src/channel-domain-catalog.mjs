@@ -9,6 +9,10 @@ export function matchingDomainAssignment(domain, assignments, date = new Intl.Da
 }
 
 export function resolveChannelAssignment(account, metadata, fallback, channelNames = new Map(), domainOverride = null) {
+  if (Number(metadata?.channelAssigned) && Number(metadata.channelId)) {
+    const channelId = Number(metadata.channelId);
+    return { channelId, channelName: metadata.channelName || channelNames.get(channelId) || '', assignmentSource: '渠道管理分配' };
+  }
   if (Number(domainOverride?.channelId)) {
     const channelId = Number(domainOverride.channelId);
     return { channelId, channelName: domainOverride.channelName || channelNames.get(channelId) || '', assignmentSource: '域名专属归属' };
