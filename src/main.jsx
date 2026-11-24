@@ -49,10 +49,11 @@ const number = value => Number(value || 0).toLocaleString('zh-CN');
 
 function retryAssetLoad(error) {
   const detail = String(error?.message || error);
-  if (!/Failed to fetch dynamically imported module|Importing a module script failed|Failed to load module script|Loading chunk|ChunkLoadError|CSS_CHUNK_LOAD_FAILED/i.test(detail)) return false;
+  if (!/Failed to fetch dynamically imported module|Importing a module script failed|Failed to load module script|Loading chunk|ChunkLoadError|CSS_CHUNK_LOAD_FAILED|Unable to preload CSS/i.test(detail)) return false;
   try {
-    if (sessionStorage.getItem('adx_route_retry_once')) return false;
-    sessionStorage.setItem('adx_route_retry_once', '1');
+    const key = 'adx_route_retry_bundle';
+    if (sessionStorage.getItem(key) === import.meta.url) return false;
+    sessionStorage.setItem(key, import.meta.url);
   } catch { return false; }
   window.setTimeout(() => window.location.reload(), 300);
   return true;
