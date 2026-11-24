@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  App as AntApp, Alert, Button, Card, Col, Empty,
+  App as AntApp, Alert, Button, Card, Col, ConfigProvider, Empty,
   Layout, Menu, Popconfirm, Row, Space, Statistic, Table,
   Tag, Typography, message
 } from 'antd';
@@ -11,6 +11,10 @@ import {
   UserSwitchOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import enUS from 'antd/locale/en_US';
+import zhCN from 'antd/locale/zh_CN';
+import LanguageSwitcher from './LanguageSwitcher.jsx';
+import { getLocale } from './i18n.js';
 import { clearCachedUser, readCached, rememberRead } from './readCache.js';
 import { sessionFetch } from './sessionFetch.js';
 import { canVisit, shouldNavigateInPlace, viewForPath, viewPaths } from './navigation.js';
@@ -238,7 +242,7 @@ function Shell({ user, onLogout, initialView = 'dashboard', initialDashboard, on
     {type:'group',label:'开发能力',children:[sidebarItem('api',<ApiOutlined/>,'渠道 API')]}
   ].map(group=>({...group,children:group.children.filter(item=>canVisit(user,item.key))})).filter(group=>group.children.length),[user]);
   const body=view==='dashboard'?<Dashboard range={range} setRange={setRange} admin={admin} user={user} initialDashboard={initialDashboard}/>:view==='reports'?<Reports range={range} setRange={setRange} admin={admin} user={user}/>:view==='links'?<LinkManager key={user?.id} user={user}/>:view==='regression'?<RegressionMonitor/>:view==='channel-regression'?<RegressionMonitor channelMode/>:view==='channel-links'||view==='channel-contract'?<ChannelPortalPage view={view} user={user}/>:view==='bot-report'?<BotReport/>:<AdminPages view={view} user={user}/>;
-  return <Layout className="app-shell"><Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={238}><div className="side-brand"><img src="/google-g.png" alt="Google" />{!collapsed&&<div><b>{admin?'AdX Control':'AdX Publisher'}</b><small>{admin?'平台管理端':'渠道工作台'}</small></div>}</div><Menu theme="dark" mode="inline" selectedKeys={[view]} items={menu} onClick={({key,domEvent})=>{if(!shouldNavigateInPlace(domEvent))return;domEvent?.preventDefault();navigate(key);}}/></Sider><Layout><Header><div><Text strong>{user.name||user.email}</Text><Tag color={admin?'blue':'cyan'}>{user.isSuperAdmin?'最高管理员':admin?'平台管理员':user.status==='pending'?'待完成签约':'渠道账号'}</Tag></div><Popconfirm title="确认退出登录？" onConfirm={onLogout}><Button icon={<LogoutOutlined/>}>退出</Button></Popconfirm></Header><Content><PageErrorBoundary key={view}><React.Suspense fallback={<Card className="route-loading">正在加载页面…</Card>}>{body}</React.Suspense></PageErrorBoundary></Content></Layout></Layout>;
+  return <Layout className="app-shell"><Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={238}><div className="side-brand"><img src="/google-g.png" alt="Google" />{!collapsed&&<div><b>{admin?'AdX Control':'AdX Publisher'}</b><small>{admin?'平台管理端':'渠道工作台'}</small></div>}</div><Menu theme="dark" mode="inline" selectedKeys={[view]} items={menu} onClick={({key,domEvent})=>{if(!shouldNavigateInPlace(domEvent))return;domEvent?.preventDefault();navigate(key);}}/></Sider><Layout><Header><div><Text strong>{user.name||user.email}</Text><Tag color={admin?'blue':'cyan'}>{user.isSuperAdmin?'最高管理员':admin?'平台管理员':user.status==='pending'?'待完成签约':'渠道账号'}</Tag></div><div className="header-actions"><LanguageSwitcher/><Popconfirm title="确认退出登录？" onConfirm={onLogout}><Button icon={<LogoutOutlined/>}>退出</Button></Popconfirm></div></Header><Content><PageErrorBoundary key={view}><React.Suspense fallback={<Card className="route-loading">正在加载页面…</Card>}>{body}</React.Suspense></PageErrorBoundary></Content></Layout></Layout>;
 }
 
 function Root({ initialUser, initialView, initialDashboard, onReady }) {
@@ -247,7 +251,7 @@ function Root({ initialUser, initialView, initialDashboard, onReady }) {
     clearCachedUser(initialUser);
     window.location.reload();
   };
-  return <Shell user={initialUser} onLogout={logout} initialView={initialView} initialDashboard={initialDashboard} onReady={onReady} />;
+  return <ConfigProvider locale={getLocale() === 'en' ? enUS : zhCN}><Shell user={initialUser} onLogout={logout} initialView={initialView} initialDashboard={initialDashboard} onReady={onReady} /></ConfigProvider>;
 }
 
 let appRootInstance;

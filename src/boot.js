@@ -1,5 +1,6 @@
 import { readCached, rememberRead } from './readCache.js';
 import { sessionFetch } from './sessionFetch.js';
+import { getLocale, setLocale, startI18n } from './i18n.js';
 
 const form = document.getElementById('boot-login');
 const status = document.getElementById('boot-status');
@@ -23,9 +24,19 @@ if (portal) {
   document.getElementById('boot-brand-hint').textContent = '渠道工作台';
   document.getElementById('boot-portal-label').textContent = '渠道工作台';
   document.getElementById('boot-title').textContent = '渠道登录';
-  document.getElementById('boot-hint').textContent = '登录后可在合同管理完善资料并签署；数据由运营分配后开放。';
+  document.getElementById('boot-hint').textContent = '登录后可在合同管理完善资料并签署；审核通过并关联数据后开放。';
   registerButton.hidden = false;
 }
+const languageTrigger = document.getElementById('boot-language-trigger');
+const languageMenu = document.getElementById('boot-language-menu');
+document.getElementById('boot-language-label').textContent = getLocale() === 'en' ? 'EN' : '中文';
+languageTrigger.addEventListener('click', () => {
+  languageMenu.hidden = !languageMenu.hidden;
+  languageTrigger.setAttribute('aria-expanded', String(!languageMenu.hidden));
+});
+document.getElementById('boot-language-zh').addEventListener('click', () => setLocale('zh'));
+document.getElementById('boot-language-en').addEventListener('click', () => setLocale('en'));
+void startI18n().catch(error => console.error('language_load_failed', error));
 
 let mounted = false;
 let opening = false;

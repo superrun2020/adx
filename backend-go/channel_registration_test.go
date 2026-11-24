@@ -16,7 +16,7 @@ func TestChannelRegistrationRemainsPendingUntilReview(t *testing.T) {
 	a := testApp(t)
 	input := map[string]any{
 		"contactName": "Jordan Example", "companyName": "Example Media Ltd", "email": "jordan@example.test",
-		"password": "strong-password-123",
+		"password": "x",
 	}
 	body, err := json.Marshal(input)
 	if err != nil {
@@ -51,7 +51,7 @@ func TestChannelRegistrationRemainsPendingUntilReview(t *testing.T) {
 	}
 	adminList("registered")
 
-	loginBody, _ := json.Marshal(map[string]string{"email": "jordan@example.test", "password": "strong-password-123"})
+	loginBody, _ := json.Marshal(map[string]string{"email": "jordan@example.test", "password": "x"})
 	login := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(loginBody))
 	login.Host = "adxpub.geekforest.ai"
 	login.RemoteAddr = "192.0.2.10:1234"
@@ -79,6 +79,9 @@ func TestChannelRegistrationRemainsPendingUntilReview(t *testing.T) {
 	}
 	if dashboard := call(http.MethodGet, "/api/dashboard?start=2026-11-23&end=2026-11-23", nil); dashboard.Code != http.StatusForbidden {
 		t.Fatalf("pending account read dashboard: %d %s", dashboard.Code, dashboard.Body.String())
+	}
+	if pendingPDF := call(http.MethodGet, "/api/channel/contract/pdf", nil); pendingPDF.Code != http.StatusForbidden {
+		t.Fatalf("pending account downloaded final PDF: %d", pendingPDF.Code)
 	}
 	contract := call(http.MethodGet, "/api/channel/contract", nil)
 	if contract.Code != http.StatusOK || !bytes.Contains(contract.Body.Bytes(), []byte("\"status\":\"registered\"")) {
@@ -116,6 +119,14 @@ func TestChannelRegistrationRemainsPendingUntilReview(t *testing.T) {
 		t.Fatalf("no-domain approval status=%d body=%s", adminResponse.Code, adminResponse.Body.String())
 	}
 	adminList("approved")
+	finalPDF := call(http.MethodGet, "/api/channel/contract/pdf", nil)
+	if finalPDF.Code != http.StatusOK || !bytes.HasPrefix(finalPDF.Body.Bytes(), []byte("%PDF-")) || finalPDF.Header().Get("Content-Type") != "application/pdf" {
+		t.Fatalf("final PDF status=%d contentType=%q", finalPDF.Code, finalPDF.Header().Get("Content-Type"))
+	}
+	var savedPDF []byte
+	if err := a.db.QueryRow("SELECT signed_pdf FROM channel_registration_contracts WHERE registration_id=?", registrationID).Scan(&savedPDF); err != nil || !bytes.Equal(savedPDF, finalPDF.Body.Bytes()) {
+		t.Fatalf("final PDF not retained: %v", err)
+	}
 	var assigned int
 	if err := a.db.QueryRow("SELECT COUNT(*) FROM channel_domains WHERE channel_id=(SELECT channel_id FROM users WHERE email='jordan@example.test')").Scan(&assigned); err != nil || assigned != 0 {
 		t.Fatalf("domains must be assigned later by operations: count=%d err=%v", assigned, err)
@@ -137,6 +148,14 @@ func TestRegistrationApprovalActivatesOnlyMappedChannelAndStoresCounterSignature
 		if _, err := a.db.Exec(statement); err != nil {
 			t.Fatal(err)
 		}
+	}
+	signature := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII="
+	_, signatureHash, err := parseRegistrationSignature(signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = a.db.Exec("UPDATE channel_registration_contracts SET contract_hash=?,signature_data=?,signature_hash=? WHERE registration_id=1", contractTextHash("signed contract"), signature, signatureHash); err != nil {
+		t.Fatal(err)
 	}
 	input := map[string]any{
 		"channelName": "Example Media", "sharePercent": 80, "effectiveFrom": "2026-11-23",
@@ -173,12 +192,12 @@ func TestRegistrationApprovalActivatesOnlyMappedChannelAndStoresCounterSignature
 	if assignedChannel != channelID || txt == "" {
 		t.Fatalf("domain assignment channel=%d txt=%q", assignedChannel, txt)
 	}
-	var signer, title, signature, signatureHash string
-	if err := a.db.QueryRow("SELECT counter_signer,counter_signer_title,counter_signature_data,counter_signature_hash FROM channel_registration_contracts WHERE registration_id=1").Scan(&signer, &title, &signature, &signatureHash); err != nil {
+	var signer, title, storedSignature, storedHash string
+	if err := a.db.QueryRow("SELECT counter_signer,counter_signer_title,counter_signature_data,counter_signature_hash FROM channel_registration_contracts WHERE registration_id=1").Scan(&signer, &title, &storedSignature, &storedHash); err != nil {
 		t.Fatal(err)
 	}
-	if signer != "Platform Operator" || title != "运营负责人" || signature == "" || len(signatureHash) != 64 {
-		t.Fatalf("counter signature not stored: signer=%q title=%q signaturePresent=%t hash=%q", signer, title, signature != "", signatureHash)
+	if signer != "Platform Operator" || title != "运营负责人" || storedSignature == "" || len(storedHash) != 64 {
+		t.Fatalf("counter signature not stored: signer=%q title=%q signaturePresent=%t hash=%q", signer, title, storedSignature != "", storedHash)
 	}
 }
 

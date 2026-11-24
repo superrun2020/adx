@@ -171,6 +171,7 @@ func (a *app) auth(role string, next http.HandlerFunc) http.HandlerFunc {
 		pendingRoute := r.URL.Path == "/api/auth/me" || r.URL.Path == "/api/auth/logout" ||
 			(r.URL.Path == "/api/channel/contract" && r.Method == http.MethodGet) ||
 			(r.URL.Path == "/api/channel/contract/sign" && r.Method == http.MethodPost)
+		pendingRoute = pendingRoute || (r.URL.Path == "/api/channel/contract/email-code" && r.Method == http.MethodPost)
 		if u.Status == "pending" && !pendingRoute {
 			writeError(w, 403, "registration_pending_review")
 			return

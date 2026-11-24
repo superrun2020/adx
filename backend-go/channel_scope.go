@@ -69,7 +69,7 @@ func (a *app) channelContract(w http.ResponseWriter, r *http.Request) {
 	if !found {
 		writeJSON(w, 200, map[string]any{"ok": true, "contract": map[string]any{"status": "registered", "registration": map[string]any{
 			"companyName": user.CompanyName, "contactName": user.Name, "email": user.Email,
-		}, "assignedDomainCount": 0, "gamAccountCount": 0}})
+		}, "assignedDomainCount": 0, "gamAccountCount": 0, "emailVerificationRequired": contractEmailRequired()}})
 		return
 	}
 	var assignedDomainCount, gamAccountCount int
@@ -77,12 +77,12 @@ func (a *app) channelContract(w http.ResponseWriter, r *http.Request) {
 		_ = a.db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM channel_domains WHERE channel_id=?", user.ChannelID.Int64).Scan(&assignedDomainCount)
 		_ = a.db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM soap_accounts WHERE rest_channel_id=?", user.ChannelID.Int64).Scan(&gamAccountCount)
 	}
-	contract, found := a.one("SELECT version,contract_text contractText,contract_hash contractHash,signer_name signerName,signer_title signerTitle,signed_at signedAt,signature_data signatureData,counter_signer counterSigner,counter_signer_title counterSignerTitle,counter_signature_data counterSignatureData,countersigned_at countersignedAt FROM channel_registration_contracts WHERE registration_id=? ORDER BY id DESC LIMIT 1", intMap(registration, "id"))
+	contract, found := a.one("SELECT version,contract_text contractText,contract_hash contractHash,signer_name signerName,signer_title signerTitle,signed_at signedAt,signature_data signatureData,counter_signer counterSigner,counter_signer_title counterSignerTitle,counter_signature_data counterSignatureData,countersigned_at countersignedAt,signed_pdf_sha256 signedPdfSha256 FROM channel_registration_contracts WHERE registration_id=? ORDER BY id DESC LIMIT 1", intMap(registration, "id"))
 	if !found {
-		writeJSON(w, 200, map[string]any{"ok": true, "contract": map[string]any{"status": registration["status"], "registration": registration, "assignedDomainCount": assignedDomainCount, "gamAccountCount": gamAccountCount}})
+		writeJSON(w, 200, map[string]any{"ok": true, "contract": map[string]any{"status": registration["status"], "registration": registration, "assignedDomainCount": assignedDomainCount, "gamAccountCount": gamAccountCount, "emailVerificationRequired": contractEmailRequired()}})
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "contract": map[string]any{"status": registration["status"], "registration": registration, "agreement": contract, "assignedDomainCount": assignedDomainCount, "gamAccountCount": gamAccountCount}})
+	writeJSON(w, 200, map[string]any{"ok": true, "contract": map[string]any{"status": registration["status"], "registration": registration, "agreement": contract, "assignedDomainCount": assignedDomainCount, "gamAccountCount": gamAccountCount, "emailVerificationRequired": contractEmailRequired()}})
 }
 
 func (a *app) channelRegressionEvents(w http.ResponseWriter, r *http.Request) {

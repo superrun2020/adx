@@ -1,11 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Button, Card, Checkbox, Descriptions, Empty, Input, Space, Spin, Tag, Typography, message } from 'antd';
-import { FileProtectOutlined, LinkOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Checkbox, Descriptions, Empty, Input, Modal, Select, Space, Spin, Steps, Tag, Typography, message } from 'antd';
+import { ExpandOutlined, FileProtectOutlined, LinkOutlined, ReloadOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import SignaturePad from './SignaturePad.jsx';
+import ContractDocument from './ContractDocument.jsx';
+import { countryOptions } from './countries.js';
+import { getLocale } from './i18n.js';
 import { sessionFetch } from './sessionFetch.js';
 import './channel-registration.css';
 
 const { Title, Text } = Typography;
+const countryChoices = countryOptions(getLocale());
 
 async function request(path, options = {}) {
   const response = await sessionFetch(path, { credentials:'include', cache:'no-store', ...options,
@@ -26,14 +30,14 @@ function AccountDomains() {
   };
   useEffect(() => { void load(); }, []);
   return <Space direction="vertical" size={16} className="page-stack">
-    <div className="page-heading"><div><Title level={2}>我的链接</Title><Text type="secondary">仅显示运营后台已分配到本渠道的网站与对应账号 TXT</Text></div><Button icon={<ReloadOutlined/>} loading={loading} onClick={load}>刷新</Button></div>
+    <div className="page-heading"><div><Title level={2}>我的链接</Title><Text type="secondary">仅显示后台已分配到本渠道的网站与对应账号 TXT</Text></div><Button icon={<ReloadOutlined/>} loading={loading} onClick={load}>刷新</Button></div>
     {items.length ? items.map(item => <Card key={item.networkCode + ':' + item.domain} title={<Space><LinkOutlined/><span>{item.domain}</span></Space>} extra={item.accountName || item.networkCode || '账号待匹配'}>
       <Descriptions size="small" column={{xs:1,sm:2}} items={[
         {key:'status',label:'归属',children:<Tag color="green">已分配</Tag>},
         {key:'assigned',label:'分配时间',children:item.assignedAt || '—'}
       ]}/>
-      <div className="channel-txt"><Text strong>adx.txt</Text><pre>{item.adxTxt || '运营后台尚未录入此域名的 adx.txt 内容'}</pre></div>
-    </Card>) : <Card loading={loading}><Empty description="运营后台尚未分配网站"/></Card>}
+      <div className="channel-txt"><Text strong>adx.txt</Text><pre>{item.adxTxt || '后台尚未录入此域名的 adx.txt 内容'}</pre></div>
+    </Card>) : <Card loading={loading}><Empty description="后台尚未分配网站"/></Card>}
   </Space>;
 }
 
@@ -45,7 +49,7 @@ function AgreementPreview({ text, registration, values }) {
     ['[签约邮箱]',registration.email],['[签署人姓名]',registration.contactName],
     ['[注册编号]',values.registrationNumber],['[注册国家/地区]',values.country]
   ]) output = output.split(placeholder).join(value || placeholder);
-  return <pre className="contract-preview registration-agreement">{output}</pre>;
+  return <>{getLocale() === 'en' && <Alert type="info" showIcon style={{marginBottom:12}} message="The agreement remains in its original Chinese signing language; interface translations do not change its legal text."/>}<ContractDocument text={output}/></>;
 }
 
 function ContractView({ user }) {
@@ -53,7 +57,10 @@ function ContractView({ user }) {
   const [template, setTemplate] = useState(null);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [values, setValues] = useState({ registrationNumber:'', country:'', registeredAddress:'', phone:'', signatureTitle:'', signatureData:'', accepted:false });
+  const [codeSending, setCodeSending] = useState(false);
+  const [codeSent, setCodeSent] = useState(false);
+  const [reading, setReading] = useState(false);
+  const [values, setValues] = useState({ registrationNumber:'', country:'', registeredAddress:'', phone:'', signatureTitle:'', signatureData:'', verificationCode:'', accepted:false });
   const set = (field, value) => setValues(current => ({ ...current, [field]:value }));
   const load = async () => {
     setLoading(true);
@@ -71,11 +78,31 @@ function ContractView({ user }) {
   useEffect(() => { void load(); }, []);
   const registration = contract?.registration || {};
   const agreement = contract?.agreement || {};
+  const sendCode = async () => {
+    if (values.registrationNumber.trim().length < 2 || values.country.trim().length < 2 ||
+        values.registeredAddress.trim().length < 8 || values.phone.trim().length < 5 ||
+        values.signatureTitle.trim().length < 2 || !template?.version) {
+      message.warning('请先补全主体资料和签署职务。'); return;
+    }
+    setCodeSending(true);
+    try {
+      await request('/api/channel/contract/email-code', { method:'POST', body:JSON.stringify({
+        registrationNumber:values.registrationNumber, country:values.country,
+        registeredAddress:values.registeredAddress, phone:values.phone,
+        signatureName:registration.contactName, signatureTitle:values.signatureTitle,
+        contractVersion:template.version
+      }) });
+      setCodeSent(true);
+      message.success('验证码已发送到注册邮箱，15 分钟内有效');
+    } catch (error) { message.error('验证码发送失败：' + error.message); }
+    finally { setCodeSending(false); }
+  };
   const sign = async () => {
     if (values.registrationNumber.trim().length < 2 || values.country.trim().length < 2 ||
         values.registeredAddress.trim().length < 8 || values.phone.trim().length < 5 ||
-        values.signatureTitle.trim().length < 2 || !values.signatureData || !values.accepted || !template?.version) {
-      message.warning('请补全主体资料、签署职务、手写签名并勾选确认。');
+        values.signatureTitle.trim().length < 2 || !values.signatureData || !values.accepted || !template?.version ||
+        (contract?.emailVerificationRequired && !/^[0-9]{6}$/.test(values.verificationCode.trim()))) {
+      message.warning(contract?.emailVerificationRequired && !/^[0-9]{6}$/.test(values.verificationCode.trim()) ? '请填写邮箱收到的 6 位验证码。' : '请补全主体资料、签署职务、手写签名并勾选确认。');
       return;
     }
     setSubmitting(true);
@@ -83,22 +110,25 @@ function ContractView({ user }) {
       await request('/api/channel/contract/sign', { method:'POST', body:JSON.stringify({
         ...values, signatureName:registration.contactName, contractVersion:template.version
       }) });
-      message.success('合同已签署，等待运营复核与平台签名');
+      message.success('合同已签署并提交审核');
       await load();
     } catch (error) { message.error('签署失败：' + error.message); }
     finally { setSubmitting(false); }
   };
   const statusText = contract?.status === 'registered' ? '账号已创建，请完成合同资料和签署。' :
-    contract?.status === 'signed' ? '渠道方已签署，等待运营平台复核。' :
-    contract?.status === 'approved' ? '合同已由双方签署。' : '申请未通过，请联系运营。';
-  const allocation = '运营已关联 ' + (contract?.gamAccountCount || 0) + ' 个 GAM 账号、' + (contract?.assignedDomainCount || 0) + ' 个网站。';
-  return <Space direction="vertical" size={16} className="page-stack">
-    <div className="page-heading"><div><Title level={2}>合同管理</Title><Text type="secondary">补全签约主体资料、查看协议并签署；网站由运营后台关联。</Text></div><Button icon={<ReloadOutlined/>} loading={loading} onClick={load}>刷新</Button></div>
+    contract?.status === 'signed' ? '合同已提交审核，等待平台签署。' :
+    contract?.status === 'approved' ? '合同已由双方签署。' : '申请未通过，请联系平台。';
+  const allocation = '平台已关联 ' + (contract?.gamAccountCount || 0) + ' 个 GAM 账号、' + (contract?.assignedDomainCount || 0) + ' 个网站。';
+  return <Space direction="vertical" size={20} className="page-stack contract-workspace">
+    <div className="page-heading"><div><Title level={2}>合同管理</Title><Text type="secondary">补全签约主体资料、查看协议并签署；网站将在后台关联。</Text></div><Button icon={<ReloadOutlined/>} loading={loading} onClick={load}>刷新</Button></div>
     {loading && !contract ? <Card><Spin/></Card> : !contract ? <Card><Empty description="合同信息暂不可用"/></Card> : <>
-      <Alert showIcon type={contract.status === 'approved' ? 'success' : 'info'} message={statusText}
-        description={contract.status === 'approved' ? allocation : '完成合同签署及运营复核前，账号不开放业务数据。'}/>
+      <section className="contract-progress-panel">
+        <div className="contract-progress-heading"><span className="contract-progress-icon"><SafetyCertificateOutlined/></span><div><strong>{statusText}</strong><p>{contract.status === 'approved' ? allocation : '完成合同签署与审核后，账号和网站将在后台关联。'}</p></div></div>
+        <Steps size="small" current={contract.status === 'registered' ? 0 : contract.status === 'approved' ? 2 : 1} status={contract.status === 'rejected' ? 'error' : undefined}
+          items={[{title:'完善资料与签署'},{title:'平台复核与签署'},{title:'开通工作台',status:contract.status === 'approved' ? 'finish' : undefined}]}/>
+      </section>
       {contract.status === 'registered' && user?.status === 'pending' ? <>
-        <Card title={<Space><FileProtectOutlined/>签约主体资料</Space>}>
+        <Card className="contract-profile-card" title={<Space><FileProtectOutlined/>签约主体资料</Space>} extra={<Tag color="blue">签约主体</Tag>}>
           <Descriptions size="small" column={{xs:1,sm:2}} items={[
             {key:'company',label:'公司名称',children:registration.companyName},
             {key:'contact',label:'姓名',children:registration.contactName},
@@ -106,22 +136,38 @@ function ContractView({ user }) {
           ]}/>
           <div className="registration-grid">
             <label>公司注册编号<Input maxLength={100} value={values.registrationNumber} onChange={event => set('registrationNumber',event.target.value)}/></label>
-            <label>注册国家/地区<Input maxLength={100} value={values.country} onChange={event => set('country',event.target.value)}/></label>
+            <label>注册国家/地区<Select showSearch allowClear placeholder="选择国家或地区" value={values.country || undefined} options={countryChoices}
+              filterOption={(input,option) => option.searchText.includes(input.toLowerCase())} onChange={value => set('country',value || '')}/></label>
             <label className="registration-wide">公司注册地址<Input.TextArea rows={2} maxLength={800} value={values.registeredAddress} onChange={event => set('registeredAddress',event.target.value)}/></label>
             <label className="registration-wide">联系电话<Input maxLength={80} value={values.phone} onChange={event => set('phone',event.target.value)}/></label>
           </div>
         </Card>
-        <Card title="合作协议与渠道签署">
-          {template ? <AgreementPreview text={template.text} registration={registration} values={values}/> : <Spin/>}
-          <div className="registration-grid registration-signer">
+        <div className="contract-signing-layout">
+        <Card className="contract-reading-card" title={<Space><FileProtectOutlined/>合作协议</Space>} extra={<Button type="text" icon={<ExpandOutlined/>} onClick={() => setReading(true)} disabled={!template}>展开阅读</Button>}>
+          <div className="contract-document-toolbar"><span>协议正文</span><span>{template?.version || '—'}</span></div>
+          <div className="contract-reading-area" tabIndex={0} aria-label="阅读合作协议">{template ? <AgreementPreview text={template.text} registration={registration} values={values}/> : <Spin/>}</div>
+        </Card>
+        <Card className="contract-signing-card" title="渠道方签署">
+          <p className="contract-signing-hint">核对左侧协议及主体资料后，完成以下签署信息。</p>
+          <div className="registration-grid registration-signer contract-signer-fields">
             <label>签署人<Input value={registration.contactName || ''} disabled/></label>
             <label>签署人职务<Input maxLength={150} value={values.signatureTitle} onChange={event => set('signatureTitle',event.target.value)}/></label>
           </div>
+          {contract.emailVerificationRequired && <div className="contract-email-verification">
+            <strong>邮箱验证</strong><Text type="secondary">签署验证码将发送至 {registration.email}，15 分钟内有效。</Text>
+            <div className="contract-email-code-row"><Input inputMode="numeric" maxLength={6} placeholder="6 位邮箱验证码" value={values.verificationCode}
+              onChange={event => set('verificationCode',event.target.value.replace(/\D/g,''))}/><Button onClick={sendCode} loading={codeSending}>{codeSent?'重新发送':'发送验证码'}</Button></div>
+          </div>}
           <SignaturePad onChange={value => set('signatureData',value)}/>
           <Checkbox checked={values.accepted} onChange={event => set('accepted',event.target.checked)} style={{marginTop:16}}>本人已核对主体资料、阅读完整协议，并确认有权代表该公司签署；同意留存签名、签署时间与审计记录。</Checkbox>
-          <div className="registration-actions"><Button type="primary" loading={submitting} onClick={sign}>签署合同并提交运营复核</Button></div>
+          <div className="registration-actions"><Button type="primary" size="large" block loading={submitting} onClick={sign}>签署合同并提交审核</Button></div>
+          <div className="contract-signing-security"><SafetyCertificateOutlined/><span>签名与签署时间将安全留存</span></div>
         </Card>
-      </> : contract.status === 'registered' ? <Card><Alert type="warning" showIcon message="当前账户尚未创建合同，请联系运营补充主体资料。"/></Card> : <>
+        </div>
+        <Modal className="agreement-reading-modal" open={reading} onCancel={() => setReading(false)} width={1000} title="合作协议全文" footer={<Button onClick={() => setReading(false)}>返回签署</Button>}>
+          {template && <AgreementPreview text={template.text} registration={registration} values={values}/>}
+        </Modal>
+      </> : contract.status === 'registered' ? <Card><Alert type="warning" showIcon message="当前账户尚未创建合同，请联系平台补充主体资料。"/></Card> : <>
         <Card title={<Space><FileProtectOutlined/>签署信息</Space>} extra={<Tag color={contract.status === 'approved' ? 'green' : contract.status === 'rejected' ? 'red' : 'gold'}>{contract.status === 'approved' ? '双方已签署' : contract.status === 'rejected' ? '申请未通过' : '等待平台复核'}</Tag>}>
           <Descriptions column={{xs:1,sm:2}} items={[
             {key:'company',label:'签约主体',children:registration.companyName},
@@ -132,13 +178,14 @@ function ContractView({ user }) {
             {key:'signer',label:'渠道方签署人',children:[agreement.signerName,agreement.signerTitle].filter(Boolean).join(' · ') || '—'},
             {key:'countersigner',label:'平台签署人',children:[agreement.counterSigner,agreement.counterSignerTitle].filter(Boolean).join(' · ') || '等待复核'},
             {key:'countersigned',label:'平台签署时间',children:agreement.countersignedAt || '—'},
-            {key:'hash',label:'合同内容校验值',span:2,children:<Text code copyable>{agreement.contractHash || '—'}</Text>}
+            {key:'hash',label:'合同内容校验值',span:2,children:<Text code copyable>{agreement.contractHash || '—'}</Text>},
+            ...(agreement.signedPdfSha256 ? [{key:'pdfHash',label:'签署 PDF 校验值',span:2,children:<Text code copyable>{agreement.signedPdfSha256}</Text>}] : [])
           ]}/>
           {agreement.signatureData && <div className="channel-signature"><Text strong>渠道方签名</Text><img src={agreement.signatureData} alt="渠道方电子签名"/></div>}
           {agreement.counterSignatureData && <div className="channel-signature"><Text strong>平台签名</Text><img src={agreement.counterSignatureData} alt="平台电子签名"/></div>}
           {registration.reviewNote && <Alert type="warning" showIcon message="审核说明" description={registration.reviewNote}/>}
         </Card>
-        <Card title="已签署协议全文"><Text type="secondary">版本：{agreement.version || '—'}</Text><pre className="contract-preview">{agreement.contractText || '合同内容暂不可用'}</pre></Card>
+        <Card className="contract-reading-card" title="已签署协议全文" extra={contract.status === 'approved' && agreement.counterSignatureData && <Button type="primary" href="/api/channel/contract/pdf" download>下载双方签署 PDF</Button>}><div className="contract-document-toolbar"><span>原始签署正文</span><span>{agreement.version || '—'}</span></div><div className="contract-reading-area" tabIndex={0}><ContractDocument text={agreement.contractText || '合同内容暂不可用'}/></div></Card>
       </>}
     </>}
   </Space>;

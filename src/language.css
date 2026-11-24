@@ -1,0 +1,3 @@
+.header-actions { display: flex; align-items: center; gap: 12px; }
+.language-switcher-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+@media (max-width: 640px) { .header-actions { gap: 6px; } .language-switcher-button { padding-inline: 8px; } }

@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/mail"
 	"regexp"
@@ -40,6 +41,7 @@ type channelRegistrationInput struct {
 	SignatureName      string
 	SignatureTitle     string
 	SignatureData      string
+	VerificationCode   string
 	Accepted           bool
 	ContractVersion    string
 	Website            string
@@ -111,7 +113,7 @@ func validRegistrationInput(input channelRegistrationInput) bool {
 	email := strings.ToLower(strings.TrimSpace(input.Email))
 	address, err := mail.ParseAddress(email)
 	if err != nil || address.Address != email || input.Website != "" ||
-		len(input.Password) < 10 || len(input.Password) > 200 ||
+		len(input.Password) < 1 || len(input.Password) > 200 ||
 		len(input.ContactName) < 2 || len(input.ContactName) > 200 ||
 		len(input.CompanyName) < 2 || len(input.CompanyName) > 200 {
 		return false
@@ -203,19 +205,7 @@ func (a *app) signChannelContract(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_contract_details")
 		return
 	}
-	input.ContactName, input.CompanyName, input.Email = u.Name, u.CompanyName, u.Email
-	input.RegistrationNumber = strings.TrimSpace(input.RegistrationNumber)
-	input.Country = strings.TrimSpace(input.Country)
-	input.RegisteredAddress = strings.TrimSpace(input.RegisteredAddress)
-	input.Phone = strings.TrimSpace(input.Phone)
-	input.SignatureName = strings.TrimSpace(input.SignatureName)
-	input.SignatureTitle = strings.TrimSpace(input.SignatureTitle)
-	if len(input.CompanyName) < 2 || len(input.RegistrationNumber) < 2 || len(input.RegistrationNumber) > 100 ||
-		len(input.Country) < 2 || len(input.Country) > 100 ||
-		len(input.RegisteredAddress) < 8 || len(input.RegisteredAddress) > 800 ||
-		len(input.Phone) < 5 || len(input.Phone) > 80 ||
-		input.SignatureName != u.Name || len(input.SignatureTitle) < 2 || len(input.SignatureTitle) > 150 ||
-		!input.Accepted || input.ContractVersion != channelAgreementVersion || len(input.Domains) != 0 || input.Website != "" {
+	if !prepareContractDetails(&input, u) || !input.Accepted {
 		writeError(w, 400, "invalid_contract_details")
 		return
 	}
@@ -230,6 +220,14 @@ func (a *app) signChannelContract(w http.ResponseWriter, r *http.Request) {
 	}
 	signedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	snapshot := renderRegistrationContract(input)
+	verificationHash := ""
+	if contractEmailRequired() {
+		verificationHash, err = a.verifyChannelContractCode(u, input, snapshot)
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+	}
 	userAgent := strings.TrimSpace(r.UserAgent())
 	if len(userAgent) > 500 {
 		userAgent = userAgent[:500]
@@ -255,6 +253,18 @@ func (a *app) signChannelContract(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		serverError(w, err)
 		return
+	}
+	if verificationHash != "" {
+		result, codeErr := tx.ExecContext(r.Context(), "UPDATE channel_contract_email_codes SET consumed_at=? WHERE user_id=? AND code_hash=? AND consumed_at IS NULL AND attempts<5", signedAt, u.ID, verificationHash)
+		if codeErr != nil {
+			serverError(w, codeErr)
+			return
+		}
+		updated, _ := result.RowsAffected()
+		if updated != 1 {
+			writeError(w, 409, "contract_code_already_used")
+			return
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		serverError(w, err)
@@ -299,7 +309,7 @@ func (a *app) channelRegistrations(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) channelRegistrationDetail(w http.ResponseWriter, r *http.Request) {
 	id := pathID(r)
-	registration, found := a.one("SELECT r.*,u.email,u.status userStatus,co.version contractVersion,co.contract_text contractText,co.contract_hash contractHash,co.signer_name signerName,co.signer_title signerTitle,co.signature_data signatureData,co.signature_hash signatureHash,co.signed_at signedAt,co.signer_ip signerIP,co.user_agent userAgent,co.counter_signer counterSigner,co.countersigned_at countersignedAt FROM channel_registrations r JOIN users u ON u.id=r.user_id LEFT JOIN channel_registration_contracts co ON co.registration_id=r.id WHERE r.id=?", id)
+	registration, found := a.one("SELECT r.*,u.email,u.status userStatus,co.version contractVersion,co.contract_text contractText,co.contract_hash contractHash,co.signer_name signerName,co.signer_title signerTitle,co.signature_data signatureData,co.signature_hash signatureHash,co.signed_at signedAt,co.signer_ip signerIP,co.user_agent userAgent,co.counter_signer counterSigner,co.counter_signature_data counterSignatureData,co.countersigned_at countersignedAt,co.signed_pdf_sha256 signedPdfSha256 FROM channel_registrations r JOIN users u ON u.id=r.user_id LEFT JOIN channel_registration_contracts co ON co.registration_id=r.id WHERE r.id=?", id)
 	if !found {
 		writeError(w, 404, "channel_registration_not_found")
 		return
@@ -444,12 +454,26 @@ func (a *app) approveChannelRegistration(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	signed, signedErr := firstMap(tx, "SELECT id,version FROM channel_registration_contracts WHERE registration_id=? ORDER BY id DESC LIMIT 1", id)
+	signed, signedErr := firstMap(tx, "SELECT id,version,contract_text,contract_hash,signer_name,signer_title,signer_email,signature_data,signature_hash,signed_at FROM channel_registration_contracts WHERE registration_id=? ORDER BY id DESC LIMIT 1", id)
 	if signedErr != nil || signed == nil {
 		writeError(w, 409, "channel_registration_contract_not_signed")
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	pdfBytes, pdfErr := buildSignedContractPDF(signedContractPDF{
+		RegistrationID: id, CompanyName: fieldString(reg, "company_name"), Version: fieldString(signed, "version"),
+		Text: signed["contract_text"].(string), TextHash: fieldString(signed, "contract_hash"),
+		SignerName: fieldString(signed, "signer_name"), SignerTitle: fieldString(signed, "signer_title"), SignerEmail: fieldString(signed, "signer_email"),
+		SignatureData: fieldString(signed, "signature_data"), SignatureHash: fieldString(signed, "signature_hash"), SignedAt: fieldString(signed, "signed_at"),
+		CounterSigner: currentUser(r).Name, CounterSignerTitle: reviewerTitle, CounterSignatureData: reviewerSignature,
+		CounterSignatureHash: reviewerSignatureHash, CountersignedAt: now,
+	})
+	if pdfErr != nil {
+		log.Printf("contract_pdf_generation_failed registration=%d error=%v", id, pdfErr)
+		writeError(w, 500, "contract_pdf_generation_failed")
+		return
+	}
+	pdfDigest := sha256.Sum256(pdfBytes)
 	for _, chosen := range domains {
 		request := requested[strings.ToLower(chosen.Domain)]
 		account, _ := firstMap(tx, "SELECT network_code FROM soap_accounts WHERE id=?", chosen.AccountID)
@@ -488,8 +512,8 @@ func (a *app) approveChannelRegistration(w http.ResponseWriter, r *http.Request)
 		writeError(w, 500, "channel_registration_approval_failed")
 		return
 	}
-	if _, err = tx.ExecContext(r.Context(), "UPDATE channel_registration_contracts SET counter_signer=?,counter_signer_title=?,counter_signature_data=?,counter_signature_hash=?,countersigned_at=? WHERE id=?",
-		currentUser(r).Name, reviewerTitle, reviewerSignature, reviewerSignatureHash, now, signed["id"]); err != nil {
+	if _, err = tx.ExecContext(r.Context(), "UPDATE channel_registration_contracts SET counter_signer=?,counter_signer_title=?,counter_signature_data=?,counter_signature_hash=?,countersigned_at=?,signed_pdf=?,signed_pdf_sha256=?,signed_pdf_created_at=CURRENT_TIMESTAMP WHERE id=?",
+		currentUser(r).Name, reviewerTitle, reviewerSignature, reviewerSignatureHash, now, pdfBytes, hex.EncodeToString(pdfDigest[:]), signed["id"]); err != nil {
 		writeError(w, 500, "channel_contract_countersign_failed")
 		return
 	}

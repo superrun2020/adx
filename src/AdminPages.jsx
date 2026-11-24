@@ -174,7 +174,7 @@ function ChannelRegistrationReview({ registration, accounts, user, onClose, onDo
   const reject=()=>Modal.confirm({title:'拒绝该渠道申请',content:<Input.TextArea id="registration-reject-note" rows={3} placeholder="填写拒绝原因"/>,okText:'确认拒绝',okButtonProps:{danger:true},
     onOk:async()=>{const note=document.getElementById('registration-reject-note')?.value||'';await api('/api/admin/channel-registrations/'+registration.id+'/reject',{method:'POST',body:JSON.stringify({reviewNote:note})});message.success('申请已拒绝');onDone()}});
   return <Modal open={Boolean(registration)} width={960} title={registration?'注册申请 · '+registration.companyName:''} onCancel={onClose}
-    footer={registration?.status==='signed'?<Space><Button onClick={onClose}>取消</Button><Button danger onClick={reject}>拒绝</Button><Button type="primary" loading={saving} onClick={approve}>复核并双方签署</Button></Space>:<Button onClick={onClose}>关闭</Button>}>
+    footer={registration?.status==='signed'?<Space><Button onClick={onClose}>取消</Button><Button danger onClick={reject}>拒绝</Button><Button type="primary" loading={saving} onClick={approve}>复核并双方签署</Button></Space>:<Space>{registration?.status==='approved' && detail?.counterSignatureData && <Button type="primary" href={'/api/admin/channel-registrations/'+registration.id+'/pdf'} download>下载双方签署 PDF</Button>}<Button onClick={onClose}>关闭</Button></Space>}>
     <Spin spinning={loading||saving}>{detail&&<Space direction="vertical" style={{width:'100%'}} size={14}>
       <Alert type="info" showIcon message="渠道方已签署合同；平台复核主体资料、明确分成并签署后开通账号。网站和 GAM 账号可在运营后台另行关联。" />
       <Descriptions size="small" bordered column={{xs:1,sm:2}} items={[

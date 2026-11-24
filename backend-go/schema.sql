@@ -141,9 +141,16 @@ CREATE TABLE IF NOT EXISTS channel_registration_contracts (
   signature_data TEXT NOT NULL, signature_hash TEXT NOT NULL, signed_at TEXT NOT NULL,
   signer_ip TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '',
   counter_signer TEXT NOT NULL DEFAULT '', countersigned_at TEXT,
+  signed_pdf BLOB, signed_pdf_sha256 TEXT NOT NULL DEFAULT '', signed_pdf_created_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(registration_id,version),
   FOREIGN KEY(registration_id) REFERENCES channel_registrations(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS channel_contract_email_codes (
+  user_id INTEGER PRIMARY KEY, email TEXT NOT NULL, contract_hash TEXT NOT NULL,
+  code_hash TEXT NOT NULL, expires_at TEXT NOT NULL, sent_at TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0, consumed_at TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS channel_registration_domains (
   id INTEGER PRIMARY KEY AUTOINCREMENT, registration_id INTEGER NOT NULL,

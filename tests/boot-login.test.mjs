@@ -7,6 +7,7 @@ const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 const boot = (await readFile(new URL('../src/boot.js', import.meta.url), 'utf8'))
   .replace("import { readCached, rememberRead } from './readCache.js';", '')
   .replace("import { sessionFetch } from './sessionFetch.js';", '')
+  .replace("import { getLocale, setLocale, startI18n } from './i18n.js';", '')
   .replace("import('./main.jsx')", 'globalThis.__loadApp()')
   .replace("import('./RevenueChart.jsx')", 'globalThis.__loadChart()')
   .replace("import('./ReportExplorer.jsx')", 'globalThis.__loadSecondary()')
@@ -21,7 +22,7 @@ function start({ loginResponse, loadApp, dashboardResponse, sessionExpired = fal
     elements: { namedItem: name => ({ value: name === 'email' ? 'admin@example.test' : 'secret' }) }
   };
   const makeNode = () => ({ hidden: false, textContent: '',
-    classList: { add() {}, remove() {} }, addEventListener() {} });
+    classList: { add() {}, remove() {} }, addEventListener() {}, setAttribute() {} });
   const status = makeNode();
   const retry = { ...makeNode(), hidden: true };
   const loginPage = makeNode();
@@ -43,7 +44,7 @@ function start({ loginResponse, loadApp, dashboardResponse, sessionExpired = fal
     window: { location: { hostname: 'adx.geekforest.ai', search: '', reload() {} }, setTimeout() {} },
     sessionStorage: { getItem: key => sessionExpired && key === 'adx_session_reauth' ? '1' : null, setItem() {}, removeItem() {} },
     fetch: fetchStub, sessionFetch: fetchStub,
-    __loadApp: loadApp,
+    __loadApp: loadApp, getLocale: () => 'zh', setLocale() {}, startI18n: async () => {},
     __loadChart: async () => ({}),
     __loadSecondary: async () => ({})
   };
