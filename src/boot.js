@@ -179,7 +179,7 @@ form.addEventListener('submit', async event => {
 registerButton.addEventListener('click', async () => {
   if (registerButton.disabled) return;
   registerButton.disabled = true;
-  status.textContent = '正在打开注册表单…';
+  status.textContent = '';
   try {
     const module = await import('./ChannelRegistration.jsx');
     module.mountChannelRegistration(() => window.location.reload(), user => openApp(user));
