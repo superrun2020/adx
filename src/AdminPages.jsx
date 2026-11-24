@@ -323,7 +323,7 @@ function Channels({ user }) {
   return <Space direction="vertical" size={16} className="page-stack">
     <div className="page-heading"><div><Title level={2}>渠道管理</Title><Text type="secondary">创建渠道时选择 GAM 账号，自动关联该账号的域名、广告单元、报表和飞书汇报</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={()=>show(null)}>新建渠道</Button></div>
     <Card title={<Space><FileProtectOutlined/>渠道注册与合同审核<Tag color="blue">待签约 {registrations.filter(row=>row.status==='registered').length}</Tag><Tag color="gold">待复核 {registrations.filter(row=>row.status==='signed').length}</Tag></Space>} extra={<Button icon={<ReloadOutlined/>} loading={registrationLoading} onClick={()=>void loadRegistrations()}>刷新申请</Button>}>
-      <Alert type="info" showIcon style={{marginBottom:16}} message="注册资料和合同状态与渠道后台同步；平台复签后，到本页编辑渠道关联 GAM 账号，或到链接管理按网站分配归属。"/>
+      <Alert type="info" showIcon style={{marginBottom:16}} message="注册资料和合同状态与渠道后台同步；审核开通后，点击该行的“分配链接”选择对应网站。"/>
       <Table rowKey="id" dataSource={registrations} loading={registrationLoading} pagination={{pageSize:8,showSizeChanger:false}} scroll={{x:1050}} columns={[
         {title:'申请时间',dataIndex:'createdAt',width:180},{title:'公司主体',dataIndex:'companyName',width:190},
         {title:'联系人',dataIndex:'contactName',width:130},{title:'邮箱',dataIndex:'email',width:220},
@@ -331,7 +331,10 @@ function Channels({ user }) {
         {title:'GAM 账号',dataIndex:'gamAccountCount',width:105,render:value=>Number(value||0)},
         {title:'已关联网站',dataIndex:'assignedDomains',width:260,render:(value,row)=>value||<Text type="secondary">{row.status==='approved'?'待运营分配':'签约后分配'}</Text>},
         {title:'状态',dataIndex:'status',width:115,render:value=><Tag color={value==='approved'?'green':value==='rejected'?'red':value==='registered'?'blue':'gold'}>{value==='approved'?'已开通':value==='rejected'?'已拒绝':value==='registered'?'待渠道签约':'待平台复核'}</Tag>},
-        {title:'操作',width:130,fixed:'right',render:(_,row)=>row.status==='registered'?<Text type="secondary">等待签署</Text>:<Button type="link" onClick={()=>setReviewingRegistration(row)}>{row.status==='signed'?'复核并签署':'查看合同'}</Button>}
+        {title:'操作',width:220,fixed:'right',render:(_,row)=>row.status==='registered'?<Text type="secondary">等待签署</Text>:<Space size={0}>
+          <Button type="link" onClick={()=>setReviewingRegistration(row)}>{row.status==='signed'?'复核并签署':'查看合同'}</Button>
+          {row.status==='approved'&&row.channelId&&<Button type="link" onClick={()=>openAssignment({id:Number(row.channelId),name:row.channelName||row.companyName})}>分配链接</Button>}
+        </Space>}
       ]}/>
     </Card>
     <Card title="现有渠道"><Table rowKey="id" dataSource={items} numericKeys={['sharePercent']} columns={columns} scroll={{x:1200}}/></Card>
