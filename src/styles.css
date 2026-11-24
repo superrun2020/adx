@@ -99,3 +99,14 @@
   .report-detail-table .ant-table-thead>tr>th.numeric-sort-column{padding-right:3px!important}
   .report-detail-table .ant-table-tbody>tr>td.numeric-sort-column{padding-right:19px!important}
 }
+
+.app-shell > .ant-layout-sider {height:100vh;position:sticky;top:0}
+.app-shell > .ant-layout-sider .ant-layout-sider-children {display:flex;flex-direction:column;height:100%}
+.app-shell > .ant-layout-sider .ant-menu {flex:1;min-height:0;overflow-y:auto;overflow-x:hidden}
+.sidebar-profile {display:flex;align-items:center;gap:10px;padding:16px;flex-shrink:0;border-top:1px solid rgba(255,255,255,.1);color:#fff}
+.sidebar-profile-collapsed {justify-content:center;padding:16px 8px}
+.sidebar-avatar {flex-shrink:0;background:#385b74;color:#fff;font-weight:600}
+.sidebar-profile-text {min-width:0;line-height:1.5}
+.sidebar-profile-text strong {display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+.sidebar-profile-text span {display:block;color:#a6bdcd;font-size:12px}
+.app-shell .ant-layout-header {justify-content:flex-end}
