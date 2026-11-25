@@ -24,7 +24,7 @@ func TestDashboardRestSourceMatchesReportSource(t *testing.T) {
 		{"rest.example.test", "gam-rest:123456:window", 10},
 		{"legacy.example.test", "legacy-import", 90},
 	} {
-		if _, err := a.db.Exec("INSERT INTO revenue_facts(channel_id,report_date,domain,url,account,ad_unit,impressions,revenue,source_file) VALUES(1,'2026-11-01',?,?, 'account','unit',1,?,?)", row.domain, "https://"+row.domain, row.revenue, row.source); err != nil {
+		if _, err := a.db.Exec("INSERT INTO revenue_facts(channel_id,report_date,domain,url,account,ad_unit,requests,matched_requests,impressions,clicks,revenue,source_file) VALUES(1,'2026-11-01',?,?, 'account','unit',100,80,50,5,?,?)", row.domain, "https://"+row.domain, row.revenue, row.source); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -45,6 +45,16 @@ func TestDashboardRestSourceMatchesReportSource(t *testing.T) {
 	summary := payload["summary"].(map[string]any)
 	if summary["revenue"] != float64(10) {
 		t.Fatalf("REST dashboard revenue=%v", summary["revenue"])
+	}
+	trend := payload["trend"].([]any)
+	if len(trend) != 1 {
+		t.Fatalf("unexpected trend: %v", trend)
+	}
+	day := trend[0].(map[string]any)
+	for field, want := range map[string]float64{"requests": 100, "matched": 80, "impressions": 50, "clicks": 5, "matchRate": 80, "clickRate": 10, "ecpm": 200} {
+		if day[field] != want {
+			t.Fatalf("REST trend %s=%v, want %v", field, day[field], want)
+		}
 	}
 }
 

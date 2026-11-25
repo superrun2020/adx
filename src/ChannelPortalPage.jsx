@@ -1,3 +1,4 @@
+import useLocale from './useLocale.js';
 import React, { useEffect, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Descriptions, Empty, Input, Modal, Select, Space, Spin, Steps, Tag, Typography, message } from 'antd';
 import Table from './FitTable.jsx';
@@ -12,7 +13,7 @@ import { sessionFetch } from './sessionFetch.js';
 import './channel-registration.css';
 
 const { Title, Text } = Typography;
-const countryChoices = countryOptions(getLocale());
+
 
 async function request(path, options = {}) {
   const response = await sessionFetch(path, { credentials:'include', cache:'no-store', ...options,
@@ -64,6 +65,7 @@ function AgreementPreview({ text, registration, values }) {
 }
 
 function ContractView({ user }) {
+  const locale = useLocale();
   const [contract, setContract] = useState(null);
   const [template, setTemplate] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -168,7 +170,7 @@ function ContractView({ user }) {
           ]}/>
           <div className="registration-grid">
             <label>公司注册编号<Input maxLength={100} value={values.registrationNumber} onChange={event => set('registrationNumber',event.target.value)}/></label>
-            <label>注册国家/地区<Select showSearch allowClear placeholder="选择国家或地区" value={values.country || undefined} options={countryChoices}
+            <label>注册国家/地区<Select showSearch allowClear placeholder="选择国家或地区" value={values.country || undefined} options={countryOptions(locale)}
               filterOption={(input,option) => option.searchText.includes(input.toLowerCase())} onChange={value => set('country',value || '')}/></label>
             <label className="registration-wide">公司注册地址<Input.TextArea rows={2} maxLength={800} value={values.registeredAddress} onChange={event => set('registeredAddress',event.target.value)}/></label>
             <label className="registration-wide">联系电话<Input maxLength={80} value={values.phone} onChange={event => set('phone',event.target.value)}/></label>

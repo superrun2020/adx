@@ -1,3 +1,5 @@
+
+
 :root {
   --workspace-bg: #f4f6fa;
   --workspace-border: #e4e9f1;
@@ -746,4 +748,19 @@ body {
   .app-shell .contract-signing-card .registration-signature {padding:14px}
   .app-shell .contract-signing-card .registration-signature canvas {min-height:180px}
   .contract-party-signatures {grid-template-columns:1fr}
+}
+.app-shell > .ant-layout-sider .ant-menu {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.app-shell > .ant-layout-sider .ant-menu::-webkit-scrollbar { display:none; width:0; height:0 }
+.app-shell .ant-alert-success { background:#f0f8f4; border-color:#d5e9de; color:#245b48 }
+.app-shell .ant-alert-success .ant-alert-icon { color:#268064 }
+.app-shell .ant-alert-success .ant-alert-message { color:#245b48 }
+.app-shell .ant-alert-success .ant-alert-description { color:#527264 }
+@media (max-height:900px) {
+  .app-shell .side-brand { height:68px; padding-block:12px }
+  .app-shell .ant-menu-dark .ant-menu-item-group-title { padding:12px 24px 5px }
+  .app-shell .ant-menu-dark .ant-menu-item { height:36px; line-height:36px; margin-block:2px }
+  .app-shell .sidebar-profile { margin-top:6px; padding-block:10px }
 }

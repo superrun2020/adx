@@ -134,12 +134,17 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 			factor = settledRevenueForChannelSQL("revenue_facts", scope)
 		}
 	}
-	trend, err := queryMaps(a.db, "SELECT report_date date,ROUND(SUM("+factor+"),6) revenue FROM "+source+" WHERE "+where+" GROUP BY report_date ORDER BY report_date", args...)
+	trend, err := queryMaps(a.db, "SELECT report_date date,ROUND(SUM("+factor+"),6) revenue,SUM(requests) requests,SUM(matched_requests) matched,SUM(impressions) impressions,SUM(clicks) clicks FROM "+source+" WHERE "+where+" GROUP BY report_date ORDER BY report_date", args...)
 	if err != nil {
 		a.dashboardFailure(w, err)
 		return
 	}
 	trendMS := time.Since(started) - sumMS
+	for _, row := range trend {
+		row["matchRate"] = ratio(numberValue(row["matched"])*100, numberValue(row["requests"]))
+		row["clickRate"] = ratio(numberValue(row["clicks"])*100, numberValue(row["impressions"]))
+		row["ecpm"] = ratio(numberValue(row["revenue"])*1000, numberValue(row["impressions"]))
+	}
 	domain := mappedDomainSQL("revenue_facts")
 	if ready {
 		domain = "domain"

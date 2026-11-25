@@ -1,8 +1,9 @@
+import useLocale from './useLocale.js';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   App as AntApp, Alert, Avatar, Button, Card, Col, ConfigProvider, Empty,
-  Layout, Menu, Popconfirm, Row, Space, Statistic, Tag, Typography, message
+  Layout, Menu, Popconfirm, Row, Select, Space, Statistic, Tag, Typography, message
 } from 'antd';
 import Table from './FitTable.jsx';
 import {
@@ -155,6 +156,25 @@ function DashboardTopLinks({ user, refreshKey }) {
   </Space>;
 }
 
+function DashboardCharts({ data, admin }) {
+  const [traffic, setTraffic] = useState('impressions');
+  const [quality, setQuality] = useState('matchRate');
+  const locale = useLocale();
+  const trafficOptions = [{value:'requests',label:'请求量'}, {value:'impressions',label:'展示量'}, {value:'clicks',label:'点击量'}];
+  const qualityOptions = [{value:'matchRate',label:'匹配率'}, {value:'clickRate',label:'点击率'}, {value:'ecpm',label:'eCPM'}];
+  const labelFor = (options, key) => options.find(option => option.value === key)?.label;
+  const formatCount = value => Number(value).toLocaleString(locale === 'en' ? 'en-US' : 'zh-CN', {maximumFractionDigits:0});
+  const formatQuality = value => quality === 'ecpm' ? money(value) : Number(value).toFixed(2) + '%';
+  return <>
+    <Card title="所选区间每日收益趋势" extra={data?.lastSync ? '最近同步 ' + data.lastSync : '尚未同步'}><div className="chart"><RevenueChart data={data?.trend || []} formatMoney={money} label={admin ? '原始流水' : '渠道结算收入'} color="#3159b8"/></div></Card>
+    <Row gutter={[16,16]}>
+      <Col xs={24} xl={12}><Card title="每日流量趋势" extra={<Select aria-label="流量指标" value={traffic} onChange={setTraffic} options={trafficOptions} style={{minWidth:115}}/>}><div className="chart"><RevenueChart data={data?.trend || []} metric={traffic} label={labelFor(trafficOptions, traffic)} formatMoney={formatCount} color="#358c9d"/></div></Card></Col>
+      <Col xs={24} xl={12}><Card title="每日投放质量趋势" extra={<Select aria-label="质量指标" value={quality} onChange={setQuality} options={qualityOptions} style={{minWidth:115}}/>}><div className="chart"><RevenueChart data={data?.trend || []} metric={quality} label={labelFor(qualityOptions, quality)} formatMoney={formatQuality} color="#8065b8"/></div></Card></Col>
+    </Row>
+    <Text type="secondary">图表跟随顶部日期筛选；匹配率＝匹配请求 ÷ 请求量，点击率＝点击量 ÷ 展示量。eCPM 按当前可见收入计算，每千次展示的收入以 USD 计。缺失日期不补零；当天数据尚未完整。</Text>
+  </>;
+}
+
 function Dashboard({ range, setRange, admin, user, initialDashboard }) {
   const rangeKey = range[0].format('YYYY-MM-DD') + ':' + range[1].format('YYYY-MM-DD');
   const path = '/api/dashboard?start=' + range[0].format('YYYY-MM-DD') + '&end=' + range[1].format('YYYY-MM-DD') + '&source=rest';
@@ -200,7 +220,7 @@ function Dashboard({ range, setRange, admin, user, initialDashboard }) {
     <MetricCards summary={currentData?.summary} admin={admin} />
     {admin && <Text type="secondary">对账链路：原始流水 → 上游应结算 → 平台留存（上游应结算减渠道结算）→ 渠道结算。结算金额按配置计算，不代表实际到账。</Text>}
     <DashboardTopLinks user={user} refreshKey={highlightRefresh}/>
-    <Card title="所选区间每日收益趋势" extra={currentData?.lastSync ? '最近同步 ' + currentData.lastSync : '尚未同步'}><div className="chart"><PageErrorBoundary><RevenueChart data={currentData?.trend || []} formatMoney={money}/></PageErrorBoundary></div></Card>
+    <PageErrorBoundary><DashboardCharts data={currentData} admin={admin}/></PageErrorBoundary>
   </Space>;
 }
 
@@ -252,12 +272,13 @@ function Shell({ user, onLogout, initialView = 'dashboard', initialDashboard, on
 }
 
 function Root({ initialUser, initialView, initialDashboard, onReady }) {
+  const locale = useLocale();
   const logout = async () => {
     await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
     clearCachedUser(initialUser);
     window.location.reload();
   };
-  return <ConfigProvider theme={enterpriseTheme} locale={getLocale() === 'en' ? enUS : zhCN}><Shell user={initialUser} onLogout={logout} initialView={initialView} initialDashboard={initialDashboard} onReady={onReady} /></ConfigProvider>;
+  return <ConfigProvider theme={enterpriseTheme} locale={locale === 'en' ? enUS : zhCN}><Shell user={initialUser} onLogout={logout} initialView={initialView} initialDashboard={initialDashboard} onReady={onReady} /></ConfigProvider>;
 }
 
 let appRootInstance;

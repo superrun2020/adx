@@ -3,7 +3,15 @@ const chinese = /[\u3400-\u9fff]/;
 let started = false;
 let dictionary = null;
 let fragments = null;
+let observer;
+let loading;
+let activeLocale;
+const originals = new WeakMap();
 const overrides = {
+  '请求量':'Requests','点击量':'Clicks',
+  '每日流量趋势':'Daily traffic trend','每日投放质量趋势':'Daily delivery quality trend',
+  '流量指标':'Traffic metric','质量指标':'Quality metric',
+  '图表跟随顶部日期筛选；匹配率＝匹配请求 ÷ 请求量，点击率＝点击量 ÷ 展示量。eCPM 按当前可见收入计算，每千次展示的收入以 USD 计。缺失日期不补零；当天数据尚未完整。':'Charts follow the selected date range. Match rate = matched requests / requests; CTR = clicks / impressions. eCPM uses the revenue visible to your account, in USD per thousand impressions. Missing dates are not filled with zero; today is incomplete.',
   '授权代表手写签名':'Authorized representative signature','待签署':'Awaiting signature',
   '运营工作台':'Operations workspace','渠道主体 / 联系方式':'Publisher / contact',
   '渠道 / 联系方式':'Channel / contact','账号 / 渠道':'Account / channel','统计日期':'Reporting date',
@@ -43,14 +51,15 @@ export function getLocale() {
   catch { return 'zh'; }
 }
 
-export function setLocale(locale) {
+export async function setLocale(locale) {
   if (locale !== 'zh' && locale !== 'en') return;
   try { localStorage.setItem(storageKey, locale); } catch { /* Storage may be unavailable. */ }
-  window.location.reload();
+  await startI18n();
+  window.dispatchEvent(new Event('adx:locale'));
 }
 
 function translate(value) {
-  if (!dictionary || !chinese.test(value)) return value;
+  if (activeLocale !== 'en' || !dictionary || !chinese.test(value)) return value;
   if (dictionary[value]) return dictionary[value];
   const trimmed = value.trim();
   if (dictionary[trimmed]) return value.replace(trimmed, dictionary[trimmed]);
@@ -64,7 +73,11 @@ function excluded(element) {
 function translateNode(node) {
   if (node.nodeType === Node.TEXT_NODE) {
     if (excluded(node.parentElement)) return;
-    const translated = translate(node.nodeValue || '');
+    const value = node.nodeValue || '';
+    const previous = originals.get(node);
+    const source = previous?.rendered === value ? previous.source : value;
+    const translated = translate(source);
+    originals.set(node, { source, rendered:translated });
     if (translated !== node.nodeValue) node.nodeValue = translated;
     return;
   }
@@ -72,7 +85,12 @@ function translateNode(node) {
   for (const attribute of ['placeholder', 'title', 'aria-label']) {
     const value = node.getAttribute(attribute);
     if (value) {
-      const translated = translate(value);
+      const values = originals.get(node) || {};
+      const previous = values[attribute];
+      const source = previous?.rendered === value ? previous.source : value;
+      const translated = translate(source);
+      values[attribute] = { source, rendered:translated };
+      originals.set(node, values);
       if (translated !== value) node.setAttribute(attribute, translated);
     }
   }
@@ -80,14 +98,29 @@ function translateNode(node) {
 }
 
 export async function startI18n() {
-  document.documentElement.lang = getLocale() === 'en' ? 'en' : 'zh-CN';
-  if (started || getLocale() !== 'en') return;
+  if (getLocale() === 'en' && !dictionary) {
+    loading ||= import('./locales/en.js');
+    const { default: english } = await loading;
+    dictionary = { ...english, ...overrides };
+    const escapeRegex = value => value.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&');
+    fragments = new RegExp(Object.keys(dictionary).filter(key => chinese.test(key))
+      .sort((a,b) => b.length - a.length).map(escapeRegex).join('|'), 'g');
+  }
+  activeLocale = getLocale();
+  document.documentElement.lang = activeLocale === 'en' ? 'en' : 'zh-CN';
+  if (observer) {
+    for (const record of observer.takeRecords()) {
+      if (record.type === 'childList') for (const node of record.addedNodes) translateNode(node);
+      else translateNode(record.target);
+    }
+  }
+  translateNode(document.body);
+  document.getElementById('boot-language-label')?.replaceChildren(activeLocale === 'en' ? 'EN' : '中文');
+  const menu = document.getElementById('boot-language-menu');
+  if (menu) menu.hidden = true;
+  document.title = activeLocale === 'en' ? 'AdX Channel Management' : 'AdX 渠道管理';
+  if (started) return;
   started = true;
-  const { default: english } = await import('./locales/en.js');
-  dictionary = { ...english, ...overrides };
-  const escapeRegex = value => value.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&');
-  fragments = new RegExp(Object.keys(dictionary).filter(key => chinese.test(key))
-    .sort((a,b) => b.length - a.length).map(escapeRegex).join('|'), 'g');
   const pending = new Set();
   let scheduled = false;
   const flush = () => {
@@ -95,7 +128,7 @@ export async function startI18n() {
     for (const node of pending) translateNode(node);
     pending.clear();
   };
-  const observer = new MutationObserver(records => {
+  observer = new MutationObserver(records => {
     for (const record of records) {
       if (record.type === 'childList') for (const node of record.addedNodes) pending.add(node);
       else pending.add(record.target);
@@ -103,6 +136,5 @@ export async function startI18n() {
     if (!scheduled && pending.size) { scheduled = true; queueMicrotask(flush); }
   });
   observer.observe(document.documentElement, { subtree:true, childList:true, characterData:true, attributes:true, attributeFilter:['placeholder','title','aria-label'] });
-  translateNode(document.body);
-  document.title = 'AdX Channel Management';
+
 }

@@ -3,6 +3,8 @@ export const enterpriseTheme = {
     colorPrimary: '#3159b8',
     colorInfo: '#3159b8',
     colorSuccess: '#268064',
+    colorSuccessBg: '#f0f8f4',
+    colorSuccessBorder: '#d5e9de',
     colorWarning: '#b57c20',
     colorError: '#c94b50',
     colorText: '#1c293c',

@@ -1,3 +1,4 @@
+import useLocale from './useLocale.js';
 import React, { useState } from 'react';
 import { Alert, Button, ConfigProvider, Input, Typography } from 'antd';
 import enUS from 'antd/locale/en_US';
@@ -64,8 +65,12 @@ export default function ChannelRegistration({ onBack, onRegistered }) {
   </section></main>;
 }
 
+function RegistrationRoot(props) {
+  const locale = useLocale();
+  return <ConfigProvider theme={enterpriseTheme} locale={locale === 'en' ? enUS : zhCN}><ChannelRegistration {...props}/></ConfigProvider>;
+}
 export function mountChannelRegistration(onBack, onRegistered) {
   const root = createRoot(document.getElementById('root'));
-  root.render(<ConfigProvider theme={enterpriseTheme} locale={getLocale() === 'en' ? enUS : zhCN}><ChannelRegistration onBack={onBack} onRegistered={onRegistered}/></ConfigProvider>);
+  root.render(<RegistrationRoot onBack={onBack} onRegistered={onRegistered}/>);
   return root;
 }
