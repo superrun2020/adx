@@ -342,7 +342,7 @@ func (a *app) deletePendingChannelRegistration(w http.ResponseWriter, r *http.Re
 
 func (a *app) channelRegistrationDetail(w http.ResponseWriter, r *http.Request) {
 	id := pathID(r)
-	registration, found := a.one("SELECT r.*,u.email,u.status userStatus,co.version contractVersion,co.contract_text contractText,co.contract_hash contractHash,co.signer_name signerName,co.signer_title signerTitle,co.signature_data signatureData,co.signature_hash signatureHash,co.signed_at signedAt,co.signer_ip signerIP,co.user_agent userAgent,co.counter_signer counterSigner,co.counter_signature_data counterSignatureData,co.countersigned_at countersignedAt,co.signed_pdf_sha256 signedPdfSha256 FROM channel_registrations r JOIN users u ON u.id=r.user_id LEFT JOIN channel_registration_contracts co ON co.registration_id=r.id WHERE r.id=?", id)
+	registration, found := a.one("SELECT r.*,u.email,u.status userStatus,co.version contractVersion,co.contract_text contractText,co.contract_hash contractHash,co.signer_name signerName,co.signer_title signerTitle,co.signature_data signatureData,co.signature_hash signatureHash,co.signed_at signedAt,co.signer_ip signerIP,co.user_agent userAgent,co.counter_signer counterSigner,co.counter_signature_data counterSignatureData,co.countersigned_at countersignedAt,co.signed_pdf_sha256 signedPdfSha256 FROM channel_registrations r JOIN users u ON u.id=r.user_id LEFT JOIN channel_registration_contracts co ON co.registration_id=r.id WHERE r.id=? ORDER BY co.id DESC LIMIT 1", id)
 	if !found {
 		writeError(w, 404, "channel_registration_not_found")
 		return

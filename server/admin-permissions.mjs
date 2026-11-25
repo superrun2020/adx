@@ -8,7 +8,7 @@ export function parseSidebarPermissions(value) {
 }
 
 export function sidebarPermissionsFor(user) {
-  if (user.role !== 'admin') return ['dashboard', 'reports', 'api'];
+  if (user.role !== 'admin') return user.status === 'pending' ? ['channel-contract'] : ['dashboard', 'reports', 'channel-links', 'channel-contract', 'channel-regression'];
   if (user.is_super_admin || user.isSuperAdmin || user.sidebar_permissions == null) return [...adminSidebarViews];
   try { return parseSidebarPermissions(JSON.parse(user.sidebar_permissions)); }
   catch { return []; }

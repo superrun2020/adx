@@ -17,7 +17,7 @@ export const viewPaths = Object.freeze({
 });
 
 const pathViews = new Map(Object.entries(viewPaths).map(([view, path]) => [path, view]));
-const adminOnlyViews = new Set(['gam', 'links', 'regression', 'bot-report', 'channels', 'settlement', 'ad-units', 'admins', 'report-keys']);
+const channelViews = new Set(['dashboard', 'reports', 'channel-links', 'channel-contract', 'channel-regression']);
 
 export const adminPermissionOptions = Object.freeze([
   { value: 'dashboard', label: '经营总览' }, { value: 'gam', label: '账号管理' },
@@ -31,7 +31,8 @@ export const adminPermissionOptions = Object.freeze([
 export function canVisit(userOrRole, view) {
   const user = typeof userOrRole === 'string' ? { role: userOrRole } : userOrRole || {};
   if (user.role === 'channel' && user.status === 'pending') return view === 'channel-contract';
-  if (user.role !== 'admin') return view !== 'api' && !adminOnlyViews.has(view) && (!view.startsWith('channel-') || ['channel-links','channel-contract','channel-regression'].includes(view));
+  if (user.role !== 'admin') return user.role === 'channel' && channelViews.has(view);
+  if (!Object.hasOwn(viewPaths, view) || view.startsWith('channel-')) return false;
   if (user.isSuperAdmin || userOrRole === 'admin') return true;
   if (view === 'admins') return false;
   return !Array.isArray(user.sidebarPermissions) || user.sidebarPermissions.includes(view);

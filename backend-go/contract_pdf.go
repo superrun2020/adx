@@ -160,10 +160,11 @@ func buildSignedContractPDF(record signedContractPDF) ([]byte, error) {
 
 func (a *app) sendContractPDF(w http.ResponseWriter, r *http.Request, registrationID int64) {
 	var record signedContractPDF
+	var contractID int64
 	var stored []byte
 	var storedHash string
-	err := a.db.QueryRowContext(r.Context(), "SELECT r.id,r.company_name,c.version,c.contract_text,c.contract_hash,c.signer_name,c.signer_title,c.signer_email,c.signature_data,c.signature_hash,c.signed_at,c.counter_signer,c.counter_signer_title,c.counter_signature_data,c.counter_signature_hash,c.countersigned_at,c.signed_pdf,c.signed_pdf_sha256 FROM channel_registrations r JOIN channel_registration_contracts c ON c.registration_id=r.id WHERE r.id=? AND r.status='approved' AND c.countersigned_at IS NOT NULL", registrationID).
-		Scan(&record.RegistrationID, &record.CompanyName, &record.Version, &record.Text, &record.TextHash, &record.SignerName, &record.SignerTitle, &record.SignerEmail, &record.SignatureData, &record.SignatureHash, &record.SignedAt, &record.CounterSigner, &record.CounterSignerTitle, &record.CounterSignatureData, &record.CounterSignatureHash, &record.CountersignedAt, &stored, &storedHash)
+	err := a.db.QueryRowContext(r.Context(), "SELECT c.id,r.id,r.company_name,c.version,c.contract_text,c.contract_hash,c.signer_name,c.signer_title,c.signer_email,c.signature_data,c.signature_hash,c.signed_at,c.counter_signer,c.counter_signer_title,c.counter_signature_data,c.counter_signature_hash,c.countersigned_at,c.signed_pdf,c.signed_pdf_sha256 FROM channel_registrations r JOIN channel_registration_contracts c ON c.registration_id=r.id WHERE r.id=? AND r.status='approved' AND c.countersigned_at IS NOT NULL ORDER BY c.id DESC LIMIT 1", registrationID).
+		Scan(&contractID, &record.RegistrationID, &record.CompanyName, &record.Version, &record.Text, &record.TextHash, &record.SignerName, &record.SignerTitle, &record.SignerEmail, &record.SignatureData, &record.SignatureHash, &record.SignedAt, &record.CounterSigner, &record.CounterSignerTitle, &record.CounterSignatureData, &record.CounterSignatureHash, &record.CountersignedAt, &stored, &storedHash)
 	if err == sql.ErrNoRows {
 		writeError(w, 404, "signed_contract_not_ready")
 		return
@@ -179,12 +180,16 @@ func (a *app) sendContractPDF(w http.ResponseWriter, r *http.Request, registrati
 			return
 		}
 		digest := sha256.Sum256(stored)
-		_, err = a.db.ExecContext(r.Context(), "UPDATE channel_registration_contracts SET signed_pdf=?,signed_pdf_sha256=?,signed_pdf_created_at=CURRENT_TIMESTAMP WHERE registration_id=? AND signed_pdf IS NULL", stored, hex.EncodeToString(digest[:]), registrationID)
+		_, err = a.db.ExecContext(r.Context(), "UPDATE channel_registration_contracts SET signed_pdf=?,signed_pdf_sha256=?,signed_pdf_created_at=CURRENT_TIMESTAMP WHERE id=? AND (signed_pdf IS NULL OR length(signed_pdf)=0)", stored, hex.EncodeToString(digest[:]), contractID)
 		if err != nil {
 			serverError(w, err)
 			return
 		}
-		storedHash = hex.EncodeToString(digest[:])
+		err = a.db.QueryRowContext(r.Context(), "SELECT signed_pdf,signed_pdf_sha256 FROM channel_registration_contracts WHERE id=?", contractID).Scan(&stored, &storedHash)
+		if err != nil {
+			serverError(w, err)
+			return
+		}
 	}
 	verified := sha256.Sum256(stored)
 	if hex.EncodeToString(verified[:]) != storedHash {

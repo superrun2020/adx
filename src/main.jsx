@@ -217,11 +217,10 @@ function Dashboard({ range, setRange, admin, user, initialDashboard }) {
   const rangeKey = range[0].format('YYYY-MM-DD') + ':' + range[1].format('YYYY-MM-DD');
   const path = '/api/dashboard?start=' + range[0].format('YYYY-MM-DD') + '&end=' + range[1].format('YYYY-MM-DD') + '&source=rest';
   const saved = readCached(user, path);
-  const freshInitial = initialDashboard?.key === rangeKey && initialDashboard.fresh;
-  const [data, setData] = useState(initialDashboard?.key === rangeKey ? initialDashboard.data || saved?.data || null : saved?.data || null);
+  const [data, setData] = useState(saved?.data || null);
   const [dataKey, setDataKey] = useState(rangeKey);
   const currentData = dataKey === rangeKey ? data : saved?.data || null;
-  const [showingCached, setShowingCached] = useState(Boolean(saved && !freshInitial));
+  const [showingCached, setShowingCached] = useState(Boolean(saved));
   const [loading, setLoading] = useState(false);
   const [highlightRefresh, setHighlightRefresh] = useState(0);
   const requestId = useRef(0);
@@ -238,17 +237,15 @@ function Dashboard({ range, setRange, admin, user, initialDashboard }) {
       } else {
         result = await api(path);
       }
-      rememberRead(user, path, result);
-      if (id === requestId.current) { setData(result); setDataKey(rangeKey); setShowingCached(false); }
+      if (id === requestId.current) { rememberRead(user, path, result); setData(result); setDataKey(rangeKey); setShowingCached(false); }
     } catch (e) { if (id === requestId.current) message.error(e.message); }
     finally { if (id === requestId.current) setLoading(false); }
   };
   useEffect(() => {
     const latest = readCached(user, path);
-    const initial = initialDashboard?.key === rangeKey ? initialDashboard.data : null;
-    setData(initial || latest?.data || null);
+    setData(latest?.data || null);
     setDataKey(rangeKey);
-    setShowingCached(Boolean(latest && !freshInitial));
+    setShowingCached(Boolean(latest));
     load();
     return () => { requestId.current += 1; };
   }, [range[0].valueOf(), range[1].valueOf()]);
@@ -271,9 +268,8 @@ function Shell({ user, onLogout, initialView = 'dashboard', initialDashboard, on
   }, [view]);
   useEffect(() => {
     const onPopState = () => {
-      const requested = viewForPath(window.location.pathname, 'dashboard', 'admin');
       const next = viewForPath(window.location.pathname, 'dashboard', user);
-      if (requested !== next) window.history.replaceState({ view: next }, '', viewPaths[next]);
+      if (window.location.pathname !== viewPaths[next]) window.history.replaceState({ view: next }, '', viewPaths[next]);
       setView(next);
     };
     window.addEventListener('popstate', onPopState);

@@ -520,7 +520,18 @@ function refreshDashboardDaily(channelId, start, end) {
 if ((legacyDashboardColumns || !db.prepare('SELECT 1 FROM dashboard_daily LIMIT 1').get() || !db.prepare('SELECT 1 FROM dashboard_rest_daily LIMIT 1').get()) &&
     db.prepare('SELECT 1 FROM revenue_facts LIMIT 1').get()) refreshDashboardDaily();
 
-app.get('/api/dashboard', requireAuth, cachedReport, (req, res) => {
+function validateDashboardScope(req, res, next) {
+  const id = req.user.role === 'channel' ? req.user.channel_id : req.query.channelId;
+  if (req.user.role === 'channel' && !(Number.isSafeInteger(id) && id > 0)) {
+    return res.status(403).json({ ok: false, error: 'channel_required' });
+  }
+  if (id != null && id !== '' && (!/^\d+$/.test(id) || !Number.isSafeInteger(Number(id)) || Number(id) < 1)) {
+    return res.status(400).json({ ok: false, error: 'invalid_channel_id' });
+  }
+  next();
+}
+
+app.get('/api/dashboard', requireAuth, validateDashboardScope, cachedReport, (req, res) => {
   const scope = reportScope(req), { start, end } = range(req), where = whereScope(scope, start, end);
   if (req.query.source && !['rest','all'].includes(req.query.source)) return res.status(400).json({ok:false,error:'invalid_report_source'});
   const restOnly = req.query.source === 'rest', ready = restOnly ? dashboardRestDailyReady : dashboardDailyReady;
@@ -557,7 +568,7 @@ function dateInNetworkZone(now, zone) {
   return values.year + '-' + values.month + '-' + values.day;
 }
 
-app.get('/api/dashboard/highlights', requireAuth, cachedReport, (req, res) => {
+app.get('/api/dashboard/highlights', requireAuth, validateDashboardScope, cachedReport, (req, res) => {
   const scope = reportScope(req);
   const accounts = db.prepare("SELECT name,network_code,rest_network_timezone FROM soap_accounts WHERE rest_report_name<>'' ORDER BY id").all();
   const warnings = [], now = new Date();
@@ -565,7 +576,7 @@ app.get('/api/dashboard/highlights', requireAuth, cachedReport, (req, res) => {
     let today, fallback = !account.rest_network_timezone;
     try { today = dateInNetworkZone(now, account.rest_network_timezone || 'UTC'); }
     catch { today = dateInNetworkZone(now, 'UTC'); fallback = true; }
-    if (fallback) warnings.push(account.name);
+    if (fallback && req.user.role === 'admin') warnings.push(account.name);
     return { code: account.network_code, today, monthStart: today.slice(0, 7) + '-01' };
   });
   const top = monthly => {

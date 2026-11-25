@@ -1,4 +1,4 @@
-import { readCached, rememberRead } from './readCache.js';
+import { viewForPath } from './navigation.js';
 import { sessionFetch } from './sessionFetch.js';
 import { getLocale, setLocale, startI18n } from './i18n.js';
 
@@ -76,9 +76,8 @@ function retryAutomatically() {
 }
 
 const dashboardPath = '/api/dashboard?start=' + start + '&end=' + end + '&source=rest';
-const highlightsPath = '/api/dashboard/highlights';
-async function requestDashboard(path = dashboardPath) {
-  const response = await sessionFetch(path, { credentials: 'include' });
+async function requestDashboard() {
+  const response = await sessionFetch(dashboardPath, { credentials: 'include' });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.ok === false) throw new Error(data.error || 'http_' + response.status);
   return data;
@@ -88,52 +87,17 @@ async function openApp(user) {
   if (mounted || opening) return;
   opening = true;
   button.disabled = true;
-  if (user.role === 'channel' && user.status === 'pending') {
-    try {
-      const app = await prepareApp();
-      await app.mountApp(user, 'channel-contract', null);
-      mounted = true;
-    } catch (error) {
-      console.error('contract_workspace_load_failed', error);
-      status.textContent = '合同管理加载失败，请刷新重试。';
-      retryButton.hidden = false;
-    } finally {
-      opening = false;
-    }
-    return;
-  }
-  if (user.role === 'admin' && !user.isSuperAdmin &&
-      Array.isArray(user.sidebarPermissions) && !user.sidebarPermissions.includes('dashboard')) {
-    try {
-      const app = await prepareApp();
-      await app.mountApp(user, user.sidebarPermissions[0] || 'api', null);
-      mounted = true;
-    } catch (error) {
-      console.error('app_load_failed', error);
-      status.textContent = '后台资源加载失败，请刷新重试。';
-      retryButton.hidden = false;
-    } finally {
-      opening = false;
-    }
-    return;
-  }
-  const saved = readCached(user, dashboardPath);
-  const highlightsSaved = readCached(user, highlightsPath);
-  const initialDashboard = { key: dashboardKey, data: saved?.data };
-  initialDashboard.promise = requestDashboard().then(data => {
-    initialDashboard.data = data;
-    initialDashboard.fresh = true;
-    rememberRead(user, dashboardPath, data);
-    return { data };
-  }, error => ({ error }));
-  const highlightsPromise = requestDashboard(highlightsPath).then(data => {
-    rememberRead(user, highlightsPath, data);
-    return { data };
-  }, error => ({ error }));
+  const fallback = user.role === 'admin' && !user.isSuperAdmin && user.sidebarPermissions?.length && !user.sidebarPermissions.includes('dashboard')
+    ? user.sidebarPermissions[0] : 'dashboard';
+  const view = viewForPath(window.location.pathname, fallback, user);
+  let initialDashboard = null;
   try {
+    if (view === 'dashboard') {
+      initialDashboard = { key: dashboardKey };
+      initialDashboard.promise = requestDashboard().then(data => ({ data }), error => ({ error }));
+    }
     const app = await prepareApp();
-    if (!saved?.data || !highlightsSaved?.data) await Promise.all([initialDashboard.promise, highlightsPromise]);
-    await app.mountApp(user, 'dashboard', initialDashboard);
+    await app.mountApp(user, view, initialDashboard);
     mounted = true;
     // Warm secondary views only after the visible workspace is ready.
     const warmViews = () => { void Promise.allSettled([import('./ReportExplorer.jsx'), import('./AdminPages.jsx')]); };

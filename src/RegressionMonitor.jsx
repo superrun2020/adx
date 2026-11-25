@@ -4,6 +4,7 @@ import Table from './FitTable.jsx';
 import { ReloadOutlined, SendOutlined, SettingOutlined } from '@ant-design/icons';
 import ReportDateFilter from './ReportDateFilter.jsx';
 import NumericSortHeader from './NumericSortHeader.jsx';
+import { monitorTime } from './monitorTime.js';
 import { sessionFetch } from './sessionFetch.js';
 
 const { Title, Text } = Typography;
@@ -11,7 +12,7 @@ const cadenceNames = { day: '单日 · 同日上次快照', three_days: '每 3 �
 const money = value => '$' + Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const signedMoney = value => (Number(value) > 0 ? '+' : Number(value) < 0 ? '-' : '') + money(Math.abs(Number(value || 0)));
 const signed = (value, suffix = '') => (Number(value) > 0 ? '+' : '') + Number(value || 0).toLocaleString('en-US', { maximumFractionDigits: suffix ? 2 : 0 }) + suffix;
-const stamp = (value, zone) => value ? new Date(value.replace(' ', 'T') + (value.includes('Z') ? '' : 'Z')).toLocaleString('zh-CN', { hour12: false, timeZone: zone || undefined }) : '—';
+
 
 async function api(path, options = {}) {
   const response = await sessionFetch(path, { credentials: 'include', ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
@@ -58,9 +59,9 @@ export default function RegressionMonitor({ channelMode = false }) {
       ]);
       if (id === requestId.current) {
         if (revenue.status === 'fulfilled') { setRows(revenue.value.items || []); setTotal(revenue.value.total || 0); }
-        else message.error('收入监测记录读取失败：' + revenue.reason.message);
+        else { setRows([]); setTotal(0); message.error('收入监测记录读取失败：' + revenue.reason.message); }
         if (coverage.status === 'fulfilled') setCoverageRows(coverage.value.items || []);
-        else message.error('覆盖率告警记录读取失败：' + coverage.reason.message);
+        else { setCoverageRows([]); message.error('覆盖率告警记录读取失败：' + coverage.reason.message); }
       }
     } catch (error) { if (id === requestId.current) message.error('监测记录读取失败：' + error.message); }
     finally { if (id === requestId.current) setLoading(false); }
@@ -116,7 +117,7 @@ export default function RegressionMonitor({ channelMode = false }) {
   const columns = [
     {title:'域名 / 账号',width:255,render:(_,row)=><div className="table-identity"><strong>{row.domain}</strong><span>{row.accountName}</span></div>},
     {title:'监测时间',width:165,render:(_,row)=><div className="table-identity">
-      <span className="table-timestamp">{stamp(row.createdAt,row.timeZone)}</span><span>{row.timeZone||'浏览器时区'}</span>
+      <span className="table-timestamp">{monitorTime(row.createdAt,row.timeZone).text}</span><span>{monitorTime(row.createdAt,row.timeZone).zone}</span>
     </div>},
     {title:'对比区间',width:245,render:(_,row)=><div className="table-identity">
       <strong>{row.periodStart===row.periodEnd?row.periodEnd:row.periodStart+' ~ '+row.periodEnd}</strong>
@@ -163,7 +164,7 @@ export default function RegressionMonitor({ channelMode = false }) {
     {!channelMode&&<Alert showIcon type="info" message={
       '收入告警' + (settings?.feishuEnabled ? '已启用' : '未启用') + '；覆盖率告警' + (settings?.coverageFeishuEnabled ? '已启用' : '未启用')
     } description={'收入条件：原收入 > ' + money(settings?.minRevenue ?? 50) + ' 且下降 ≥ ' + Number(settings?.minDropPercent ?? 2).toFixed(2) + '%。覆盖率=匹配请求÷广告请求；与昨日同小时相比下降 ≥ ' + Number(settings?.minCoverageDropPoints ?? 30).toFixed(2) + ' 个百分点，且两小时各有 ≥ ' + Number(settings?.minCoverageRequests ?? 100) + ' 次请求时报警。覆盖率每 15 分钟同步后检测，同域名每天最多推送一次，后台归档单元不计入。收入回退仍在美国西海岸 01:00–02:00 发送（北京时间夏令时 16:00–17:00、冬令时 17:00–18:00）。'}/>}
-    {!channelMode&&latest && <Text type="secondary">最近完成：{latest.accountName} · {cadenceNames[latest.cadence]} · {stamp(latest.finishedAt, latest.timeZone)}（{latest.timeZone}）</Text>}
+    {!channelMode&&latest && <Text type="secondary">最近完成：{latest.accountName} · {cadenceNames[latest.cadence]} · {monitorTime(latest.finishedAt, latest.timeZone).text}（{monitorTime(latest.finishedAt, latest.timeZone).zone}）</Text>}
     {runs[0]?.status === 'failed' && <Alert type="warning" showIcon message={'最近一次监测失败：' + runs[0].accountName + ' · ' + cadenceNames[runs[0].cadence]} description={runs[0].detail || '请检查 GAM 账号同步状态'} />}
     {runs[0]?.status === 'skipped' && <Alert type="info" showIcon message={'最近一次监测暂未比较：' + runs[0].accountName + ' · ' + cadenceNames[runs[0].cadence]} description={runs[0].detail || '等待 GAM 返回可比较的完整数据'} />}
     <Card className="regression-filters"><Space wrap size={12}>

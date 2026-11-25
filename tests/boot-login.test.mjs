@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
+import { viewForPath } from '../src/navigation.js';
 import vm from 'node:vm';
 
 const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 const boot = (await readFile(new URL('../src/boot.js', import.meta.url), 'utf8'))
-  .replace("import { readCached, rememberRead } from './readCache.js';", '')
+  .replace("import { viewForPath } from './navigation.js';", '')
   .replace("import { sessionFetch } from './sessionFetch.js';", '')
   .replace("import { getLocale, setLocale, startI18n } from './i18n.js';", '')
   .replace("import('./main.jsx')", 'globalThis.__loadApp()')
@@ -13,7 +14,7 @@ const boot = (await readFile(new URL('../src/boot.js', import.meta.url), 'utf8')
   .replace("import('./ReportExplorer.jsx')", 'globalThis.__loadSecondary()')
   .replace("import('./AdminPages.jsx')", 'globalThis.__loadSecondary()');
 
-function start({ loginResponse, loadApp, dashboardResponse, sessionExpired = false }) {
+function start({ loginResponse, loadApp, dashboardResponse, pathname = '/', sessionExpired = false }) {
   const listeners = {};
   const button = { disabled: false, textContent: '登录' };
   const form = {
@@ -40,8 +41,8 @@ function start({ loginResponse, loadApp, dashboardResponse, sessionExpired = fal
     return loginResponse;
   };
   const context = {
-    document, URLSearchParams, console, readCached: () => null, rememberRead() {},
-    window: { location: { hostname: 'adx.geekforest.ai', search: '', reload() {} }, setTimeout() {} },
+    document, URLSearchParams, console, viewForPath, readCached: () => null, rememberRead() {},
+    window: { location: { pathname, hostname: 'adx.geekforest.ai', search: '', reload() {} }, setTimeout() {} },
     sessionStorage: { getItem: key => sessionExpired && key === 'adx_session_reauth' ? '1' : null, setItem() {}, removeItem() {} },
     fetch: fetchStub, sessionFetch: fetchStub,
     __loadApp: loadApp, getLocale: () => 'zh', setLocale() {}, startI18n: async () => {},
@@ -123,5 +124,24 @@ test('expired session opens a clean login screen without fetching old data', asy
   await new Promise(setImmediate);
   assert.match(page.status.textContent, /登录已过期/);
   assert.equal(page.calls.some(call => call.path === '/api/auth/me'), false);
+  assert.equal(page.calls.some(call => call.path.startsWith('/api/dashboard')), false);
+});
+
+test('a cold dashboard mounts while its report is still pending', async () => {
+  let mounted;
+  const page = start({ loginResponse: { ok: true, json: async () => ({ user: { role: 'channel' } }) },
+    dashboardResponse: new Promise(() => {}),
+    loadApp: async () => ({ mountApp: (_user, view, initial) => { mounted = view; assert.ok(initial.promise); } }) });
+  await page.listeners.submit({ preventDefault() {} });
+  assert.equal(mounted, 'dashboard');
+  assert.equal(page.calls.filter(call => call.path.startsWith('/api/dashboard')).length, 1);
+});
+
+test('opening a report directly skips dashboard queries', async () => {
+  let mounted;
+  const page = start({ pathname: '/reports', loginResponse: { ok: true, json: async () => ({ user: { role: 'channel' } }) },
+    loadApp: async () => ({ mountApp: (_user, view, initial) => { mounted = view; assert.equal(initial, null); } }) });
+  await page.listeners.submit({ preventDefault() {} });
+  assert.equal(mounted, 'reports');
   assert.equal(page.calls.some(call => call.path.startsWith('/api/dashboard')), false);
 });

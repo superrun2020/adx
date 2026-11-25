@@ -81,18 +81,31 @@ func (a *app) queryDashboardHighlights(periods []dashboardAccountPeriod, month b
 	return queryMaps(a.db, query, args...)
 }
 
+func dashboardScope(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	u := currentUser(r)
+	if u.Role == "channel" {
+		if !u.ChannelID.Valid || u.ChannelID.Int64 < 1 {
+			writeError(w, http.StatusForbidden, "channel_required")
+			return 0, false
+		}
+		return u.ChannelID.Int64, true
+	}
+	if raw := r.URL.Query().Get("channelId"); raw != "" {
+		scope, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || scope < 1 {
+			writeError(w, http.StatusBadRequest, "invalid_channel_id")
+			return 0, false
+		}
+		return scope, true
+	}
+	return 0, true
+}
+
 func (a *app) dashboardHighlights(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
-	var scope int64
-	if u.Role == "channel" {
-		scope = u.ChannelID.Int64
-	} else if raw := r.URL.Query().Get("channelId"); raw != "" {
-		var err error
-		scope, err = strconv.ParseInt(raw, 10, 64)
-		if err != nil || scope < 1 {
-			writeError(w, 400, "invalid_channel_id")
-			return
-		}
+	scope, ok := dashboardScope(w, r)
+	if !ok {
+		return
 	}
 	accounts, err := queryMaps(a.db, "SELECT name,network_code,rest_network_timezone FROM soap_accounts WHERE rest_report_name<>'' ORDER BY id")
 	if err != nil {
@@ -100,6 +113,9 @@ func (a *app) dashboardHighlights(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	periods, warnings := dashboardPeriods(accounts, time.Now())
+	if u.Role == "channel" {
+		warnings = []string{}
+	}
 	daily, err := a.queryDashboardHighlights(periods, false, scope, u.Role == "channel")
 	if err != nil {
 		a.dashboardFailure(w, err)

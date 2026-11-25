@@ -56,6 +56,16 @@ test('admin creates channel, previews/imports JSON, and channel API receives set
   assert.equal(publicResult.meta.total, 1);
 });
 
+test('dashboard filters reject invalid channel IDs', async () => {
+  for (const route of ['/api/dashboard', '/api/dashboard/highlights']) {
+    for (const id of ['invalid', '-1', '0']) {
+      const { response, body } = await request(route + '?channelId=' + id);
+      assert.equal(response.status, 400);
+      assert.equal(body.error, 'invalid_channel_id');
+    }
+  }
+});
+
 test('channel account cannot access administration endpoints', async () => {
   cookie = '';
   const login = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: 'publisher@example.test', password: 'PublisherPass123!' }) });

@@ -5,8 +5,10 @@ import { allowedAdminRequest } from '../server/admin-permissions.mjs';
 
 test('each sidebar view has a refreshable browser path', () => {
   for (const [view, path] of Object.entries(viewPaths)) {
-    assert.equal(viewForPath(path), view);
-    assert.equal(viewForPath(path + '/'), view);
+    const role = view.startsWith('channel-') ? 'channel' : 'admin';
+    assert.equal(viewForPath(path, 'dashboard', role), view);
+    if (role === 'channel') assert.equal(canVisit({ role: 'admin', isSuperAdmin: true }, view), false);
+    assert.equal(viewForPath(path + '/', 'dashboard', role), view);
   }
 });
 

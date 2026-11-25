@@ -250,6 +250,31 @@ func TestRegistrationApprovalActivatesOnlyMappedChannelAndStoresCounterSignature
 	if signer != "Platform Operator" || title != "运营负责人" || storedSignature == "" || len(storedHash) != 64 {
 		t.Fatalf("counter signature not stored: signer=%q title=%q signaturePresent=%t hash=%q", signer, title, storedSignature != "", storedHash)
 	}
+	// Simulate a newer legacy signed version whose PDF has not been generated yet.
+	_, err = a.db.Exec(`INSERT INTO channel_registration_contracts
+		(registration_id,version,contract_text,contract_hash,signer_name,signer_title,signer_email,signature_data,signature_hash,signed_at,
+		counter_signer,counter_signer_title,counter_signature_data,counter_signature_hash,countersigned_at)
+		SELECT registration_id,'v2',contract_text,contract_hash,signer_name,signer_title,signer_email,signature_data,signature_hash,signed_at,
+		counter_signer,counter_signer_title,counter_signature_data,counter_signature_hash,countersigned_at FROM channel_registration_contracts WHERE registration_id=1 AND version='v1'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := make(chan *httptest.ResponseRecorder, 2)
+	for i := 0; i < cap(results); i++ {
+		go func() {
+			res := httptest.NewRecorder()
+			a.sendContractPDF(res, httptest.NewRequest(http.MethodGet, "/", nil), 1)
+			results <- res
+		}()
+	}
+	first, second := <-results, <-results
+	var canonical []byte
+	if err := a.db.QueryRow("SELECT signed_pdf FROM channel_registration_contracts WHERE registration_id=1 AND version='v2'").Scan(&canonical); err != nil {
+		t.Fatal(err)
+	}
+	if len(canonical) == 0 || first.Code != 200 || second.Code != 200 || !bytes.Equal(first.Body.Bytes(), canonical) || !bytes.Equal(second.Body.Bytes(), canonical) {
+		t.Fatal("concurrent downloads did not return the stored PDF for the latest signed version")
+	}
 }
 
 func TestRegistrationContractPreviewMatchesSignedSnapshot(t *testing.T) {

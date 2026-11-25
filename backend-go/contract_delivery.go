@@ -53,7 +53,7 @@ func (a *app) deliverSignedContractEmailWith(ctx context.Context, registrationID
 	err = a.db.QueryRowContext(ctx, "SELECT d.recipient,c.signed_pdf,c.signed_pdf_sha256 "+
 		"FROM channel_contract_mail_deliveries d JOIN channel_registrations r ON r.id=d.registration_id "+
 		"JOIN channel_registration_contracts c ON c.registration_id=r.id "+
-		"WHERE d.registration_id=? AND d.purpose=? AND r.status='approved'", registrationID, purpose).
+		"WHERE d.registration_id=? AND d.purpose=? AND r.status='approved' AND c.countersigned_at IS NOT NULL ORDER BY c.id DESC LIMIT 1", registrationID, purpose).
 		Scan(&recipient, &pdf, &storedHash)
 	if err == nil {
 		digest := sha256.Sum256(pdf)

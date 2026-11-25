@@ -81,12 +81,9 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_report_source")
 		return
 	}
-	var scope int64
-	if u.Role == "channel" {
-		scope = u.ChannelID.Int64
-	}
-	if u.Role == "admin" {
-		scope, _ = strconv.ParseInt(r.URL.Query().Get("channelId"), 10, 64)
+	scope, ok := dashboardScope(w, r)
+	if !ok {
+		return
 	}
 	ready := a.dailyReady.Load()
 	if restOnly {

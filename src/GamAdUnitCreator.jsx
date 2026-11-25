@@ -107,6 +107,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
   const [listError, setListError] = useState(''), [selectedUnits, setSelectedUnits] = useState([]);
   const [editing, setEditing] = useState(null), [editLoading, setEditLoading] = useState('');
   const [savingEdit, setSavingEdit] = useState(false), [archiving, setArchiving] = useState(false);
+  const siteGeneration = useRef(0);
   const listGeneration = useRef(0);
   const [open, setOpen] = useState(false), [mode, setMode] = useState('batch');
   const [accountId, setAccountId] = useState(null), [siteNames, setSiteNames] = useState([]);
@@ -160,7 +161,7 @@ export default function GamAdUnitCreator({ accounts = [] }) {
       else message.warning('已同步子网站暂未加载，仍可手动输入');
     })
       .finally(() => { if (current) setInventoryBusy(false); });
-    return () => { current = false; };
+    return () => { current = false; siteGeneration.current += 1; };
   }, [open, accountId, inventoryVersion]);
   useEffect(() => {
     if (!open || !accountId) return;
@@ -224,18 +225,21 @@ export default function GamAdUnitCreator({ accounts = [] }) {
     return () => { listGeneration.current += 1; };
   }, [accountListKey]);
   const chooseAccount = value => {
+    siteGeneration.current += 1;
     setAccountId(value); setSites([]); setKnownDomains([]); setNetworkSizes([]); setSizeError(''); setNextSites('');
     setSiteNames([]); setDomainChoices({}); setDomainSearch({}); setInventoryError('');
   };
   const loadMoreSites = async () => {
-    if (!nextSites || !accountId) return;
+    if (!nextSites || !accountId || inventoryBusy) return;
+    const generation = siteGeneration.current;
     setInventoryBusy(true);
     try {
       const result = await api('/api/admin/gam-accounts/' + accountId + '/sites?pageToken=' + encodeURIComponent(nextSites));
+      if (generation !== siteGeneration.current) return;
       setSites(previous => [...new Map([...previous, ...(result.items || [])].map(item => [item.name, item])).values()]);
       setNextSites(result.nextPageToken || '');
-    } catch (error) { message.error(error.message); }
-    finally { setInventoryBusy(false); }
+    } catch (error) { if (generation === siteGeneration.current) message.error(error.message); }
+    finally { if (generation === siteGeneration.current) setInventoryBusy(false); }
   };
   const openCreator = () => {
     setMode('batch'); setSingle(newRow()); setBatchRows(initialBatch()); setResults([]);
