@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Card, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from 'antd';
+import { Alert, Button, Card, Form, Input, InputNumber, Modal, Select, Space, Switch, Tag, Tooltip, Typography, message } from 'antd';
+import Table from './FitTable.jsx';
 import { ReloadOutlined, SendOutlined, SettingOutlined } from '@ant-design/icons';
 import ReportDateFilter from './ReportDateFilter.jsx';
 import NumericSortHeader from './NumericSortHeader.jsx';
@@ -108,22 +109,38 @@ export default function RegressionMonitor({ channelMode = false }) {
   const numericTitle = (label, key) => <NumericSortHeader label={label}
     direction={sort?.key === key ? sort.direction : ''}
     onSort={direction => { setPage(1); setSort({ key, direction }); }}/>;
+  const deltaColor = value => Number(value)<0?'#bd5359':Number(value)>0?'#268064':'#748095';
+  const metricPair = (row,key,label,format) => <div className="metric-pair" key={key}>
+    <span>{numericTitle(label,key)}</span><strong style={{color:deltaColor(key.includes('Delta')||key==='differencePercent'?row[key]:0)}}>{format(row[key])}</strong>
+  </div>;
   const columns = [
-    { title: '监测时间', dataIndex: 'createdAt', width: 190, render: (value, row) => <Tooltip title={row.timeZone || '浏览器时区'}>{stamp(value, row.timeZone)}{row.timeZone ? ' (' + row.timeZone + ')' : ''}</Tooltip> },
-    { title: '数据及对比区间', width: 265, render: (_, row) => <Space direction="vertical" size={0}><Text strong>{row.periodStart === row.periodEnd ? row.periodEnd : row.periodStart + ' ~ ' + row.periodEnd}</Text><Text type="secondary" style={{fontSize:11}}>{row.baselineStart && row.baselineEnd ? '对比 ' + row.baselineStart + ' ~ ' + row.baselineEnd : '对比同日上次快照'}</Text><Text type="secondary" style={{fontSize:11}}>{cadenceNames[row.cadence]}</Text></Space> },
-    { title: '最早已确认下修数据日', dataIndex: 'dropStartDate', width: 175, render: (value, row) => value ? <Tooltip title="现有同日快照可证实的最早下修日；如历史快照不完整，实际起始日可能更早。"><strong>{value}</strong></Tooltip> : row.alertStatus !== 'not_triggered' ? <Tooltip title="本次多日监测比较的是相邻时段的区间总额；缺少可证实同日下修的历史快照，不能据此确定具体数据日。"><Text type="secondary">区间内未定位</Text></Tooltip> : '—' },
-    { title: '账号', dataIndex: 'accountName', width: 160, ellipsis: true },
-    { title: '域名', dataIndex: 'domain', width: 230, ellipsis: true },
-    { title: numericTitle('原收入','oldRevenue'), dataIndex: 'oldRevenue', width: 105, align: 'right', render: money },
-    { title: numericTitle('新收入','newRevenue'), dataIndex: 'newRevenue', width: 105, align: 'right', render: money },
-    { title: numericTitle('收入变化','revenueDelta'), dataIndex: 'revenueDelta', width: 110, align: 'right', render: value => <span style={{color: value < 0 ? '#cf1322' : '#389e0d'}}>{signedMoney(value)}</span> },
-    { title: numericTitle('差异率','differencePercent'), dataIndex: 'differencePercent', width: 100, align: 'right', render: value => <strong style={{color: value < 0 ? '#cf1322' : '#389e0d'}}>{signed(value, '%')}</strong> },
-    { title: numericTitle('请求数变化','requestsDelta'), dataIndex: 'requestsDelta', width: 120, align: 'right', render: value => signed(value) },
-    { title: numericTitle('展示数变化','impressionsDelta'), dataIndex: 'impressionsDelta', width: 120, align: 'right', render: value => signed(value) },
-    { title: numericTitle('点击数变化','clicksDelta'), dataIndex: 'clicksDelta', width: 110, align: 'right', render: value => signed(value) },
-    { title: '来源', width: 90, render: () => <Tag color="purple">GAM REST</Tag> },
-    { title: '飞书通知', dataIndex: 'alertStatus', width: 145, render: (value, row) => <Tag title={row.alertError || ''} color={value === 'sent' ? 'green' : value === 'failed' ? 'red' : value === 'pending' ? 'blue' : 'default'}>{({sent:'已发送',failed:'发送失败',pending:'待发送',disabled:'未启用',duplicate:'已去重',paused_suppressed:'停投影响，未推送',ownership_suppressed:'渠道已转移，未推送',not_triggered:'未触发'})[value] || value}</Tag> }
-  ].map(column => column.align === 'right' ? { ...column, className: [column.className, 'numeric-sort-column'].filter(Boolean).join(' ') } : column);
+    {title:'域名 / 账号',width:255,render:(_,row)=><div className="table-identity"><strong>{row.domain}</strong><span>{row.accountName}</span></div>},
+    {title:'监测时间',width:165,render:(_,row)=><div className="table-identity">
+      <span className="table-timestamp">{stamp(row.createdAt,row.timeZone)}</span><span>{row.timeZone||'浏览器时区'}</span>
+    </div>},
+    {title:'对比区间',width:245,render:(_,row)=><div className="table-identity">
+      <strong>{row.periodStart===row.periodEnd?row.periodEnd:row.periodStart+' ~ '+row.periodEnd}</strong>
+      <span>{row.baselineStart&&row.baselineEnd?'对比 '+row.baselineStart+' ~ '+row.baselineEnd:'对比同日上次快照'}</span>
+      <span>{cadenceNames[row.cadence]}</span>
+      <span>最早确认下修日：{row.dropStartDate||'—'}</span>
+    </div>},
+    {title:'收益对比',width:190,render:(_,row)=><div className="metric-stack">
+      {metricPair(row,'oldRevenue','原收入',money)}
+      {metricPair(row,'newRevenue','新收入',money)}
+      {metricPair(row,'revenueDelta','收入变化',signedMoney)}
+      {metricPair(row,'differencePercent','差异率',value=>signed(value,'%'))}
+    </div>},
+    {title:'流量变化',width:170,render:(_,row)=><div className="metric-stack">
+      {metricPair(row,'requestsDelta','请求数',value=>signed(value))}
+      {metricPair(row,'impressionsDelta','展示数',value=>signed(value))}
+      {metricPair(row,'clicksDelta','点击数',value=>signed(value))}
+    </div>},
+    {title:'通知状态',width:120,render:(_,row)=><Space direction="vertical" size={6}>
+      <Tag title={row.alertError||''} color={row.alertStatus==='sent'?'green':row.alertStatus==='failed'?'red':row.alertStatus==='pending'?'blue':'default'}>
+        {({sent:'已发送',failed:'发送失败',pending:'待发送',disabled:'未启用',duplicate:'已去重',paused_suppressed:'停投影响，未推送',ownership_suppressed:'渠道已转移，未推送',not_triggered:'未触发'})[row.alertStatus]||row.alertStatus}
+      </Tag><Text type="secondary">GAM REST</Text>
+    </Space>}
+  ];
   const coverageColumns = [
     {title:'数据小时',width:210,render:(_,row)=>row.reportDate + ' ' + String(row.reportHour).padStart(2,'0') + ':00（' + (row.timeZone || 'UTC') + '）'},
     {title:'账号',dataIndex:'accountName',width:170},
@@ -155,7 +172,7 @@ export default function RegressionMonitor({ channelMode = false }) {
       <Select allowClear placeholder="全部时间段" style={{width:190}} value={cadence} onChange={updateFilter(setCadence)} options={Object.entries(cadenceNames).map(([value,label]) => ({value,label}))}/>
       <Input allowClear placeholder="域名筛选" style={{width:205}} value={domain} onChange={event => {setPage(1); setDomain(event.target.value);}} onPressEnter={loadEvents}/>
       <Button onClick={() => {setPage(1); loadEvents();}}>搜索</Button>
-      {!channelMode&&<Space><Switch checked={alertsOnly} onChange={updateFilter(setAlertsOnly)}/><Tooltip title="达到收入回退阈值，包含已发送、待发送、发送失败及通知未启用的记录"><Text>仅看已触发</Text></Tooltip></Space>}
+      <Space><Switch aria-label="仅看已触发" checked={alertsOnly} onChange={updateFilter(setAlertsOnly)}/><Tooltip title="达到收入回退阈值，包含已发送、待发送、发送失败及通知未启用的记录"><Text>仅看已触发</Text></Tooltip></Space>
       <Button onClick={() => {setRange(null);setAccountId(null);setCadence(null);setDomain('');setAlertsOnly(false);setSort(null);setPage(1);}}>重置</Button>
     </Space></Card>
     <Card className="regression-table" title={'监测记录（' + total + '）'}><Table rowKey="id" loading={loading} dataSource={rows} columns={columns} size="middle" scroll={{x:1850}}

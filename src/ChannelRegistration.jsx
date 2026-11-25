@@ -6,6 +6,8 @@ import { createRoot } from 'react-dom/client';
 import LanguageSwitcher from './LanguageSwitcher.jsx';
 import { getLocale } from './i18n.js';
 import './channel-registration.css';
+import './enterprise.css';
+import { enterpriseTheme } from './enterpriseTheme.js';
 
 const { Title, Text } = Typography;
 
@@ -64,6 +66,6 @@ export default function ChannelRegistration({ onBack, onRegistered }) {
 
 export function mountChannelRegistration(onBack, onRegistered) {
   const root = createRoot(document.getElementById('root'));
-  root.render(<ConfigProvider locale={getLocale() === 'en' ? enUS : zhCN}><ChannelRegistration onBack={onBack} onRegistered={onRegistered}/></ConfigProvider>);
+  root.render(<ConfigProvider theme={enterpriseTheme} locale={getLocale() === 'en' ? enUS : zhCN}><ChannelRegistration onBack={onBack} onRegistered={onRegistered}/></ConfigProvider>);
   return root;
 }

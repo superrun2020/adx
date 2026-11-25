@@ -1,0 +1,749 @@
+:root {
+  --workspace-bg: #f4f6fa;
+  --workspace-border: #e4e9f1;
+  --workspace-text: #1c293c;
+  --workspace-muted: #748095;
+  --workspace-accent: #3159b8;
+  --report-accent: #3159b8;
+  --report-muted: #748095;
+  --report-border: #e4e9f1;
+}
+body {
+  color: var(--workspace-text);
+  background: var(--workspace-bg);
+  -webkit-font-smoothing: antialiased;
+}
+.app-shell {
+  background: var(--workspace-bg);
+}
+.app-shell > .ant-layout-sider {
+  background: #142237 !important;
+  border-right: 1px solid #20324a;
+}
+.app-shell .side-brand {
+  height: 82px;
+  padding: 20px 23px;
+  gap: 12px;
+}
+.app-shell .side-brand img {
+  width: 33px;
+  height: 33px;
+  object-fit: contain;
+}
+.app-shell .side-brand b {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -.2px;
+}
+.app-shell .side-brand small {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #8195ae;
+}
+.app-shell .ant-menu-dark .ant-menu-item-group-title {
+  padding: 22px 24px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .4px;
+}
+.app-shell .ant-menu-dark .ant-menu-item {
+  width: calc(100% - 24px);
+  margin: 3px 12px;
+  padding-inline: 15px !important;
+}
+.app-shell .ant-menu-dark .ant-menu-item-selected {
+  box-shadow: inset 3px 0 #85aaff;
+}
+.app-shell .sidebar-profile {
+  margin: 12px 12px 4px;
+  padding: 16px 10px;
+  border-top-color: #26364e;
+}
+.app-shell .sidebar-avatar {
+  background: #294364;
+  border: 1px solid #3b5576;
+}
+.app-shell .sidebar-profile-text strong {
+  font-weight: 600;
+  font-size: 12px;
+}
+.app-shell .sidebar-profile-text span {
+  margin-top: 3px;
+  font-size: 11px;
+  color: #8195ae;
+}
+.app-shell .ant-layout-sider-trigger {
+  height: 38px;
+  line-height: 38px;
+  border-top: 1px solid #26364e;
+  background: #101c2e;
+  color: #a5b3c7;
+}
+.app-shell .ant-layout-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  height: 64px;
+  padding: 0 30px;
+  border-bottom: 1px solid var(--workspace-border);
+  justify-content: space-between;
+  gap: 16px;
+}
+.workspace-location {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.workspace-location > span {
+  color: #8792a4;
+  white-space: nowrap;
+}
+.workspace-location i {
+  font-style: normal;
+  color: #c2cbd8;
+}
+.workspace-location strong {
+  font-weight: 500;
+  color: #42536c;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.app-shell .ant-layout-content {
+  background: var(--workspace-bg);
+  padding: 28px 30px 44px;
+}
+.app-shell .page-stack > .ant-space-item {
+  min-width: 0;
+  max-width: 100%;
+}
+.app-shell .page-heading {
+  align-items: center;
+  gap: 18px;
+  padding: 2px 0 10px;
+}
+.app-shell .page-heading h2 {
+  font-size: 25px;
+  font-weight: 650;
+  line-height: 1.45;
+  letter-spacing: -.6px;
+  color: #1c293c;
+}
+.app-shell .page-heading h2 + .ant-typography {
+  display: inline-block;
+  margin-top: 6px;
+  color: #8792a4;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.app-shell .ant-card {
+  border-color: var(--workspace-border);
+  border-radius: 10px;
+  box-shadow: 0 2px 5px rgba(27, 45, 75, .015);
+}
+.app-shell .ant-card-head {
+  min-height: 56px;
+  padding-inline: 22px;
+  border-bottom-color: #edf0f5;
+}
+.app-shell .ant-card-head-title {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.app-shell .ant-card-extra {
+  font-size: 12px;
+  color: #8792a4;
+}
+.app-shell .ant-card-head-wrapper {
+  gap: 16px;
+}
+.app-shell .metric {
+  height: 100%;
+  border: 1px solid var(--workspace-border);
+}
+.app-shell .metric .ant-card-body {
+  padding: 22px;
+}
+.app-shell .metric .ant-statistic-title {
+  margin-bottom: 13px;
+  color: #748095;
+  font-size: 12px;
+}
+.app-shell .metric .ant-statistic-content {
+  color: #17283f;
+  font-size: clamp(22px, 1.65vw, 30px);
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -.6px;
+  font-variant-numeric: tabular-nums;
+}
+.app-shell .metric .ant-statistic-content-prefix {
+  margin-right: 10px;
+  font-size: 19px;
+  color: #7f94b4;
+}
+.app-shell .metric .ant-statistic-content-value {
+  overflow-wrap: anywhere;
+}
+.app-shell .ant-alert {
+  padding: 13px 16px;
+  border-radius: 8px;
+}
+.app-shell .ant-alert-info {
+  border-color: #dce5f5;
+  background: #f1f5fc;
+}
+.app-shell .ant-alert-warning {
+  border-color: #efe5ca;
+  background: #fcf9f1;
+}
+.app-shell .ant-alert .ant-alert-message {
+  font-size: 13px;
+  font-weight: 500;
+}
+.app-shell .ant-alert .ant-alert-description {
+  color: #738098;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.app-shell .ant-alert-with-description .ant-alert-icon {
+  font-size: 19px;
+}
+.app-shell .ant-btn {
+  border-radius: 6px;
+}
+.app-shell .ant-btn-link {
+  padding-inline: 7px;
+}
+.app-shell .ant-tag {
+  padding-inline: 7px;
+  border: 0;
+  border-radius: 5px;
+  font-size: 11px;
+  line-height: 22px;
+}
+.app-shell .ant-tag-green {
+  color: #28765e;
+  background: #edf7f1;
+}
+.app-shell .ant-tag-blue {
+  color: #426aa7;
+  background: #edf3fc;
+}
+.app-shell .ant-tag-red {
+  color: #bb5259;
+  background: #fceff0;
+}
+.app-shell .ant-tag-gold,
+.app-shell .ant-tag-orange {
+  color: #a57a2e;
+  background: #fcf6e9;
+}
+.app-shell .ant-pagination {
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+.app-shell .ant-pagination .ant-pagination-item-active {
+  border-color: #dce5f5;
+  background: #eef3fd;
+}
+.app-shell .ant-table-wrapper .ant-table-thead > tr > th {
+  background: #f7f9fc;
+  color: #66748a;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.55;
+}
+.app-shell .ant-table-wrapper .ant-table-tbody > tr > td {
+  color: #34445d;
+  border-bottom-color: #edf0f5;
+  line-height: 1.65;
+}
+.app-shell .highlight-ranking .rank-url {
+  color: #34445d;
+  font-weight: 500;
+}
+.app-shell .highlight-ranking .rank-badge {
+  width: 23px;
+  height: 23px;
+  background: #f0f3f8;
+  color: #667b96;
+  font-size: 11px;
+}
+.app-shell .highlight-ranking .rank-1 {
+  background: #eaf0fc;
+  color: #4267a7;
+}
+.app-shell .highlight-ranking .ant-card-body {
+  padding: 8px 18px 16px;
+}
+.app-shell .report-explorer .ant-btn-primary {
+  background: var(--workspace-accent);
+}
+.app-shell .report-query-card .ant-card-body {
+  padding: 20px 22px 16px;
+}
+.app-shell .report-filter-field,
+.app-shell .report-choice-label {
+  color: #66748a;
+  font-weight: 500;
+}
+.app-shell .report-choice-row {
+  border-color: #edf0f5;
+}
+.app-shell .report-choice-row .ant-checkbox-wrapper {
+  color: #586780;
+  font-size: 12px;
+}
+.app-shell .report-query-actions {
+  border-color: #edf0f5;
+}
+.table-identity {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+}
+.table-identity > strong {
+  color: #243754;
+  font-size: 13px;
+  font-weight: 600;
+}
+.table-identity > span {
+  color: #8792a4;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.table-identity > span:first-child {
+  color: #34445d;
+}
+.table-contact {
+  font-variant-ligatures: none;
+}
+.table-timestamp {
+  color: #8792a4;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.channels-workspace .channel-review-card > .ant-card-body,
+.channels-workspace .channel-directory-card > .ant-card-body {
+  padding: 16px 18px 10px;
+}
+.channels-workspace .table-actions .ant-btn {
+  padding-inline: 7px;
+  font-size: 12px;
+}
+.channels-workspace .channel-review-card .ant-alert {
+  margin-bottom: 18px;
+}
+.channels-workspace .ant-table-thead > tr > th {
+  border-bottom: 1px solid #e9edf3;
+}
+.app-shell .link-results > .ant-card-body,
+.app-shell .regression-table > .ant-card-body {
+  padding: 0 16px 12px;
+}
+.app-shell .link-filters .ant-card-body,
+.app-shell .account-filter-card .ant-card-body {
+  padding: 18px;
+}
+.account-identity strong,
+.link-account strong {
+  color: #34445d;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.account-identity small,
+.link-account small {
+  color: #8792a4;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.fit-data-table {
+  min-width: 0;
+  max-width: 100%;
+}
+.fit-data-table .ant-table,
+.fit-data-table .ant-table-content,
+.fit-data-table .ant-table-container {
+  width: 100%;
+  max-width: 100%;
+}
+.fit-data-table .ant-table-content > table {
+  width: 100% !important;
+  min-width: 0 !important;
+  table-layout: fixed !important;
+}
+.fit-data-table .ant-table-thead > tr > th,
+.fit-data-table .ant-table-tbody > tr > td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.fit-data-table .ant-table-cell .ant-space {
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+.fit-data-table .ant-table-cell .ant-space-item {
+  min-width: 0;
+  max-width: 100%;
+}
+.fit-data-table .ant-table-cell .ant-tag {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.fit-data-table .ant-table-thead > tr > th {
+  padding-inline: 10px;
+}
+.fit-data-table .ant-table-tbody > tr > td {
+  padding-inline: 10px;
+  vertical-align: middle;
+}
+.fit-data-table .numeric-sort-header {
+  min-width: 0;
+  white-space: normal;
+}
+.fit-data-table .numeric-sort-header > span:first-child {
+  overflow-wrap: anywhere;
+}
+.fit-data-table .ant-table-cell > .ant-typography {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.report-explorer .fit-data-table .report-metric-value {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.app-shell .report-detail-table .ant-table-thead > tr > th,
+.app-shell .report-detail-table .ant-table-tbody > tr > td {
+  padding-block: 14px !important;
+}
+.ant-modal-content {
+  padding: 26px !important;
+}
+.ant-modal-header {
+  margin-bottom: 22px !important;
+}
+.ant-modal-title {
+  font-weight: 600 !important;
+  letter-spacing: -.25px;
+}
+.ant-modal-footer {
+  padding-top: 20px;
+  margin-top: 24px !important;
+  border-top: 1px solid #edf0f5;
+}
+.ant-modal-body .ant-form-item-label > label,
+.ant-drawer-body .ant-form-item-label > label {
+  color: #60718a;
+  font-size: 12px;
+  font-weight: 500;
+}
+.ant-drawer-header {
+  padding: 22px 24px !important;
+}
+.ant-drawer-body .ant-form-item {
+  margin-bottom: 20px;
+}
+.ant-modal-body .fit-data-table {
+  font-size: 12px;
+}
+.app-shell .contract-progress-panel {
+  padding: 26px;
+  border-color: var(--workspace-border);
+  box-shadow: 0 2px 5px rgba(27, 45, 75, .015);
+}
+.app-shell .contract-progress-icon {
+  background: #eef3fc;
+  color: #5376ad;
+}
+.app-shell .contract-progress-heading strong {
+  color: #243754;
+}
+.app-shell .contract-reading-area {
+  background: #f1f4f8;
+}
+.channel-register-shell {
+  background: #f3f6fb;
+}
+.channel-register-card {
+  border-color: #e0e6ef;
+  border-radius: 12px;
+  box-shadow: 0 12px 48px rgba(23,42,73,.07);
+}
+.channel-register-brand b {
+  font-size: 15px;
+  color: #243754;
+}
+.channel-register-card .registration-title {
+  font-size: 24px;
+  letter-spacing: -.4px;
+}
+.channel-register-card .registration-grid {
+  gap: 20px;
+}
+.app-shell .publisher-tools a {
+  color: #34445d;
+  font-weight: 500;
+  border-color: var(--workspace-border);
+}
+.app-shell .publisher-tools a:hover {
+  background: #f8faff;
+  border-color: #c0d0ec;
+}
+.app-shell .publisher-site-list .ant-card-head {
+  background: #fff;
+}
+@media (max-width: 1200px) {
+  .app-shell .ant-layout-content {
+    padding: 22px 20px 36px;
+  }
+  .app-shell .ant-layout-header {
+    padding-inline: 20px;
+  }
+  .app-shell .page-heading {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+  .fit-data-table .ant-table-thead > tr > th,
+  .fit-data-table .ant-table-tbody > tr > td {
+    padding-inline: 7px;
+    font-size: 12px;
+  }
+}
+@media (max-width: 760px) {
+  .app-shell .ant-layout-content {
+    padding: 18px 12px 28px;
+  }
+  .app-shell .ant-layout-header {
+    height: 60px;
+    padding-inline: 14px;
+  }
+  .workspace-location {
+    gap: 7px;
+  }
+  .workspace-location > span,
+  .workspace-location > i {
+    display: none;
+  }
+  .app-shell .page-heading h2 {
+    font-size: 23px;
+  }
+  .app-shell .ant-card-head {
+    padding-inline: 14px;
+    gap: 10px;
+  }
+  .app-shell .ant-card-head-wrapper {
+    align-items: flex-start;
+    padding-block: 12px;
+    flex-wrap: wrap;
+  }
+  .app-shell .ant-card-body {
+    padding: 16px 14px;
+  }
+  .ant-modal-content {
+    padding: 20px 16px !important;
+  }
+  .channels-workspace .channel-review-card > .ant-card-body,
+  .channels-workspace .channel-directory-card > .ant-card-body {
+    padding-inline: 8px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    transition-duration: .01ms !important;
+  }
+}
+
+.app-shell .account-status-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  border: 1px solid rgba(90,115,153,.1);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.app-shell .account-status-tag .anticon {
+  font-size: 12px;
+}
+.app-shell .state-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding-inline: 8px;
+}
+.app-shell .state-tag::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.app-shell .report-explorer .report-metric-value {
+  white-space: nowrap;
+  font-size: clamp(10px, .85vw, 12px);
+}
+.app-shell .report-explorer .report-detail-table .numeric-sort-column {
+  padding-left: 4px !important;
+}
+@media(max-width:1250px) {
+  .app-shell .report-explorer .ant-table-tbody > tr > td.numeric-sort-column {
+    padding-right: 18px !important;
+  }
+  .app-shell .report-explorer .ant-table-thead > tr > th.numeric-sort-column {
+    padding-right: 2px !important;
+  }
+}
+
+.metric-stack {display:grid;gap:7px}
+.metric-pair {display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;font-size:11px}
+.metric-pair > span {color:#8792a4;flex-shrink:0}
+.metric-pair > strong {font-size:12px;font-weight:500;font-variant-numeric:tabular-nums;white-space:nowrap}
+.metric-pair .numeric-sort-header {font-size:11px;gap:2px}
+.metric-pair .numeric-sort-actions button {width:12px;height:9px;font-size:8px}
+
+.app-shell .contract-profile-card .ant-descriptions {
+  padding: 18px 20px 2px;
+  border: 1px solid #e8edf5;
+  border-radius: 8px;
+  background: #f8fafd;
+}
+.app-shell .contract-profile-card .registration-grid {
+  margin-top: 24px;
+}
+.app-shell .contract-workspace .registration-grid label {
+  color: #66748a;
+  font-size: 12px;
+  font-weight: 500;
+}
+.app-shell .contract-workspace .registration-grid .ant-input,
+.app-shell .contract-workspace .registration-grid .ant-select {
+  margin-top: 3px;
+}
+.app-shell .contract-reading-card .contract-document-toolbar {
+  padding: 14px 24px;
+  background: #fafbfd;
+  color: #8792a4;
+}
+.app-shell .contract-reading-area {
+  padding: 34px;
+  max-height: 640px;
+}
+.app-shell .agreement-document {
+  padding: 44px 54px;
+  border-color: #e5eaf2;
+  border-radius: 5px;
+  color: #4b5c74;
+  box-shadow: 0 4px 18px rgba(32,52,81,.04);
+}
+.app-shell .agreement-document-title h2 {
+  color: #263a58;
+  font-size: 21px;
+}
+.app-shell .contract-signing-card .contract-signing-hint {
+  padding-bottom: 18px;
+  border-bottom: 1px solid #edf0f5;
+}
+.app-shell .contract-email-verification {
+  padding: 20px;
+  gap: 10px;
+  border-color: #e0e8f5;
+  background: #f6f9fe;
+}
+.app-shell .contract-email-code-row .ant-input {
+  max-width: 320px;
+  letter-spacing: 3px;
+  font-variant-numeric: tabular-nums;
+}
+.app-shell .contract-signing-card .registration-signature {
+  padding: 20px;
+  margin-top: 24px;
+  border-color: #e4e9f1;
+  border-radius: 10px;
+  background: #fafbfd;
+}
+.app-shell .contract-signing-card .registration-signature-heading {
+  margin-bottom: 14px;
+}
+.app-shell .contract-signing-card .registration-signature canvas {
+  min-height: 240px;
+  border: 1px dashed #b9c8dd;
+  border-radius: 7px;
+}
+.app-shell .contract-signing-card .registration-actions {
+  padding-top: 20px;
+  border-top: 1px solid #edf0f5;
+}
+.app-shell .contract-signing-card .registration-actions .ant-btn {
+  min-width: 200px;
+}
+.app-shell .contract-record-card .ant-descriptions-item-label {
+  color: #8792a4;
+  font-size: 12px;
+}
+.app-shell .contract-record-card code {
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+.contract-party-signatures {
+  display: grid;
+  grid-template-columns: repeat(2,minmax(0,1fr));
+  gap: 18px;
+  padding-top: 24px;
+  margin-top: 8px;
+  border-top: 1px solid #edf0f5;
+}
+.contract-party-signatures section {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 20px;
+  border: 1px solid #e4e9f1;
+  border-radius: 8px;
+  background: #fafbfd;
+}
+.contract-party-signatures img {
+  width: 100%;
+  height: 105px;
+  object-fit: contain;
+  border: 1px solid #edf0f5;
+  border-radius: 5px;
+  background: #fff;
+}
+.contract-party-signatures strong {
+  font-size: 13px;
+  color: #34445d;
+}
+.contract-party-signatures section > span {
+  font-size: 11px;
+  color: #8792a4;
+}
+@media(max-width:760px) {
+  .app-shell .contract-reading-area {padding:12px}
+  .app-shell .agreement-document {padding:24px 20px}
+  .app-shell .contract-signing-card .registration-signature {padding:14px}
+  .app-shell .contract-signing-card .registration-signature canvas {min-height:180px}
+  .contract-party-signatures {grid-template-columns:1fr}
+}

@@ -6,7 +6,7 @@ import {
 } from 'antd';
 import {
   ApiOutlined, BarChartOutlined, CopyOutlined, DashboardOutlined, DollarOutlined, FileProtectOutlined, KeyOutlined,
-  LogoutOutlined, PlusOutlined, ReloadOutlined, SafetyOutlined, TeamOutlined,
+  LinkOutlined, LogoutOutlined, PlusOutlined, ReloadOutlined, SafetyOutlined, SyncOutlined, TeamOutlined,
   UploadOutlined, UserSwitchOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -345,27 +345,60 @@ function Channels({ user }) {
   const ownerNames=new Map(items.map(row=>[Number(row.id),row.name]));
   const accountOptions=gamAccounts.map(account=>({value:Number(account.id),label:account.name+' · Network '+account.networkCode+(account.channelId?' · 当前 '+(ownerNames.get(Number(account.channelId))||'其他渠道'):''),disabled:account.status!=='active'||!Number(account.enabled)||!Number(account.reportConfigured)||Boolean(editing&&Number(account.channelId)===Number(editing.id))}));
   const accountColumn={title:'关联 GAM 账号',width:270,render:(_,row)=>{const ids=accountIdsFor(row);return ids.length?<Space wrap size={4}>{ids.map(id=><Tag key={id}>{accountNames.get(id)||('账号 '+id)}</Tag>)}</Space>:<Text type="secondary">未关联</Text>}};
-  const columns=[{title:'渠道',dataIndex:'name'},accountColumn,domainColumn,{title:'登录邮箱',dataIndex:'email',render:v=>v||'仅内部管理'},{title:'分成比例',dataIndex:'sharePercent',render:v=>`${v}%`},{title:'API',dataIndex:'apiConfigured',render:(v,r)=>r.internalOnly?<Tag>仅内部</Tag>:<Tag color={v?'green':'orange'}>{v?'已配置':'未生成'}</Tag>},{title:'状态',dataIndex:'status',render:v=><Tag color={v==='active'?'green':'default'}>{v==='active'?'启用':'停用'}</Tag>},{title:'操作',render:(_,r)=><Space><Button type="link" onClick={()=>show(r)}>编辑</Button><Button type="link" disabled={r.status!=='active'} onClick={()=>openAssignment(r)}>分配链接</Button>{!r.internalOnly&&<><Button type="link" icon={<KeyOutlined/>} onClick={()=>resetPassword(r)}>重置密码</Button><Button type="link" onClick={()=>rotateSecret(r)}>API密钥</Button></>}<Button type="link" danger onClick={()=>deleteChannel(r)}>删除</Button></Space>}];
-  return <Space direction="vertical" size={16} className="page-stack">
+  const channelMore = row => [
+    ...(!row.internalOnly ? [
+      {key:'password',label:'重置密码',onClick:()=>resetPassword(row)},
+      {key:'api',label:'轮换 API 密钥',onClick:()=>rotateSecret(row)},
+      {type:'divider'}
+    ] : []),
+    {key:'delete',label:'删除渠道',danger:true,onClick:()=>deleteChannel(row)}
+  ];
+  const channelIdentity = row => <div className="table-identity"><strong>{row.name||row.companyName}</strong>
+    <span className="table-contact" title={row.email}>{row.email||'仅内部管理'}</span></div>;
+  const columns=[
+    {title:'渠道 / 联系方式',key:'identity',width:260,render:(_,row)=>channelIdentity(row)},
+    {...accountColumn,width:210},
+    {...domainColumn,width:240},
+    {title:'分成',dataIndex:'sharePercent',width:90,align:'right',render:value=>value+'%'},
+    {title:'状态',width:120,render:(_,row)=><Space direction="vertical" size={4}>
+      <Tag color={row.status==='active'?'green':'default'}>{row.status==='active'?'启用':'停用'}</Tag>
+      {!row.internalOnly&&<Text type="secondary">{row.apiConfigured?'API 已配置':'API 未生成'}</Text>}
+    </Space>},
+    {title:'操作',width:210,render:(_,row)=><Space className="table-actions" size={4} wrap>
+      <Button size="small" type="text" onClick={()=>show(row)}>编辑</Button>
+      <Button size="small" disabled={row.status!=='active'} onClick={()=>openAssignment(row)}>分配链接</Button>
+      <Dropdown trigger={['click']} menu={{items:channelMore(row)}}><Button size="small" type="text" aria-label={row.name+' · 更多操作'}>更多</Button></Dropdown>
+    </Space>}
+  ];
+  return <Space direction="vertical" size={16} className="page-stack channels-workspace">
     <div className="page-heading"><div><Title level={2}>渠道管理</Title><Text type="secondary">创建渠道时选择 GAM 账号，自动关联该账号的域名、广告单元、报表和飞书汇报</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={()=>show(null)}>新建渠道</Button></div>
-    <Card title={<Space><FileProtectOutlined/>渠道注册与合同审核<Tag color="blue">待签约 {registrations.filter(row=>row.status==='registered').length}</Tag><Tag color="gold">待复核 {registrations.filter(row=>row.status==='signed').length}</Tag></Space>} extra={<Button icon={<ReloadOutlined/>} loading={registrationLoading} onClick={()=>void loadRegistrations()}>刷新申请</Button>}>
+    <Card className="channel-review-card" title={<Space><FileProtectOutlined/>渠道注册与合同审核<Tag color="blue">待签约 {registrations.filter(row=>row.status==='registered').length}</Tag><Tag color="gold">待复核 {registrations.filter(row=>row.status==='signed').length}</Tag></Space>} extra={<Button icon={<ReloadOutlined/>} loading={registrationLoading} onClick={()=>void loadRegistrations()}>刷新申请</Button>}>
       <Alert type="info" showIcon style={{marginBottom:16}} message="注册资料和合同状态与渠道后台同步；审核开通后，点击该行的“分配链接”选择对应网站。"/>
       <Table rowKey="id" dataSource={registrations} loading={registrationLoading} pagination={{pageSize:8,showSizeChanger:false}} scroll={{x:1050}} columns={[
-        {title:'申请时间',dataIndex:'createdAt',width:180},{title:'公司主体',dataIndex:'companyName',width:190},
-        {title:'联系人',dataIndex:'contactName',width:130},{title:'邮箱',dataIndex:'email',width:220},
-        {title:'关联渠道',dataIndex:'channelName',width:150,render:value=>value||<Text type="secondary">待运营开通</Text>},
-        {title:'GAM 账号',dataIndex:'gamAccountCount',width:105,render:value=>Number(value||0)},
-        {title:'已关联网站',dataIndex:'assignedDomains',width:260,render:(value,row)=>value||<Text type="secondary">{row.status==='approved'?'待运营分配':'签约后分配'}</Text>},
-        {title:'状态',dataIndex:'status',width:115,render:value=><Tag color={value==='approved'?'green':value==='rejected'?'red':value==='registered'?'blue':'gold'}>{value==='approved'?'已开通':value==='rejected'?'已拒绝':value==='registered'?'待渠道签约':'待平台复核'}</Tag>},
-        {title:'操作',width:360,fixed:'right',render:(_,row)=>row.status==='registered'?<Text type="secondary">等待签署</Text>:<Space size={0}>
-          <Button type="link" onClick={()=>setReviewingRegistration(row)}>{row.status==='signed'?'复核并签署':'查看合同'}</Button>
-          {row.status==='approved'&&row.channelId&&<Button type="link" onClick={()=>openAssignment({id:Number(row.channelId),name:row.channelName||row.companyName})}>分配链接</Button>}
-          {row.status==='approved'&&row.channelId&&<Button type="link" onClick={()=>resetPassword({id:Number(row.channelId),name:row.channelName||row.companyName,email:row.email})}>重置密码</Button>}
-          {row.status==='approved'&&row.channelId&&<Button type="link" danger onClick={()=>deleteChannel({id:Number(row.channelId),name:row.channelName||row.companyName})}>删除</Button>}
+        {title:'渠道主体 / 联系方式',key:'identity',width:300,render:(_,row)=><div className="table-identity">
+          <strong>{row.companyName}</strong><span>{row.contactName}</span><span className="table-contact" title={row.email}>{row.email}</span>
+        </div>},
+        {title:'已分配网站',key:'sites',width:260,render:(_,row)=><div className="table-identity">
+          <span>{row.assignedDomains||'—'}</span>
+          <span>{row.channelName||'待开通渠道'}{Number(row.gamAccountCount)>0?' · '+row.gamAccountCount+' 个 GAM 账号':''}</span>
+        </div>},
+        {title:'申请时间',dataIndex:'createdAt',width:140,render:value=><span className="table-timestamp">{value}</span>},
+        {title:'状态',dataIndex:'status',width:110,render:value=><Tag color={value==='approved'?'green':value==='rejected'?'red':value==='registered'?'blue':'gold'}>{value==='approved'?'已开通':value==='rejected'?'已拒绝':value==='registered'?'待渠道签约':'待平台复核'}</Tag>},
+        {title:'操作',width:245,render:(_,row)=>row.status==='registered'?<Text type="secondary">等待签署</Text>:<Space className="table-actions" size={4} wrap>
+          <Button size="small" type="text" onClick={()=>setReviewingRegistration(row)}>{row.status==='signed'?'复核并签署':'查看合同'}</Button>
+          {row.status==='approved'&&row.channelId&&<>
+            <Button size="small" onClick={()=>openAssignment({id:Number(row.channelId),name:row.channelName||row.companyName})}>分配链接</Button>
+            <Dropdown trigger={['click']} menu={{items:[
+              {key:'password',label:'重置密码',onClick:()=>resetPassword({id:Number(row.channelId),name:row.channelName||row.companyName,email:row.email})},
+              {type:'divider'},
+              {key:'delete',label:'删除渠道',danger:true,onClick:()=>deleteChannel({id:Number(row.channelId),name:row.channelName||row.companyName})}
+            ]}}><Button size="small" type="text">更多</Button></Dropdown>
+          </>}
         </Space>}
+
       ]}/>
     </Card>
-    <Card title="现有渠道"><Table rowKey="id" dataSource={items} numericKeys={['sharePercent']} columns={columns} scroll={{x:1200}}/></Card>
+    <Card className="channel-directory-card" title="现有渠道"><Table rowKey="id" dataSource={items} numericKeys={['sharePercent']} columns={columns} scroll={{x:1200}}/></Card>
     <ChannelRegistrationReview registration={reviewingRegistration} accounts={gamAccounts} user={user} onClose={()=>setReviewingRegistration(null)} onDone={()=>{setReviewingRegistration(null);void loadRegistrations();void load();void loadDomains()}}/>
     <Modal open={Boolean(assignTo)} title={<Space>分配链接<Tag>{assignTo?.name}</Tag></Space>} okText="保存分配"
       onOk={saveAssignment} okButtonProps={{disabled:!selectedLink}} confirmLoading={assignBusy} onCancel={()=>{if(!assignBusy)setAssignTo(null)}}>
@@ -501,9 +534,9 @@ function GamAccounts() {
       {title:'Network Code',width:145,render:(_,item)=><div className="account-identity">{item.networkCode}<small>{item.timeZone||'时区待测试'}</small></div>},
       {title:'广告主',width:125,ellipsis:true,render:(_,item)=>item.advertiser || upstreamField(item,'advertiser')},
       {title:'BD',width:95,ellipsis:true,render:(_,item)=>item.bd || upstreamField(item,'bd')},
-      {title:'运营状态',dataIndex:'operationStatus',width:95,render:value=><Tag color={value==='limited'?'gold':value==='normal'?'green':'default'}>{value==='limited'?'限流':value==='normal'?'正常':'未设置'}</Tag>},
-      {title:'启用',dataIndex:'enabled',width:85,render:value=><Tag color={value?'green':'default'}>{value?'已启用':'已停用'}</Tag>},
-      {title:'配置',width:230,render:(_,item)=><Space size={[4,4]} wrap><Tag color={item.credentialConfigured?'blue':'red'}>{item.credentialConfigured?'密钥已配':'缺少密钥'}</Tag><Tag color={item.status==='active'?'green':item.status==='error'?'red':'orange'}>{item.status==='active'?'连接可用':item.status==='error'?'连接失败':'待测试'}</Tag><Tag color={item.syncEnabled?'green':'default'}>{item.syncEnabled?'同步启用':'同步暂停'}</Tag></Space>},
+      {title:'运营状态',dataIndex:'operationStatus',width:95,render:value=><Tag className="state-tag" color={value==='limited'?'gold':value==='normal'?'green':'default'}>{value==='limited'?'限流':value==='normal'?'正常':'未设置'}</Tag>},
+      {title:'启用',dataIndex:'enabled',width:85,render:value=><Tag className="state-tag" color={value?'green':'default'}>{value?'已启用':'已停用'}</Tag>},
+      {title:'配置',width:230,render:(_,item)=><Space size={[4,4]} wrap><Tag className="account-status-tag" icon={<KeyOutlined/>} color={item.credentialConfigured?'blue':'red'}>{item.credentialConfigured?'密钥已配':'缺少密钥'}</Tag><Tag className="account-status-tag" icon={<LinkOutlined/>} color={item.status==='active'?'green':item.status==='error'?'red':'orange'}>{item.status==='active'?'连接可用':item.status==='error'?'连接失败':'待测试'}</Tag><Tag className="account-status-tag" icon={<SyncOutlined/>} color={item.syncEnabled?'green':'default'}>{item.syncEnabled?'同步启用':'同步暂停'}</Tag></Space>},
       {title:'操作',width:150,render:(_,item)=><Space size={4}><Button type="link" onClick={()=>openEdit(item)}>编辑</Button><Dropdown menu={{items:accountActions(item),onClick:({key})=>accountAction(item,key)}} trigger={['click']}><Button size="small">更多</Button></Dropdown></Space>}
     ]}/></Card>
     <Alert type="warning" showIcon message="先核对新旧报表的财务口径" description="REST 的 AD_EXCHANGE_REVENUE 与旧报表的行项目级收入不可直接视为相同。请先选择渠道、上游账户和金额单位，预览核对后再启用自动入库。"/>

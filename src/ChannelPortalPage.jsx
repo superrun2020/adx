@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Button, Card, Checkbox, Descriptions, Empty, Input, Modal, Select, Space, Spin, Steps, Table, Tag, Typography, message } from 'antd';
-import { BarChartOutlined, HistoryOutlined, ExpandOutlined, FileProtectOutlined, LinkOutlined, ReloadOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Checkbox, Descriptions, Empty, Input, Modal, Select, Space, Spin, Steps, Tag, Typography, message } from 'antd';
+import Table from './FitTable.jsx';
+import { BarChartOutlined, HistoryOutlined, EditOutlined, ExpandOutlined, FileProtectOutlined, MailOutlined, LinkOutlined, ReloadOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import SignaturePad from './SignaturePad.jsx';
 import ContractDocument from './ContractDocument.jsx';
 import { viewPaths } from './navigation.js';
 import { countryOptions } from './countries.js';
 import { getLocale } from './i18n.js';
+import { readCached, rememberRead } from './readCache.js';
 import { sessionFetch } from './sessionFetch.js';
 import './channel-registration.css';
 
@@ -20,13 +22,14 @@ async function request(path, options = {}) {
   return body;
 }
 
-function AccountDomains() {
-  const [items, setItems] = useState([]);
+function AccountDomains({ user }) {
+  const path = '/api/channel/domains';
+  const [items, setItems] = useState(() => readCached(user, path)?.data?.items || []);
   const [search,setSearch]=useState('');
   const [loading, setLoading] = useState(false);
   const load = async () => {
     setLoading(true);
-    try { setItems((await request('/api/channel/domains')).items || []); }
+    try { const data = await request(path); rememberRead(user,path,data); setItems(data.items || []); }
     catch (error) { message.error('链接读取失败：' + error.message); }
     finally { setLoading(false); }
   };
@@ -176,18 +179,18 @@ function ContractView({ user }) {
           <div className="contract-document-toolbar"><span>协议正文</span></div>
           <div className="contract-reading-area" tabIndex={0} aria-label="阅读合作协议">{template ? <AgreementPreview text={template.text} registration={registration} values={values}/> : <Spin/>}</div>
         </Card>
-        <Card className="contract-signing-card" title="渠道方签署">
+        <Card className="contract-signing-card" title={<Space><EditOutlined/>渠道方签署</Space>} extra={<Tag>待签署</Tag>}>
           <p className="contract-signing-hint">核对上方协议及主体资料后，完成以下签署信息。</p>
           <div className="registration-grid registration-signer contract-signer-fields">
             <label>签署人<Input value={registration.contactName || ''} disabled/></label>
             <label>签署人职务<Input maxLength={150} value={values.signatureTitle} onChange={event => set('signatureTitle',event.target.value)}/></label>
           </div>
           {contract.emailVerificationRequired && <div className="contract-email-verification">
-            <strong>邮箱验证</strong><Text type="secondary">签署验证码将发送至 {registration.email}，15 分钟内有效。</Text>
+            <strong><MailOutlined/> 邮箱验证</strong><Text type="secondary">签署验证码将发送至 {registration.email}，15 分钟内有效。</Text>
             <div className="contract-email-code-row"><Input inputMode="numeric" maxLength={6} placeholder="6 位邮箱验证码" value={values.verificationCode}
               onChange={event => set('verificationCode',event.target.value.replace(/\D/g,''))}/><Button onClick={sendCode} loading={codeSending} disabled={codeCooldown>0}>{codeCooldown>0?codeCooldown+' 秒后重发':codeSent?'重新发送':'发送验证码'}</Button></div>
           </div>}
-          <SignaturePad width={1200} height={320} onChange={value => set('signatureData',value)}/>
+          <SignaturePad title="授权代表手写签名" width={1200} height={360} onChange={value => set('signatureData',value)}/>
           <Checkbox checked={values.accepted} onChange={event => set('accepted',event.target.checked)} style={{marginTop:16}}>本人已核对主体资料、阅读完整协议，并确认有权代表该公司签署；同意留存签名、签署时间与审计记录。</Checkbox>
           <div className="registration-actions"><Button type="primary" size="large" block loading={submitting} onClick={sign}>签署合同并提交审核</Button></div>
           <div className="contract-signing-security"><SafetyCertificateOutlined/><span>签名与签署时间将安全留存</span></div>
@@ -200,7 +203,9 @@ function ContractView({ user }) {
         {contract.status === 'approved' && contract.emailDelivery && <Alert showIcon type={contract.emailDelivery.status === 'sent' ? 'success' : 'info'}
           message={contract.emailDelivery.status === 'sent' ? '签署版 PDF 已提交邮件发送' : contract.emailDelivery.status === 'failed' && contract.emailDelivery.attempts >= 8 ? '邮件发送失败，可在下方下载签署版 PDF' : '签署版 PDF 邮件正在发送或重试'}
           description="邮件发往注册邮箱；若未见邮件，请查看垃圾邮件。您也可以在下方直接下载合同。"/>}
-        <Card title={<Space><FileProtectOutlined/>签署信息</Space>} extra={<Tag color={contract.status === 'approved' ? 'green' : contract.status === 'rejected' ? 'red' : 'gold'}>{contract.status === 'approved' ? '双方已签署' : contract.status === 'rejected' ? '申请未通过' : '等待平台复核'}</Tag>}>
+        <Card className="contract-record-card" title={<Space><FileProtectOutlined/>签署信息</Space>} extra={<Space><Tag color={contract.status === 'approved' ? 'green' : contract.status === 'rejected' ? 'red' : 'gold'}>{contract.status === 'approved' ? '双方已签署' : contract.status === 'rejected' ? '申请未通过' : '等待平台复核'}</Tag>
+          {contract.status === 'approved' && agreement.counterSignatureData && <Button type="primary" href="/api/channel/contract/pdf" download>下载双方签署 PDF</Button>}
+        </Space>}>
           <Descriptions column={{xs:1,sm:2}} items={[
             {key:'company',label:'签约主体',children:registration.companyName},
             {key:'contact',label:'联系人',children:registration.contactName},
@@ -213,16 +218,18 @@ function ContractView({ user }) {
             {key:'hash',label:'合同内容校验值',span:2,children:<Text code copyable>{agreement.contractHash || '—'}</Text>},
             ...(agreement.signedPdfSha256 ? [{key:'pdfHash',label:'签署 PDF 校验值',span:2,children:<Text code copyable>{agreement.signedPdfSha256}</Text>}] : [])
           ]}/>
-          {agreement.signatureData && <div className="channel-signature"><Text strong>渠道方签名</Text><img src={agreement.signatureData} alt="渠道方电子签名"/></div>}
-          {agreement.counterSignatureData && <div className="channel-signature"><Text strong>平台签名</Text><img src={agreement.counterSignatureData} alt="平台电子签名"/></div>}
+          {(agreement.signatureData||agreement.counterSignatureData)&&<div className="contract-party-signatures">
+            {agreement.signatureData&&<section><Text type="secondary">渠道方签名</Text><img src={agreement.signatureData} alt="渠道方电子签名"/><strong>{agreement.signerName}</strong><span>{agreement.signedAt}</span></section>}
+            {agreement.counterSignatureData&&<section><Text type="secondary">平台签名</Text><img src={agreement.counterSignatureData} alt="平台电子签名"/><strong>{agreement.counterSigner}</strong><span>{agreement.countersignedAt}</span></section>}
+          </div>}
           {registration.reviewNote && <Alert type="warning" showIcon message="审核说明" description={registration.reviewNote}/>}
         </Card>
-        <Card className="contract-reading-card" title="已签署协议全文" extra={contract.status === 'approved' && agreement.counterSignatureData && <Button type="primary" href="/api/channel/contract/pdf" download>下载双方签署 PDF</Button>}><div className="contract-document-toolbar"><span>原始签署正文</span></div><div className="contract-reading-area" tabIndex={0}><ContractDocument text={agreement.contractText || '合同内容暂不可用'}/></div></Card>
+        <Card className="contract-reading-card" title="已签署协议全文"><div className="contract-document-toolbar"><span>原始签署正文</span></div><div className="contract-reading-area" tabIndex={0}><ContractDocument text={agreement.contractText || '合同内容暂不可用'}/></div></Card>
       </>}
     </>}
   </Space>;
 }
 
 export default function ChannelPortalPage({ view, user }) {
-  return view === 'channel-contract' ? <ContractView user={user}/> : <AccountDomains/>;
+  return view === 'channel-contract' ? <ContractView user={user}/> : <AccountDomains user={user}/>;
 }

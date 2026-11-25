@@ -79,19 +79,22 @@ export default function BotReport() {
         </Row>
           : <Text type="secondary">今天暂无已同步的 GAM REST 明细，暂不把空白误报为 0。</Text>}
         <div style={{marginTop:16}}><Text type="secondary">已同步明细：{preview?.rows ?? '—'} 条；最近入库（UTC）：{preview?.lastImport || '—'}</Text></div>
-        <div style={{marginTop:16}}><Text strong>各 GAM 账号当地日期</Text>
+
+      </Card></Col>
+    </Row>
+        <Card title="各 GAM 账号当地日期">
           <NumericSortableTable size="small" rowKey={row => row.networkCode + ':' + row.channelName + ':' + row.date} style={{marginTop:8}}
             dataSource={preview?.accounts || []} numericKeys={['rows','revenue','upstreamSettlement','profit','channelRevenue']}
-            columns={[{title:'账号',dataIndex:'name'},{title:'渠道',dataIndex:'channelName'},{title:'当地日期',dataIndex:'date'},
-              {title:'时区',dataIndex:'timeZone'},{title:'明细',dataIndex:'rows',align:'right'},
+            columns={[
+              {title:'账号 / 渠道',width:250,render:(_,row)=><div className="table-identity"><strong>{row.name}</strong><span>{row.channelName}</span></div>},
+              {title:'统计日期',width:160,render:(_,row)=><div className="table-identity"><span>{row.date}</span><span>{row.timeZone}</span></div>},
+              {title:'明细',dataIndex:'rows',width:90,align:'right'},
               {title:'流水',dataIndex:'revenue',align:'right',render:money},
               {title:'上游应结算',dataIndex:'upstreamSettlement',align:'right',render:value => value == null ? '—' : money(value)},
               {title:'渠道结算',dataIndex:'channelRevenue',align:'right',render:value => value == null ? '—' : money(value)},
               {title:'利润',dataIndex:'profit',align:'right',render:money}]}
             scroll={{x:900}} pagination={false}/>
-        </div>
-      </Card></Col>
-    </Row>
+        </Card>
     <Card title="最近一次自动汇报"><Space wrap>
       <Tag color={last?.status === 'sent' ? 'green' : last?.status === 'failed' ? 'red' : 'default'}>
         {last?.status === 'sent' ? '已送达' : last?.status === 'failed' ? '发送失败' : last?.status === 'sending' ? '发送中' : '尚无记录'}</Tag>

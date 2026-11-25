@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Table } from 'antd';
+import Table from './FitTable.jsx';
 import NumericSortHeader from './NumericSortHeader.jsx';
 
 function numericValue(value) {

@@ -4,6 +4,13 @@ let started = false;
 let dictionary = null;
 let fragments = null;
 const overrides = {
+  '授权代表手写签名':'Authorized representative signature','待签署':'Awaiting signature',
+  '运营工作台':'Operations workspace','渠道主体 / 联系方式':'Publisher / contact',
+  '渠道 / 联系方式':'Channel / contact','账号 / 渠道':'Account / channel','统计日期':'Reporting date',
+  '域名 / 账号':'Domain / account','对比区间':'Comparison period','收益对比':'Revenue comparison','流量变化':'Traffic change',
+  '通知状态':'Notification status','最早确认下修日':'Earliest confirmed rollback date','轮换 API 密钥':'Rotate API key',
+  'API 已配置':'API configured','API 未生成':'API not generated','待开通渠道':'Pending channel approval',
+  '审核开通后，点击该行的“分配链接”选择对应网站。':'After approval, use Assign website on the same row to select websites.',
   '确认重置':'Reset password','删除渠道':'Delete channel','渠道已删除':'Channel deleted','输入新密码':'Enter a new password',
   '删除后该渠道将从列表移除，登录和 API 访问立即停用。历史报表与已签合同保留。':'The channel will be removed from the list and its sign-in and API access revoked. Historical reports and signed agreements will be retained.',
   '此渠道仍关联 GAM 账号，请先将账号转移到其他渠道后删除':'Transfer the linked GAM accounts to another channel before deleting this channel.',

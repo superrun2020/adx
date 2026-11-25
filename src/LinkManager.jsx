@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Card, Col, Empty, Form, Input, Modal, Row, Select, Space, Statistic, Table, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Col, Empty, Form, Input, Modal, Row, Select, Space, Statistic, Tag, Typography, message } from 'antd';
+import Table from './FitTable.jsx';
 import { EditOutlined, LinkOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import { catalogLinksWithManual, hostname } from './link-catalog.mjs';
 import { matchingDomainAssignment, resolveChannelAssignment } from './channel-domain-catalog.mjs';
@@ -119,14 +120,14 @@ export default function LinkManager({ user }) {
           const account = allAccounts[next++];
           if (account.status !== 'active') failures.push(account.name + '：账号未连接，无法读取 GAM Sites');
           else {
-            const [sites, reported] = await Promise.allSettled([
-              allSites(account.id, current.signal, force),
+            await Promise.all([
+              allSites(account.id, current.signal, force)
+                .then(sites => { if (!current.signal.aborted) { sitesByAccount[account.id] = sites; publish(); } })
+                .catch(error => { if (!current.signal.aborted) { failures.push(account.name + '：GAM Sites 读取失败（' + error.message + '）'); publish(); } }),
               api('/api/admin/gam-accounts/' + account.id + '/site-domains' + (force ? '?refresh=1' : ''), current.signal)
+                .then(reported => { if (!current.signal.aborted) { reportedByAccount[account.id] = reported.items || []; publish(); } })
+                .catch(error => { if (!current.signal.aborted) { failures.push(account.name + '：报表子域名读取失败（' + error.message + '）'); publish(); } })
             ]);
-            if (sites.status === 'fulfilled') sitesByAccount[account.id] = sites.value;
-            else if (!current.signal.aborted) failures.push(account.name + '：GAM Sites 读取失败（' + String(sites.reason?.message || sites.reason) + '）');
-            if (reported.status === 'fulfilled') reportedByAccount[account.id] = reported.value.items || [];
-            else if (!current.signal.aborted) failures.push(account.name + '：报表子域名读取失败（' + String(reported.reason?.message || reported.reason) + '）');
           }
           done += 1;
           publish();

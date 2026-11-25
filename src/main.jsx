@@ -2,9 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   App as AntApp, Alert, Avatar, Button, Card, Col, ConfigProvider, Empty,
-  Layout, Menu, Popconfirm, Row, Space, Statistic, Table,
-  Tag, Typography, message
+  Layout, Menu, Popconfirm, Row, Space, Statistic, Tag, Typography, message
 } from 'antd';
+import Table from './FitTable.jsx';
 import {
   ApiOutlined, BarChartOutlined, DashboardOutlined, DollarOutlined, FileProtectOutlined, KeyOutlined,
   LinkOutlined, LogoutOutlined, PlusOutlined, ReloadOutlined, SafetyOutlined, TeamOutlined,
@@ -22,6 +22,8 @@ import ReportDateFilter from './ReportDateFilter.jsx';
 import RevenueChart from './RevenueChart.jsx';
 import NumericSortHeader from './NumericSortHeader.jsx';
 import './styles.css';
+import './enterprise.css';
+import { enterpriseTheme } from './enterpriseTheme.js';
 
 
 const { Header, Sider, Content } = Layout;
@@ -104,7 +106,7 @@ function MetricCards({ summary, admin }) {
     ['匹配率', pending ? '—' : Number(summary.matchRate || 0).toFixed(2) + '%', <SafetyOutlined />],
     ['点击率', clickRate, <BarChartOutlined />]
   ];
-  return <Row gutter={[16, 16]}>{items.map(([title, value, icon]) => <Col xs={24} sm={12} xl={6} key={title}><Card className="metric"><Statistic title={title} value={value} prefix={icon} /></Card></Col>)}</Row>;
+  return <Row gutter={[16, 16]}>{items.map(([title, value, icon]) => <Col xs={24} sm={12} xl={admin&&['展示量','匹配率','点击率'].includes(title)?8:6} key={title}><Card className="metric"><Statistic title={title} value={value} prefix={icon} /></Card></Col>)}</Row>;
 }
 
 function DashboardTopLinks({ user, refreshKey }) {
@@ -243,10 +245,10 @@ function Shell({ user, onLogout, initialView = 'dashboard', initialDashboard, on
     {type:'group',label:'开发能力',children:[sidebarItem('api',<ApiOutlined/>,'渠道 API')]}
   ].map(group=>({...group,children:group.children.filter(item=>canVisit(user,item.key))})).filter(group=>group.children.length),[user]);
   const body=view==='dashboard'?<Dashboard range={range} setRange={setRange} admin={admin} user={user} initialDashboard={initialDashboard}/>:view==='reports'?<Reports range={range} setRange={setRange} admin={admin} user={user}/>:view==='links'?<LinkManager key={user?.id} user={user}/>:view==='regression'?<RegressionMonitor/>:view==='channel-regression'?<RegressionMonitor channelMode/>:view==='channel-links'||view==='channel-contract'?<ChannelPortalPage view={view} user={user}/>:view==='bot-report'?<BotReport/>:<AdminPages view={view} user={user}/>;
-  return <Layout className="app-shell"><Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={238}><div className="side-brand"><img src="/google-g.png" alt="Google" />{!collapsed&&<div><b>{admin?'AdX Control':'AdX Publisher'}</b><small>{admin?'平台管理端':'渠道工作台'}</small></div>}</div><Menu theme="dark" mode="inline" selectedKeys={[view]} items={menu} onClick={({key,domEvent})=>{if(!shouldNavigateInPlace(domEvent))return;domEvent?.preventDefault();navigate(key);}}/><div className={'sidebar-profile'+(collapsed?' sidebar-profile-collapsed':'')} title={user.name||user.email}>
+  return <Layout className="app-shell"><Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={248}><div className="side-brand"><img src="/google-g.png" alt="Google" />{!collapsed&&<div><b>{admin?'AdX Control':'AdX Publisher'}</b><small>{admin?'平台管理端':'渠道工作台'}</small></div>}</div><Menu theme="dark" mode="inline" selectedKeys={[view]} items={menu} onClick={({key,domEvent})=>{if(!shouldNavigateInPlace(domEvent))return;domEvent?.preventDefault();navigate(key);}}/><div className={'sidebar-profile'+(collapsed?' sidebar-profile-collapsed':'')} title={user.name||user.email}>
       <Avatar size={36} className="sidebar-avatar">{Array.from(user.name||user.email||'?')[0].toUpperCase()}</Avatar>
       {!collapsed&&<div className="sidebar-profile-text"><strong>{user.name||user.email}</strong><span>{user.isSuperAdmin?'最高管理员':admin?'平台管理员':user.status==='pending'?'待完成签约':'渠道账号'}</span></div>}
-    </div></Sider><Layout><Header><div className="header-actions"><LanguageSwitcher/><Popconfirm title="确认退出登录？" onConfirm={onLogout}><Button icon={<LogoutOutlined/>}>退出</Button></Popconfirm></div></Header><Content><PageErrorBoundary key={view}><React.Suspense fallback={<Card className="route-loading">正在加载页面…</Card>}>{body}</React.Suspense></PageErrorBoundary></Content></Layout></Layout>;
+    </div></Sider><Layout><Header><div className="workspace-location"><span>{admin?'运营工作台':'渠道工作台'}</span><i aria-hidden="true">/</i><strong>{menu.flatMap(group=>group.children).find(item=>item.key===view)?.title}</strong></div><div className="header-actions"><LanguageSwitcher/><Popconfirm title="确认退出登录？" onConfirm={onLogout}><Button icon={<LogoutOutlined/>}>退出</Button></Popconfirm></div></Header><Content><PageErrorBoundary key={view}><React.Suspense fallback={<Card className="route-loading">正在加载页面…</Card>}>{body}</React.Suspense></PageErrorBoundary></Content></Layout></Layout>;
 }
 
 function Root({ initialUser, initialView, initialDashboard, onReady }) {
@@ -255,7 +257,7 @@ function Root({ initialUser, initialView, initialDashboard, onReady }) {
     clearCachedUser(initialUser);
     window.location.reload();
   };
-  return <ConfigProvider locale={getLocale() === 'en' ? enUS : zhCN}><Shell user={initialUser} onLogout={logout} initialView={initialView} initialDashboard={initialDashboard} onReady={onReady} /></ConfigProvider>;
+  return <ConfigProvider theme={enterpriseTheme} locale={getLocale() === 'en' ? enUS : zhCN}><Shell user={initialUser} onLogout={logout} initialView={initialView} initialDashboard={initialDashboard} onReady={onReady} /></ConfigProvider>;
 }
 
 let appRootInstance;

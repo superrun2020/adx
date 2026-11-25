@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Card, Select, Space, Table, Tag, Typography } from 'antd';
+import { Alert, Card, Select, Space, Tag, Typography } from 'antd';
+import Table from './FitTable.jsx';
 import NumericSortHeader from './NumericSortHeader.jsx';
 import { sessionFetch } from './sessionFetch.js';
 

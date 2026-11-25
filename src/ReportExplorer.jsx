@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, AutoComplete, Button, Card, Checkbox, Drawer, Input, InputNumber, Select, Space, Table, Typography, message } from 'antd';
+import { Alert, AutoComplete, Button, Card, Checkbox, Drawer, Input, InputNumber, Select, Space, Typography, message } from 'antd';
+import Table from './FitTable.jsx';
 import { BarChartOutlined, DownloadOutlined, FilterOutlined, ReloadOutlined } from '@ant-design/icons';
 import { readCached, rememberRead } from './readCache.js';
 import ReportDateFilter from './ReportDateFilter.jsx';
@@ -46,8 +47,8 @@ const defaultReportPath = range => '/api/reports?' + new URLSearchParams({
   dimensions:defaultDimensions.join(','), page:'1', pageSize:'50', source:'rest'
 });
 
-async function getJson(path) {
-  const response = await sessionFetch(path, { credentials:'include' });
+async function getJson(path, signal) {
+  const response = await sessionFetch(path, { credentials:'include', signal });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.ok === false) throw new Error(data.error || 'http_' + response.status);
   return data;
@@ -101,27 +102,27 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
       .catch(cause => message.error('筛选项加载失败：' + cause.message));
   }, [admin]);
   useEffect(() => {
-    let active = true; setLoading(true); setError('');
+    let active = true; const controller = new AbortController(); setLoading(true); setError('');
     const extra = selectedDate && selectedDimensions.includes('date')
       ? { drill:JSON.stringify({ date:selectedDate }) } : {};
     const path = '/api/reports?' + params(selectedDimensions,page,pageSize,{ ...extra,
       ...(sort ? { sortBy:sort.key, sortDir:sort.direction } : {}) });
     const saved = readCached(user, path);
     setRows(saved?.data?.items || []); setTotal(saved?.data?.total || 0); setCachedRows(Boolean(saved));
-    getJson(path)
+    getJson(path, controller.signal)
       .then(data => { if (active) { rememberRead(user, path, data); setRows(data.items || []); setTotal(data.total || 0); setCachedRows(false); } })
       .catch(cause => { if (active) setError(cause.message); })
       .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
+    return () => { active = false; controller.abort(); };
   }, [range[0].valueOf(),range[1].valueOf(),selectedDimensions.join(','),applied,page,pageSize,selectedDate,sort]);
   useEffect(() => {
     if (!selectedDimensions.includes('date')) { setDailyRows([]); setDailyTotal(0); setDailyCached(false); return; }
-    let active = true; setDailyLoading(true);
+    let active = true; const controller = new AbortController(); setDailyLoading(true);
     const path = '/api/reports?' + params(['date', ...(dailyBreakdown ? [dailyBreakdown] : [])],dailyPage,dailyPageSize,
       dailySort ? { sortBy:dailySort.key, sortDir:dailySort.direction } : {});
     const saved = readCached(user, path);
     setDailyRows(saved?.data?.items || []); setDailyTotal(saved?.data?.total || 0); setDailyCached(Boolean(saved));
-    getJson(path)
+    getJson(path, controller.signal)
       .then(data => { if (active) {
         if (dailyPage > 1 && !(data.items || []).length) { setDailyPage(1); return; }
         rememberRead(user, path, data); setDailyRows(data.items || []);
@@ -129,7 +130,7 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
       } })
       .catch(cause => { if (active) message.error('每日汇总加载失败：' + cause.message); })
       .finally(() => { if (active) setDailyLoading(false); });
-    return () => { active = false; };
+    return () => { active = false; controller.abort(); };
   }, [range[0].valueOf(),range[1].valueOf(),applied,dailyBreakdown,dailyPage,dailyPageSize,selectedDimensions.includes('date'),dailySort]);
   const search = () => {
     const domains = [...new Set(splitDomains(filters.domain).map(value => value.toLowerCase()))];
@@ -161,8 +162,8 @@ export default function ReportExplorer({ range, setRange, admin, user }) {
     render:value => value === null || value === undefined || value === '' ? '—' : String(value)
   }));
   const columns = [...dimensionColumns(selectedDimensions),...metricColumns(selectedMetrics,admin,sort,value => { setPage(1); setSort(value); })];
-  const detailColumnWeight = column => ['url','adUnit','account'].includes(column.dataIndex) ? 2.2
-    : ['adUnitId','advertiser','channel','bd','date'].includes(column.dataIndex) ? 1.5 : 1;
+  const detailColumnWeight = column => ['url','adUnit','account'].includes(column.dataIndex) ? 1.7
+    : ['adUnitId','advertiser','channel','bd','date'].includes(column.dataIndex) ? 1.15 : 1.2;
   const detailWeight = columns.reduce((total,column) => total + detailColumnWeight(column), 0);
   const detailColumns = columns.map(column => ({...column,
     width:(detailColumnWeight(column) / detailWeight * 100) + '%',
