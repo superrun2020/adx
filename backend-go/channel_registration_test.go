@@ -160,6 +160,8 @@ func TestDeletePendingChannelRegistration(t *testing.T) {
 			(92,'reports@example.test','Reports','unused','admin','active','["reports"]')`,
 		`INSERT INTO channel_registrations(user_id,company_name,contact_name,registration_number,country,registered_address,organization_email,phone,status)
 			VALUES(91,'Example Ltd','Signed','123','UK','Example Street','signed@example.test','12345','signed')`,
+		`INSERT INTO channel_registration_contracts(registration_id,version,contract_text,contract_hash,signer_name,signer_title,signer_email,signature_data,signature_hash,signed_at)
+			SELECT id,'v1','contract','hash','Signed','Director','signed@example.test','image','image-hash',datetime('now') FROM channel_registrations WHERE user_id=91`,
 		`INSERT INTO channel_contract_email_codes(user_id,email,contract_hash,code_hash,expires_at,sent_at)
 			VALUES(90,'unsigned@example.test','contract','code',datetime('now','+1 hour'),datetime('now'))`,
 	} {
@@ -167,7 +169,7 @@ func TestDeletePendingChannelRegistration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for token, id := range map[string]int64{"admin": 1, "pending": 90, "reports": 92} {
+	for token, id := range map[string]int64{"admin": 1, "pending": 90, "signed": 91, "reports": 92} {
 		if _, err := a.db.Exec("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,datetime('now','+1 hour'))", sha256Hex(token), id); err != nil {
 			t.Fatal(err)
 		}
@@ -195,6 +197,14 @@ func TestDeletePendingChannelRegistration(t *testing.T) {
 	}
 	if !a.exists("SELECT 1 FROM channel_registrations WHERE user_id=91 AND status='signed'") || !a.exists("SELECT 1 FROM audit_logs WHERE action='channel.registration_deleted' AND target_id=90") {
 		t.Fatal("expected signed registration and deletion audit to be present")
+	}
+	request(http.MethodDelete, path+"91?status=signed", "reports", http.StatusForbidden)
+	request(http.MethodDelete, path+"91?status=signed", "admin", http.StatusOK)
+	request(http.MethodGet, "/api/auth/me", "signed", http.StatusUnauthorized)
+	if a.exists("SELECT 1 FROM channel_registrations WHERE user_id=91") ||
+		a.exists("SELECT 1 FROM channel_registration_contracts WHERE signer_email='signed@example.test'") ||
+		!a.exists("SELECT 1 FROM audit_logs WHERE action='channel.registration_deleted' AND target_id=91") {
+		t.Fatal("signed application or signature still exists, or audit was not recorded")
 	}
 }
 

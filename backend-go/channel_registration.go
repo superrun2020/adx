@@ -311,14 +311,22 @@ func (a *app) deletePendingChannelRegistration(w http.ResponseWriter, r *http.Re
 		return
 	}
 	defer tx.Rollback()
-	// Users awaiting their first signature have no registration row yet.
-	// The same statement checks eligibility and deletes the user, so a signature
-	// committed while the admin had the list open prevents deletion.
+	// Require the status the operator saw. Signing or approval can otherwise
+	// change what is being deleted between opening and confirming the dialog.
+	status := r.URL.Query().Get("status")
+	var eligibility string
+	switch status {
+	case "", "registered":
+		eligibility = "NOT EXISTS (SELECT 1 FROM channel_registrations WHERE user_id=users.id)"
+	case "signed":
+		eligibility = "EXISTS (SELECT 1 FROM channel_registrations WHERE user_id=users.id AND channel_id IS NULL AND status='signed')"
+	default:
+		writeError(w, 400, "invalid_channel_registration")
+		return
+	}
 	var deletedID int64
-	err = tx.QueryRowContext(r.Context(), `DELETE FROM users
-		WHERE id=? AND role='channel' AND status='pending' AND channel_id IS NULL
-		AND NOT EXISTS (SELECT 1 FROM channel_registrations WHERE user_id=users.id)
-		RETURNING id`, id).Scan(&deletedID)
+	err = tx.QueryRowContext(r.Context(), "DELETE FROM users WHERE id=? AND role='channel' AND status='pending' AND channel_id IS NULL AND "+
+		eligibility+" RETURNING id", id).Scan(&deletedID)
 	if err == sql.ErrNoRows {
 		writeError(w, 409, "channel_registration_not_deletable")
 		return
@@ -529,14 +537,24 @@ func (a *app) approveChannelRegistration(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	created, err := tx.ExecContext(r.Context(), "INSERT INTO channels(name,email,share_percent,status,internal_only) VALUES(?,?,?,'active',0)",
-		name, strings.ToLower(fieldString(reg, "email")), share)
+	created, err := tx.ExecContext(r.Context(), "INSERT INTO channels(name,email,share_percent,status,internal_only) SELECT ?,?,?,'active',0 WHERE EXISTS ("+
+		"SELECT 1 FROM channel_registrations r JOIN users u ON u.id=r.user_id WHERE r.id=? AND r.status='signed' AND u.status='pending')",
+		name, strings.ToLower(fieldString(reg, "email")), share, id)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			writeError(w, 409, "registration_email_unavailable")
 		} else {
 			writeError(w, 500, "channel_creation_failed")
 		}
+		return
+	}
+	count, err := created.RowsAffected()
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	if count != 1 {
+		writeError(w, 409, "channel_registration_not_reviewable")
 		return
 	}
 	channelID, _ := created.LastInsertId()

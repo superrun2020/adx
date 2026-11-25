@@ -8,6 +8,7 @@ const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 const boot = (await readFile(new URL('../src/boot.js', import.meta.url), 'utf8'))
   .replace("import { viewForPath } from './navigation.js';", '')
   .replace("import { sessionFetch } from './sessionFetch.js';", '')
+  .replace("import { previewApiPath, previewUserId } from './channelPreview.js';", '')
   .replace("import { getLocale, setLocale, startI18n } from './i18n.js';", '')
   .replace("import('./main.jsx')", 'globalThis.__loadApp()')
   .replace("import('./RevenueChart.jsx')", 'globalThis.__loadChart()')
@@ -44,7 +45,7 @@ function start({ loginResponse, loadApp, dashboardResponse, pathname = '/', sess
     document, URLSearchParams, console, viewForPath, readCached: () => null, rememberRead() {},
     window: { location: { pathname, hostname: 'adx.geekforest.ai', search: '', reload() {} }, setTimeout() {} },
     sessionStorage: { getItem: key => sessionExpired && key === 'adx_session_reauth' ? '1' : null, setItem() {}, removeItem() {} },
-    fetch: fetchStub, sessionFetch: fetchStub,
+    fetch: fetchStub, sessionFetch: fetchStub, previewApiPath: path => path, previewUserId: () => null,
     __loadApp: loadApp, getLocale: () => 'zh', setLocale() {}, startI18n: async () => {},
     __loadChart: async () => ({}),
     __loadSecondary: async () => ({})

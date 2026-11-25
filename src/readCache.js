@@ -2,7 +2,7 @@ const prefix = 'adx:read-cache:v2:';
 const maxEntries = 8;
 
 function keyFor(user) {
-  if (!user?.id) return '';
+  if (!user?.id || user.readOnlyPreview) return '';
   return prefix + [user.id, user.role, user.channelId || 0].join(':');
 }
 

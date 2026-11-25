@@ -9,7 +9,7 @@ import (
 )
 
 func (a *app) channels(w http.ResponseWriter, r *http.Request) {
-	a.sendItems(w, "SELECT c.id,c.name,CASE WHEN c.internal_only=1 THEN '' ELSE c.email END email,c.internal_only internalOnly,c.share_percent sharePercent,c.status,c.created_at createdAt,(SELECT COUNT(*) FROM channel_domains d WHERE d.channel_id=c.id) domainCount,COALESCE((SELECT json_group_array(s.id) FROM soap_accounts s WHERE s.rest_channel_id=c.id),'[]') gamAccountIds,CASE WHEN c.api_secret_hash IS NULL THEN 0 ELSE 1 END apiConfigured FROM channels c WHERE c.status<>'deleted' ORDER BY c.id DESC")
+	a.sendItems(w, "SELECT c.id,c.name,CASE WHEN c.internal_only=1 THEN '' ELSE c.email END email,c.internal_only internalOnly,c.share_percent sharePercent,c.status,c.created_at createdAt,(SELECT u.id FROM users u WHERE u.channel_id=c.id AND u.role='channel' AND u.status='active' ORDER BY u.id LIMIT 1) userId,(SELECT COUNT(*) FROM channel_domains d WHERE d.channel_id=c.id) domainCount,COALESCE((SELECT json_group_array(s.id) FROM soap_accounts s WHERE s.rest_channel_id=c.id),'[]') gamAccountIds,CASE WHEN c.api_secret_hash IS NULL THEN 0 ELSE 1 END apiConfigured FROM channels c WHERE c.status<>'deleted' ORDER BY c.id DESC")
 }
 
 func (a *app) createChannel(w http.ResponseWriter, r *http.Request) {

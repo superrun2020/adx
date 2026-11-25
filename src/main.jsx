@@ -18,6 +18,7 @@ import LanguageSwitcher from './LanguageSwitcher.jsx';
 import { getLocale } from './i18n.js';
 import { clearCachedUser, readCached, rememberRead } from './readCache.js';
 import { sessionFetch } from './sessionFetch.js';
+import { previewPagePath } from './channelPreview.js';
 import { canVisit, shouldNavigateInPlace, viewForPath, viewPaths } from './navigation.js';
 import ReportDateFilter from './ReportDateFilter.jsx';
 import RevenueChart from './RevenueChart.jsx';
@@ -114,20 +115,30 @@ function DashboardTopLinks({ user, refreshKey }) {
   const path = '/api/dashboard/highlights';
   const [data, setData] = useState(() => readCached(user, path)?.data || null);
   const [sorts, setSorts] = useState({});
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
-    let active = true;
+    let request;
     const load = () => {
       const cached = readCached(user, path);
-      if (cached && active) setData(cached.data);
-      if (cached && Date.now() - cached.savedAt < 10000 && refreshKey === 0) return;
-      api(path).then(result => {
+      if (cached) setData(cached.data);
+      if (cached && Date.now() - cached.savedAt < 10000 && refreshKey === 0) {
+        setLoading(false);
+        return;
+      }
+      request?.abort();
+      const controller = new AbortController();
+      request = controller;
+      setLoading(true);
+      api(path, {signal:controller.signal}).then(result => {
+        if (controller.signal.aborted) return;
         rememberRead(user, path, result);
-        if (active) setData(result);
-      }).catch(error => { if (active) message.error('收益榜加载失败：' + error.message); });
+        setData(result);
+      }).catch(error => { if (!controller.signal.aborted) message.error('收益榜加载失败：' + error.message); })
+        .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     };
     load();
-    const timer = window.setInterval(load, 15 * 60 * 1000);
-    return () => { active = false; window.clearInterval(timer); };
+    const timer = window.setInterval(() => { if (!document.hidden) load(); }, 15 * 60 * 1000);
+    return () => { request?.abort(); window.clearInterval(timer); };
   }, [user.id, refreshKey]);
   const columnsFor = period => [
     { title:'排名', width:64, render:(_, row) => <span className={'rank-badge rank-' + row.rank}>{row.rank}</span> },
@@ -151,7 +162,7 @@ function DashboardTopLinks({ user, refreshKey }) {
     <Text type="secondary">当日、当月按各 Ad Manager 账号时区计算，仅统计 REST 同步数据。</Text>
     {data?.timeZoneWarnings?.length > 0 && <Alert type="warning" showIcon message={'以下账号未配置有效时区，暂按 UTC 计算：' + data.timeZoneWarnings.join('、')}/>}
     <Row gutter={[16,16]}>
-      {[['当日链接收益 Top 10', 'daily', data?.daily], ['当月链接收益 Top 10', 'monthly', data?.monthly]].map(([title, period, rows]) => <Col xs={24} xl={12} key={title}><Card className="highlight-ranking" title={title} extra="USD"><Table size="small" rowKey="url" pagination={false} columns={columnsFor(period)} dataSource={sortedRows(period, rows)} scroll={{x:520}} locale={{emptyText:<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无已同步数据"/>}}/></Card></Col>)}
+      {[['当日链接收益 Top 10', 'daily', data?.daily], ['当月链接收益 Top 10', 'monthly', data?.monthly]].map(([title, period, rows]) => <Col xs={24} xl={12} key={title}><Card className="highlight-ranking" title={title} extra="USD"><Table size="small" rowKey="url" pagination={false} columns={columnsFor(period)} dataSource={sortedRows(period, rows)} loading={loading && !data} scroll={{x:520}} locale={{emptyText:<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无已同步数据"/>}}/></Card></Col>)}
     </Row>
   </Space>;
 }
@@ -223,9 +234,11 @@ function Dashboard({ range, setRange, admin, user, initialDashboard }) {
   const [showingCached, setShowingCached] = useState(Boolean(saved));
   const [loading, setLoading] = useState(false);
   const [highlightRefresh, setHighlightRefresh] = useState(0);
-  const requestId = useRef(0);
+  const request = useRef(null);
   const load = async (force = false) => {
-    const id = ++requestId.current;
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
     setLoading(true);
     try {
       let result;
@@ -235,11 +248,11 @@ function Dashboard({ range, setRange, admin, user, initialDashboard }) {
         if (cached.error) throw cached.error;
         result = cached.data;
       } else {
-        result = await api(path);
+        result = await api(path, {signal:controller.signal});
       }
-      if (id === requestId.current) { rememberRead(user, path, result); setData(result); setDataKey(rangeKey); setShowingCached(false); }
-    } catch (e) { if (id === requestId.current) message.error(e.message); }
-    finally { if (id === requestId.current) setLoading(false); }
+      if (!controller.signal.aborted) { rememberRead(user, path, result); setData(result); setDataKey(rangeKey); setShowingCached(false); }
+    } catch (e) { if (!controller.signal.aborted) message.error(e.message); }
+    finally { if (!controller.signal.aborted) setLoading(false); }
   };
   useEffect(() => {
     const latest = readCached(user, path);
@@ -247,7 +260,10 @@ function Dashboard({ range, setRange, admin, user, initialDashboard }) {
     setDataKey(rangeKey);
     setShowingCached(Boolean(latest));
     load();
-    return () => { requestId.current += 1; };
+    const timer = admin || user.readOnlyPreview ? null : window.setInterval(() => {
+      if (!document.hidden) void load();
+    }, 15 * 60 * 1000);
+    return () => { request.current?.abort(); window.clearInterval(timer); };
   }, [range[0].valueOf(), range[1].valueOf()]);
   return <Space direction="vertical" size={16} className="page-stack report-dashboard">
     <div className="page-heading"><div><Title level={2}>经营总览</Title><Text type="secondary">收入、流量质量与渠道结算一屏掌握</Text>{showingCached && <Tag color="gold" style={{marginLeft:10}}>{loading ? '已显示缓存，正在更新' : '已显示缓存数据'}</Tag>}</div><Space wrap><ReportDateFilter value={range} onChange={setRange}/><Button icon={<ReloadOutlined />} loading={loading} onClick={() => { load(true); setHighlightRefresh(value => value + 1); }}>刷新</Button></Space></div>
@@ -264,12 +280,12 @@ function Shell({ user, onLogout, initialView = 'dashboard', initialDashboard, on
   const [view,setView]=useState(() => viewForPath(window.location.pathname, initialView, user)); const [collapsed,setCollapsed]=useState(false); const [range,setRange]=useState([dayjs().startOf('month'),dayjs()]);
   useEffect(() => { onReady(); }, []);
   useEffect(() => {
-    if (window.location.pathname !== viewPaths[view]) window.history.replaceState({ view }, '', viewPaths[view]);
+    if (window.location.pathname !== viewPaths[view]) window.history.replaceState({ view }, '', previewPagePath(viewPaths[view]));
   }, [view]);
   useEffect(() => {
     const onPopState = () => {
       const next = viewForPath(window.location.pathname, 'dashboard', user);
-      if (window.location.pathname !== viewPaths[next]) window.history.replaceState({ view: next }, '', viewPaths[next]);
+      if (window.location.pathname !== viewPaths[next]) window.history.replaceState({ view: next }, '', previewPagePath(viewPaths[next]));
       setView(next);
     };
     window.addEventListener('popstate', onPopState);
@@ -278,12 +294,12 @@ function Shell({ user, onLogout, initialView = 'dashboard', initialDashboard, on
   const navigate = key => {
     if (!canVisit(user, key)) return;
     const path = viewPaths[key] || '/';
-    if (window.location.pathname !== path) window.history.pushState({ view: key }, '', path);
+    if (window.location.pathname !== path) window.history.pushState({ view: key }, '', previewPagePath(path));
     setView(key);
   };
   const sidebarItem = (key, icon, title) => ({ key, title,
-    icon: <a className="sidebar-icon-link" href={viewPaths[key]} tabIndex={-1} aria-hidden="true">{icon}</a>,
-    label: <a className="sidebar-route-link" href={viewPaths[key]}>{title}</a> });
+    icon: <a className="sidebar-icon-link" href={previewPagePath(viewPaths[key])} tabIndex={-1} aria-hidden="true">{icon}</a>,
+    label: <a className="sidebar-route-link" href={previewPagePath(viewPaths[key])}>{title}</a> });
   const menu=useMemo(()=>[
     {type:'group',label:'业务管理',children:[
       sidebarItem('dashboard',<DashboardOutlined/>,'经营总览'),
@@ -302,7 +318,7 @@ function Shell({ user, onLogout, initialView = 'dashboard', initialDashboard, on
   return <Layout className="app-shell"><Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} width={248}><div className="side-brand"><img src="/google-g.png" alt="Google" />{!collapsed&&<div><b>{admin?'AdX Control':'AdX Publisher'}</b><small>{admin?'平台管理端':'渠道工作台'}</small></div>}</div><Menu theme="dark" mode="inline" selectedKeys={[view]} items={menu} onClick={({key,domEvent})=>{if(!shouldNavigateInPlace(domEvent))return;domEvent?.preventDefault();navigate(key);}}/><div className={'sidebar-profile'+(collapsed?' sidebar-profile-collapsed':'')} title={user.name||user.email}>
       <Avatar size={36} className="sidebar-avatar">{Array.from(user.name||user.email||'?')[0].toUpperCase()}</Avatar>
       {!collapsed&&<div className="sidebar-profile-text"><strong>{user.name||user.email}</strong><span>{user.isSuperAdmin?'最高管理员':admin?'平台管理员':user.status==='pending'?'待完成签约':'渠道账号'}</span></div>}
-    </div></Sider><Layout><Header><div className="workspace-location"><span>{admin?'运营工作台':'渠道工作台'}</span><i aria-hidden="true">/</i><strong>{menu.flatMap(group=>group.children).find(item=>item.key===view)?.title}</strong></div><div className="header-actions"><LanguageSwitcher/><Popconfirm title="确认退出登录？" onConfirm={onLogout}><Button icon={<LogoutOutlined/>}>退出</Button></Popconfirm></div></Header><Content><PageErrorBoundary key={view}><React.Suspense fallback={<Card className="route-loading">正在加载页面…</Card>}>{body}</React.Suspense></PageErrorBoundary></Content></Layout></Layout>;
+    </div></Sider><Layout><Header><div className="workspace-location"><span>{admin?'运营工作台':'渠道工作台'}</span><i aria-hidden="true">/</i><strong>{menu.flatMap(group=>group.children).find(item=>item.key===view)?.title}</strong></div><div className="header-actions"><LanguageSwitcher/>{user.readOnlyPreview ? <Button href="/channels">返回渠道管理</Button> : <Popconfirm title="确认退出登录？" onConfirm={onLogout}><Button icon={<LogoutOutlined/>}>退出</Button></Popconfirm>}</div></Header><Content>{user.readOnlyPreview && <Alert type="info" showIcon style={{marginBottom:16}} message={<><span>渠道后台只读预览</span> · {user.companyName || user.name} · {user.email}</>}/>}<PageErrorBoundary key={view}><React.Suspense fallback={<Card className="route-loading">正在加载页面…</Card>}>{body}</React.Suspense></PageErrorBoundary></Content></Layout></Layout>;
 }
 
 function Root({ initialUser, initialView, initialDashboard, onReady }) {

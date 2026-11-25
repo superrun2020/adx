@@ -318,12 +318,15 @@ func (a *app) serveReports(w http.ResponseWriter, r *http.Request, export bool) 
 			}
 		}
 	}
-	upstream := upstreamShareSQL("rf")
+	adminAggregates := ""
+	if isAdmin {
+		upstream := upstreamShareSQL("rf")
+		adminAggregates = ",ROUND(SUM(rf.revenue),6) grossRevenue,ROUND(SUM(rf.revenue*(" + upstream + ")/100.0),6) upstreamRevenue," +
+			"ROUND(AVG(" + upstream + "),2) upstreamSharePercent,ROUND(AVG(" + channelRuleShareSQL("rf") + "),2) channelSharePercent"
+	}
 	grouped := "WITH grouped AS (SELECT " + strings.Join(selects, ",") + ",MAX(rf.report_date) sortDate," +
 		"SUM(rf.requests) requests,SUM(rf.matched_requests) matchedRequests,SUM(rf.impressions) impressions,SUM(rf.clicks) clicks," +
-		"ROUND(SUM(rf.revenue),6) grossRevenue,ROUND(SUM(rf.revenue*(" + upstream + ")/100.0),6) upstreamRevenue," +
-		"ROUND(SUM(" + channelRevenueExpression + "),6) channelRevenue," +
-		"ROUND(AVG(" + upstream + "),2) upstreamSharePercent,ROUND(AVG(" + channelRuleShareSQL("rf") + "),2) channelSharePercent " +
+		"ROUND(SUM(" + channelRevenueExpression + "),6) channelRevenue" + adminAggregates + " " +
 		"FROM revenue_facts rf JOIN channels c ON c.id=rf.channel_id LEFT JOIN upstream_accounts ua ON ua.account_key=rf.account LEFT JOIN soap_accounts sa ON sa.id=ua.soap_account_id " +
 		"WHERE " + strings.Join(where, " AND ") + " GROUP BY " + strings.Join(groups, ",") + ") "
 	if len(metricWhere) > 0 {

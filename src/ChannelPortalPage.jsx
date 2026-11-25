@@ -10,6 +10,7 @@ import { countryOptions } from './countries.js';
 import { getLocale } from './i18n.js';
 import { readCached, rememberRead } from './readCache.js';
 import { sessionFetch } from './sessionFetch.js';
+import { previewApiPath, previewPagePath } from './channelPreview.js';
 import './channel-registration.css';
 
 const { Title, Text } = Typography;
@@ -39,7 +40,7 @@ function AccountDomains({ user }) {
     <div className="page-heading"><div><Title level={2}>我的链接</Title><Text type="secondary">仅显示后台已分配到本渠道的网站与对应账号 TXT</Text></div><Button icon={<ReloadOutlined/>} loading={loading} onClick={load}>刷新</Button></div>
     <Card className="publisher-site-list" title={<Space><LinkOutlined/>已分配网站<Tag>{items.length}</Tag></Space>}
       extra={<Input.Search allowClear placeholder="搜索网站或账号" value={search} onChange={e=>setSearch(e.target.value)}/>}>
-      <Table size="middle" loading={loading} rowKey={row=>row.networkCode+':'+row.domain}
+      <Table size="middle" loading={loading && !items.length} rowKey={row=>row.networkCode+':'+row.domain}
         pagination={{pageSize:12,hideOnSinglePage:true}} scroll={{x:650}}
         locale={{emptyText:<Empty description={search?'没有匹配的网站':'后台尚未分配网站'}/>}}
         dataSource={items.filter(row=>[row.domain,row.accountName,row.networkCode].some(v=>String(v||'').toLowerCase().includes(search.trim().toLowerCase())))}
@@ -157,11 +158,13 @@ function ContractView({ user }) {
           items={[{title:'完善资料与签署'},{title:'平台复核与签署'},{title:'开通工作台',status:contract.status === 'approved' ? 'finish' : undefined}]}/>
       </section>
       {contract.status === 'approved' && <nav className="publisher-tools">
-        <a href={viewPaths['channel-links']}><LinkOutlined/>我的链接</a>
-        <a href={viewPaths.reports}><BarChartOutlined/>数据报告</a>
-        <a href={viewPaths['channel-regression']}><HistoryOutlined/>数据回退</a>
+        <a href={previewPagePath(viewPaths['channel-links'])}><LinkOutlined/>我的链接</a>
+        <a href={previewPagePath(viewPaths.reports)}><BarChartOutlined/>数据报告</a>
+        <a href={previewPagePath(viewPaths['channel-regression'])}><HistoryOutlined/>数据回退</a>
       </nav>}
-      {contract.status === 'registered' && user?.status === 'pending' ? <>
+      {contract.status === 'registered' && user?.status === 'pending' && user.readOnlyPreview
+        ? <Card><Alert type="info" showIcon message="签署表单仅供渠道本人填写。"/></Card>
+        : contract.status === 'registered' && user?.status === 'pending' ? <>
         <Card className="contract-profile-card" title={<Space><FileProtectOutlined/>签约主体资料</Space>} extra={<Tag color="blue">签约主体</Tag>}>
           <Descriptions size="small" column={{xs:1,sm:2}} items={[
             {key:'company',label:'公司名称',children:registration.companyName},
@@ -206,7 +209,7 @@ function ContractView({ user }) {
           message={contract.emailDelivery.status === 'sent' ? '签署版 PDF 已提交邮件发送' : contract.emailDelivery.status === 'failed' && contract.emailDelivery.attempts >= 8 ? '邮件发送失败，可在下方下载签署版 PDF' : '签署版 PDF 邮件正在发送或重试'}
           description="邮件发往注册邮箱；若未见邮件，请查看垃圾邮件。您也可以在下方直接下载合同。"/>}
         <Card className="contract-record-card" title={<Space><FileProtectOutlined/>签署信息</Space>} extra={<Space><Tag color={contract.status === 'approved' ? 'green' : contract.status === 'rejected' ? 'red' : 'gold'}>{contract.status === 'approved' ? '双方已签署' : contract.status === 'rejected' ? '申请未通过' : '等待平台复核'}</Tag>
-          {contract.status === 'approved' && agreement.counterSignatureData && <Button type="primary" href="/api/channel/contract/pdf" download>下载双方签署 PDF</Button>}
+          {contract.status === 'approved' && agreement.counterSignatureData && <Button type="primary" href={previewApiPath("/api/channel/contract/pdf")} download>下载双方签署 PDF</Button>}
         </Space>}>
           <Descriptions column={{xs:1,sm:2}} items={[
             {key:'company',label:'签约主体',children:registration.companyName},

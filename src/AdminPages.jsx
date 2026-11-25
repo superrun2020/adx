@@ -14,7 +14,8 @@ import GamAdUnitCreator from './GamAdUnitCreator.jsx';
 import NumericSortableTable from './NumericSortableTable.jsx';
 import { adminPermissionOptions } from './navigation.js';
 import { reportPresetRange } from './reportDatePresets.js';
-import { catalogLinksWithManual } from './link-catalog.mjs';
+import { catalogLinksWithManual, hostname } from './link-catalog.mjs';
+import { previewPagePath } from './channelPreview.js';
 import { channelGAMDomains } from './channel-domain-catalog.mjs';
 import { sessionFetch } from './sessionFetch.js';
 import SignaturePad from './SignaturePad.jsx';
@@ -293,6 +294,9 @@ function Channels({ user }) {
   const [assignTo,setAssignTo]=useState(null);
   const [selectedLinks,setSelectedLinks]=useState([]);
   const [linkTxt,setLinkTxt]=useState({});
+  const [batchEnabled,setBatchEnabled]=useState(false);
+  const [batchText,setBatchText]=useState('');
+  const [batchResult,setBatchResult]=useState(null);
   const [assignBusy,setAssignBusy]=useState(false);
   const [domainModalChannel,setDomainModalChannel]=useState(null);
   const [registrations,setRegistrations]=useState([]);
@@ -370,7 +374,37 @@ function Channels({ user }) {
   useEffect(()=>{let active=true;const channelLoad=load();void loadRegistrations();if(cacheKey&&channelRowsCache.has(cacheKey))void loadDomains();else void channelLoad.finally(()=>{if(active)void loadDomains();});return()=>{active=false;domainRequest.current?.abort();}},[]);
   const save=async values=>{try{const payload={...values,effectiveFrom:values.effectiveFrom?.format('YYYY-MM-DD')};await api(editing?`/api/admin/channels/${editing.id}`:'/api/admin/channels',{method:editing?'PUT':'POST',body:JSON.stringify(payload)});message.success('渠道和账号归属已更新');setOpen(false);await load();void loadDomains()}catch(e){message.error(e.message)}};
   const show=item=>{setEditing(item||null);form.resetFields();form.setFieldsValue(item?{...item,gamAccountIds:accountIdsFor(item),effectiveFrom:dayjs()}:{sharePercent:80,status:'active',effectiveFrom:dayjs(),gamAccountIds:[]});setOpen(true)};
-  const openAssignment=channel=>{setAssignTo(channel);setSelectedLinks([]);setLinkTxt({});};
+  const assignmentLimit = 50;
+  const openAssignment = channel => {
+    setAssignTo(channel);
+    setSelectedLinks([]);
+    setLinkTxt({});
+    setBatchEnabled(false);
+    setBatchText('');
+    setBatchResult(null);
+  };
+  const addBatchLinks = () => {
+    const entries = [...new Set(batchText.trim().split(/[\s,，;；]+/).filter(Boolean))];
+    const catalog = new Map();
+    for (const row of linkOptions) {
+      const matches = catalog.get(row.domain) || [];
+      matches.push(row);
+      catalog.set(row.domain, matches);
+    }
+    const next = new Map(selectedLinks.map(row => [row.key,row]));
+    const unmatched = [], ambiguous = [], excess = [];
+    for (const entry of entries) {
+      const matches = catalog.get(hostname(entry)) || [];
+      if (!matches.length) { unmatched.push(entry); continue; }
+      if (matches.length > 1) { ambiguous.push(entry); continue; }
+      const [row] = matches;
+      if (next.has(row.key)) continue;
+      if (next.size >= assignmentLimit) { excess.push(entry); continue; }
+      next.set(row.key, row);
+    }
+    setSelectedLinks([...next.values()]);
+    setBatchResult({unmatched, ambiguous, excess});
+  };
   const saveAssignment=async()=>{
     if(!selectedLinks.length||!assignTo||assignBusy)return;
     setAssignBusy(true);
@@ -403,15 +437,17 @@ function Channels({ user }) {
     }
   });
   const deletePendingRegistration=row=>Modal.confirm({
-    title:'删除待签署申请？',
-    content:<><div>{row.companyName} · {row.email}</div><p>确认后会删除此注册账号并退出已有登录。该邮箱可以重新注册。</p></>,
+    title:row.status==='signed'?'删除待复核申请？':'删除待签署申请？',
+    content:<><div>{row.companyName} · {row.email}</div><p>{row.status==='signed'
+      ? '确认后会删除注册账号和渠道方已提交的合同签名，并退出已有登录。该邮箱可以重新注册。'
+      : '确认后会删除此注册账号并退出已有登录。该邮箱可以重新注册。'}</p></>,
     okText:'删除申请',okButtonProps:{danger:true},cancelText:'取消',
     onOk:async()=>{
       try{
-        await api('/api/admin/channel-registrations/pending/'+row.userId,{method:'DELETE'});
+        await api('/api/admin/channel-registrations/pending/'+row.userId+'?status='+row.status,{method:'DELETE'});
       }catch(error){
         if(error.message==='channel_registration_not_deletable'){
-          message.warning('申请已签署或已移除，列表已刷新。');
+          message.warning('申请状态已变化，列表已刷新。');
           await loadRegistrations();
           return;
         }
@@ -419,7 +455,7 @@ function Channels({ user }) {
         throw error;
       }
       setRegistrations(previous=>previous.filter(item=>item.id!==row.id));
-      message.success('待签署申请已删除');
+      message.success('渠道申请已删除');
       await loadRegistrations();
     }
   });
@@ -456,6 +492,8 @@ function Channels({ user }) {
     ] : []),
     {key:'delete',label:'删除渠道',danger:true,onClick:()=>deleteChannel(row)}
   ];
+  const previewButton = (userId, pending = false) => userId > 0 &&
+    <Button size="small" type="text" href={previewPagePath(pending ? '/my-contract' : '/', userId)} target="_blank" rel="noopener noreferrer">只读预览</Button>;
   const channelIdentity = row => <div className="table-identity"><strong>{row.name||row.companyName}</strong>
     <span className="table-contact" title={row.email}>{row.email||'仅内部管理'}</span></div>;
   const columns=[
@@ -470,6 +508,7 @@ function Channels({ user }) {
     {title:'操作',width:210,render:(_,row)=><Space className="table-actions" size={4} wrap>
       <Button size="small" type="text" onClick={()=>show(row)}>编辑</Button>
       <Button size="small" disabled={row.status!=='active'} onClick={()=>openAssignment(row)}>分配链接</Button>
+      {row.status==='active' && previewButton(row.userId)}
       <Dropdown trigger={['click']} menu={{items:channelMore(row)}}><Button size="small" type="text" aria-label={row.name+' · 更多操作'}>更多</Button></Dropdown>
     </Space>}
   ];
@@ -489,10 +528,16 @@ function Channels({ user }) {
         {title:'状态',dataIndex:'status',width:110,render:value=><Tag color={value==='approved'?'green':value==='rejected'?'red':value==='registered'?'blue':'gold'}>{value==='approved'?'已开通':value==='rejected'?'已拒绝':value==='registered'?'待渠道签约':'待平台复核'}</Tag>},
         {title:'操作',width:245,render:(_,row)=>row.status==='registered'?<Space className="table-actions" size={4} wrap>
           <Text type="secondary">等待签署</Text>
+          {previewButton(row.userId, true)}
           <Button size="small" type="text" danger onClick={()=>deletePendingRegistration(row)}>删除申请</Button>
         </Space>:<Space className="table-actions" size={4} wrap>
           <Button size="small" type="text" onClick={()=>setReviewingRegistration(row)}>{row.status==='signed'?'复核并签署':'查看合同'}</Button>
+          {row.status==='signed'&&<>
+            {previewButton(row.userId, true)}
+            <Button size="small" type="text" danger onClick={()=>deletePendingRegistration(row)}>删除申请</Button>
+          </>}
           {row.status==='approved'&&row.channelId&&<>
+            {previewButton(row.userId)}
             <Button size="small" onClick={()=>openAssignment({id:Number(row.channelId),name:row.channelName||row.companyName})}>分配链接</Button>
             <Dropdown trigger={['click']} menu={{items:[
               {key:'password',label:'重置密码',onClick:()=>resetPassword({id:Number(row.channelId),name:row.channelName||row.companyName,email:row.email})},
@@ -509,11 +554,31 @@ function Channels({ user }) {
     <Modal open={Boolean(assignTo)} title={<Space>分配链接<Tag>{assignTo?.name}</Tag></Space>} okText="保存分配" width={680}
       onOk={saveAssignment} okButtonProps={{disabled:!selectedLinks.length}} cancelButtonProps={{disabled:assignBusy}} confirmLoading={assignBusy} onCancel={()=>{if(!assignBusy)setAssignTo(null)}}>
       <Form layout="vertical">
-        <Form.Item label="网站与 GAM 账号" extra="可搜索并多选，每次最多分配 50 个链接。">
-          <Select mode="multiple" optionFilterProp="label" maxCount={50} maxTagCount={3} aria-label="网站与 GAM 账号"
+        <Form.Item label={<Space><span>网站与 GAM 账号</span><Tag>{selectedLinks.length} / {assignmentLimit}</Tag></Space>}>
+          <Select mode="multiple" showSearch={{optionFilterProp:'label'}} maxCount={assignmentLimit} maxTagCount={3} aria-label="网站与 GAM 账号"
             placeholder="搜索域名或 GAM 账号" value={selectedLinks.map(row=>row.key)} disabled={assignBusy}
-            loading={domainBusy} options={linkOptions} onChange={(_,rows)=>setSelectedLinks(rows)}/>
+            loading={domainBusy} options={linkOptions} onChange={(_,rows)=>setSelectedLinks(rows)}
+            notFoundContent={domainBusy ? <Spin size="small"/> : '没有匹配的网站'}/>
         </Form.Item>
+        <Form.Item>
+          <Checkbox checked={batchEnabled} onChange={event=>setBatchEnabled(event.target.checked)}>批量分配</Checkbox>
+        </Form.Item>
+        {batchEnabled && <>
+          <Form.Item label="批量输入域名" extra="每行一个域名或网址，支持逗号分隔。">
+            <Input.TextArea rows={4} value={batchText} maxLength={20000} disabled={assignBusy}
+              onChange={event=>{setBatchText(event.target.value);setBatchResult(null);}}
+              placeholder="粘贴主域名或子域名" aria-label="批量输入域名"/>
+          </Form.Item>
+          <Form.Item>
+            <Button disabled={assignBusy || domainBusy || !batchText.trim()} loading={domainBusy} onClick={addBatchLinks}>匹配并加入所选</Button>
+          </Form.Item>
+          {batchResult && (batchResult.unmatched.length + batchResult.ambiguous.length + batchResult.excess.length > 0) &&
+            <Alert type="warning" showIcon style={{marginBottom:16,overflowWrap:'anywhere'}} message={<div>
+              {batchResult.unmatched.length > 0 && <div><span>未找到</span> · {batchResult.unmatched.join('、')}</div>}
+              {batchResult.ambiguous.length > 0 && <div><span>有多个 GAM 账号，请在上方搜索后选择</span> · {batchResult.ambiguous.join('、')}</div>}
+              {batchResult.excess.length > 0 && <div><span>已达到 50 条上限</span> · {batchResult.excess.join('、')}</div>}
+            </div>}/>}
+        </>}
         {selectedLinks.length>0&&<>
           <Alert showIcon style={{marginBottom:16}} type={selectedLinks.some(row=>row.owner&&row.owner!==assignTo?.id)?'warning':'info'}
             message="保存后，所选域名在对应 GAM 账号下的历史报表和回退记录对目标渠道可见。"/>

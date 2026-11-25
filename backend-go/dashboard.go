@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -117,27 +118,39 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 	if ready && u.Role == "admin" {
 		upstreamField = ",COALESCE(SUM(upstream_revenue),0) upstreamSettlement"
 	}
-	summary, err := firstMap(a.db, "SELECT COALESCE(SUM(requests),0) requests,COALESCE(SUM(matched_requests),0) matched,COALESCE(SUM(impressions),0) impressions,COALESCE(SUM(clicks),0) clicks,COALESCE(SUM(revenue),0) revenue"+upstreamField+" FROM "+source+" WHERE "+where, args...)
-	if err != nil {
-		a.dashboardFailure(w, err)
-		return
-	}
-	sumMS := time.Since(started)
+	channel := u.Role == "channel"
+	summary := map[string]any{"requests": int64(0), "matched": int64(0), "impressions": int64(0), "clicks": int64(0), "revenue": float64(0)}
 	factor := "revenue"
-	if u.Role == "channel" {
-		if ready {
-			factor = "settled_revenue"
-		} else {
-			factor = settledRevenueForChannelSQL("revenue_facts", scope)
+	if channel {
+		factor = settledRevenueForChannelSQL("revenue_facts", scope)
+	} else {
+		var err error
+		summary, err = firstMap(a.db, "SELECT COALESCE(SUM(requests),0) requests,COALESCE(SUM(matched_requests),0) matched,COALESCE(SUM(impressions),0) impressions,COALESCE(SUM(clicks),0) clicks,COALESCE(SUM(revenue),0) revenue"+upstreamField+" FROM "+source+" WHERE "+where, args...)
+		if err != nil {
+			a.dashboardFailure(w, err)
+			return
 		}
 	}
-	trend, err := queryMaps(a.db, "SELECT report_date date,ROUND(SUM("+factor+"),6) revenue,SUM(requests) requests,SUM(matched_requests) matched,SUM(impressions) impressions,SUM(clicks) clicks FROM "+source+" WHERE "+where+" GROUP BY report_date ORDER BY report_date", args...)
+	sumMS := time.Since(started)
+	aggregateRevenue := "ROUND(SUM(" + factor + "),6)"
+	if channel {
+		aggregateRevenue = "SUM(" + factor + ")"
+	}
+	trend, err := queryMaps(a.db, "SELECT report_date date,"+aggregateRevenue+" revenue,SUM(requests) requests,SUM(matched_requests) matched,SUM(impressions) impressions,SUM(clicks) clicks FROM "+source+" WHERE "+where+" GROUP BY report_date ORDER BY report_date", args...)
 	if err != nil {
 		a.dashboardFailure(w, err)
 		return
 	}
 	trendMS := time.Since(started) - sumMS
 	for _, row := range trend {
+		if channel {
+			for _, metric := range []string{"requests", "matched", "impressions", "clicks"} {
+				summary[metric] = int64(numberValue(summary[metric])) + int64(numberValue(row[metric]))
+			}
+			revenue := numberValue(row["revenue"])
+			summary["revenue"] = numberValue(summary["revenue"]) + revenue
+			row["revenue"] = math.Round(revenue*1e6) / 1e6
+		}
 		row["matchRate"] = ratio(numberValue(row["matched"])*100, numberValue(row["requests"]))
 		row["clickRate"] = ratio(numberValue(row["clicks"])*100, numberValue(row["impressions"]))
 		row["ecpm"] = ratio(numberValue(row["revenue"])*1000, numberValue(row["impressions"]))
@@ -152,22 +165,19 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	topMS := time.Since(started) - sumMS - trendMS
-	settledWhere := strings.ReplaceAll(strings.ReplaceAll(where, "report_date", "rf.report_date"), "channel_id", "rf.channel_id")
-	settledSQL := "SELECT COALESCE(SUM(" + settledRevenueSQL("rf") + "),0) value FROM revenue_facts rf WHERE " + settledWhere
-	if ready {
-		settledSQL = "SELECT COALESCE(SUM(settled_revenue),0) value FROM " + source + " WHERE " + where
-	}
-	if u.Role == "channel" {
-		sourceFilter := ""
-		if restOnly {
-			sourceFilter = " AND rf.source_file LIKE 'gam-rest:%'"
+	channelRevenue := numberValue(summary["revenue"])
+	if !channel {
+		settledWhere := strings.ReplaceAll(strings.ReplaceAll(where, "report_date", "rf.report_date"), "channel_id", "rf.channel_id")
+		settledSQL := "SELECT COALESCE(SUM(" + settledRevenueSQL("rf") + "),0) value FROM revenue_facts rf WHERE " + settledWhere
+		if ready {
+			settledSQL = "SELECT COALESCE(SUM(settled_revenue),0) value FROM " + source + " WHERE " + where
 		}
-		settledSQL = "SELECT COALESCE(SUM(" + settledRevenueForChannelSQL("rf", scope) + "),0) value FROM revenue_facts rf WHERE rf.report_date BETWEEN ? AND ?" + sourceFilter + " AND " + channelDomainScopeSQL("rf", scope)
-	}
-	settled, err := firstMap(a.db, settledSQL, args...)
-	if err != nil {
-		a.dashboardFailure(w, err)
-		return
+		settled, err := firstMap(a.db, settledSQL, args...)
+		if err != nil {
+			a.dashboardFailure(w, err)
+			return
+		}
+		channelRevenue = numberValue(settled["value"])
 	}
 	settlementMS := time.Since(started) - sumMS - trendMS - topMS
 	var lastSync sql.NullString
@@ -180,9 +190,7 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 	if lastSync.Valid {
 		last = lastSync.String
 	}
-	if u.Role == "channel" {
-		summary["revenue"] = settled["value"]
-	} else {
+	if !channel {
 		if !ready {
 			grouped := "SELECT account,report_date,SUM(revenue) revenue FROM revenue_facts WHERE " + where + " GROUP BY account,report_date"
 			upstream, queryErr := firstMap(a.db, "SELECT COALESCE(SUM(rf.revenue*("+upstreamShareSQL("rf")+")/100.0),0) value FROM ("+grouped+") rf", args...)
@@ -192,9 +200,9 @@ func (a *app) dashboard(w http.ResponseWriter, r *http.Request) {
 			}
 			summary["upstreamSettlement"] = upstream["value"]
 		}
-		summary["platformProfit"] = numberValue(summary["upstreamSettlement"]) - numberValue(settled["value"])
+		summary["platformProfit"] = numberValue(summary["upstreamSettlement"]) - channelRevenue
 	}
-	summary["channelRevenue"] = settled["value"]
+	summary["channelRevenue"] = channelRevenue
 	if numberValue(summary["requests"]) > 0 {
 		summary["matchRate"] = numberValue(summary["matched"]) * 100 / numberValue(summary["requests"])
 	} else {

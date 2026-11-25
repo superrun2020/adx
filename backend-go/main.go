@@ -145,6 +145,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /api/admin/channels", a.auth("admin", a.channels))
 	mux.HandleFunc("GET /api/admin/contract-signature", a.auth("admin", a.getContractSignatureTemplate))
 	mux.HandleFunc("PUT /api/admin/contract-signature", a.auth("admin", a.updateContractSignatureTemplate))
+	mux.HandleFunc("GET /api/admin/channel-preview/{id}/{path...}", a.auth("admin", a.channelPreview))
 	mux.HandleFunc("GET /api/admin/channel-registrations", a.auth("admin", a.channelRegistrations))
 	mux.HandleFunc("DELETE /api/admin/channel-registrations/pending/{id}", a.auth("admin", a.deletePendingChannelRegistration))
 	mux.HandleFunc("GET /api/admin/channel-registrations/{id}", a.auth("admin", a.channelRegistrationDetail))

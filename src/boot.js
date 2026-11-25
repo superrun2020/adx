@@ -1,5 +1,6 @@
 import { viewForPath } from './navigation.js';
 import { sessionFetch } from './sessionFetch.js';
+import { previewApiPath, previewUserId } from './channelPreview.js';
 import { getLocale, setLocale, startI18n } from './i18n.js';
 
 const form = document.getElementById('boot-login');
@@ -26,6 +27,17 @@ if (portal) {
   document.getElementById('boot-title').textContent = '渠道登录';
   document.getElementById('boot-hint').textContent = '登录后可在合同管理完善资料并签署；审核通过并关联数据后开放。';
   registerButton.hidden = false;
+}
+const preview = previewUserId() !== null;
+if (preview) {
+  document.getElementById('boot-title').textContent = '渠道后台只读预览';
+  document.getElementById('boot-hint').textContent = '';
+  form.hidden = true;
+  form.style.display = 'none';
+  const back = document.createElement('a');
+  back.href = '/channels';
+  back.textContent = '返回渠道管理';
+  status.after(back);
 }
 const languageTrigger = document.getElementById('boot-language-trigger');
 const languageMenu = document.getElementById('boot-language-menu');
@@ -171,10 +183,14 @@ const warmApp = () => { void prepareApp().catch(error => {
 }); };
 if ('requestIdleCallback' in window) window.requestIdleCallback(warmApp, { timeout: 500 });
 else window.setTimeout(warmApp, 0);
-if (!sessionReauth) fetch('/api/auth/me', { credentials: 'include', cache: 'no-store' })
+if (preview || !sessionReauth) fetch(previewApiPath('/api/auth/me'), { credentials: 'include', cache: 'no-store' })
   .then(async response => {
-    if (!response.ok || submitted) return;
+    if (submitted) return;
+    if (!response.ok) {
+      if (preview) status.textContent = response.status === 401 ? '请先登录运营后台，再打开只读预览。' : '该渠道当前无法预览，请返回渠道管理。';
+      return;
+    }
     const result = await response.json();
-    if (result.user && !submitted) await openApp(result.user);
+    if (result.user && !submitted) await openApp(preview ? { ...result.user, readOnlyPreview:true } : result.user);
   })
-  .catch(() => {});
+  .catch(() => { if (preview) status.textContent = '渠道后台预览加载失败，请刷新页面。'; });
