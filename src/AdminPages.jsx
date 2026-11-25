@@ -149,22 +149,65 @@ function ChannelDomainModal({ channel, domains, issues, busy, onClose }) {
   </Modal>;
 }
 
+function PartyASignatureSettings({ user, onSaved }) {
+  const [open,setOpen]=useState(false),[template,setTemplate]=useState(null),[loading,setLoading]=useState(false),[saving,setSaving]=useState(false);
+  const readTemplate=async()=>{
+    setLoading(true);
+    try { const result=await api('/api/admin/contract-signature'); setTemplate(result.item||null); onSaved?.(result.item||null); }
+    catch(error){ message.error('甲方签名模板读取失败：'+error.message); }
+    finally { setLoading(false); }
+  };
+  const saveFile=async event=>{
+    const file=event.target.files?.[0]; event.target.value='';
+    if(!file)return;
+    if(file.type!=='image/png')return message.warning('请上传从签署协议中提取的 PNG 签名图片');
+    const signatureData=await new Promise(resolve=>{
+      const reader=new FileReader(); reader.onload=()=>resolve(String(reader.result||'')); reader.onerror=()=>resolve(''); reader.readAsDataURL(file);
+    });
+    if(!signatureData)return message.error('签名文件读取失败');
+    setSaving(true);
+    try{
+      const result=await api('/api/admin/contract-signature',{method:'PUT',body:JSON.stringify({signerName:'Haijun Lyu',signerTitle:'VP',signatureData})});
+      setTemplate(result.item);onSaved?.(result.item);message.success('Haijun Lyu 甲方签名模板已保存');
+    }catch(error){message.error('甲方签名模板保存失败：'+error.message)}
+    finally{setSaving(false)}
+  };
+  return <>
+    <Button onClick={()=>{setOpen(true);void readTemplate()}}>甲方签名模板</Button>
+    <Modal title="JUNGLELABS LTD 甲方签名" open={open} onCancel={()=>setOpen(false)} footer={<Button onClick={()=>setOpen(false)}>关闭</Button>} width={600}>
+      <Spin spinning={loading||saving}>
+        <Space direction="vertical" style={{width:'100%'}} size={12}>
+          <Alert type="info" showIcon message="固定签署人：Haijun Lyu · VP" description="此模板用于 JUNGLELABS LTD 当前版合同。上传后只保存在运营后台数据库，不进入源码仓库。" />
+          {template?.signatureData&&<div className="party-signature-template"><img src={template.signatureData} alt="Haijun Lyu 甲方签名"/><Text type="secondary">SHA-256：{template.signatureHash}</Text></div>}
+          {user?.isSuperAdmin&&<label className="party-signature-upload"><UploadOutlined/> {template?'替换签名 PNG':'上传 PDF 中提取的签名 PNG'}<input type="file" accept="image/png" onChange={saveFile}/></label>}
+          {!user?.isSuperAdmin&&<Text type="secondary">仅最高管理员可以首次配置或替换固定签名。</Text>}
+        </Space>
+      </Spin>
+    </Modal>
+  </>;
+}
+
 function ChannelRegistrationReview({ registration, accounts, user, onClose, onDone }) {
   const [detail,setDetail]=useState(null),[loading,setLoading]=useState(false),[saving,setSaving]=useState(false);
   const [mapping,setMapping]=useState({}),[channelName,setChannelName]=useState(''),[sharePercent,setSharePercent]=useState(null);
   const [effectiveFrom,setEffectiveFrom]=useState(dayjs()),[reviewNote,setReviewNote]=useState('');
   const [reviewerTitle,setReviewerTitle]=useState(''),[signatureData,setSignatureData]=useState('');
-  const [reviewerAccepted,setReviewerAccepted]=useState(false);
+  const [reviewerAccepted,setReviewerAccepted]=useState(false),[signatureTemplate,setSignatureTemplate]=useState(null);
   useEffect(()=>{
     let active=true;
-    setDetail(null);setSignatureData('');setReviewNote('');setReviewerTitle('');setReviewerAccepted(false);
+    setDetail(null);setSignatureData('');setReviewNote('');setReviewerTitle('');setReviewerAccepted(false);setSignatureTemplate(null);
     if(!registration)return undefined;
     setChannelName(registration.companyName||registration.contactName||'');
     setSharePercent(null);setEffectiveFrom(dayjs());
     setLoading(true);
-    api('/api/admin/channel-registrations/'+registration.id).then(result=>{
+    Promise.all([
+      api('/api/admin/channel-registrations/'+registration.id),
+      api('/api/admin/contract-signature').catch(()=>({item:null}))
+    ]).then(([result,templateResult])=>{
       if(!active)return;
       const item=result.item;setDetail(item);
+      const template=templateResult.item||null;setSignatureTemplate(template);
+      if(item.contractVersion==='junglelabs-electronic-v2'&&template){setSignatureData(template.signatureData);setReviewerTitle(template.signerTitle)}
       const next={};for(const row of item.domains||[])next[row.domain]=row.gamAccountId;
       setMapping(next);
     }).catch(error=>message.error('注册申请加载失败：'+error.message)).finally(()=>{if(active)setLoading(false)});
@@ -174,12 +217,14 @@ function ChannelRegistrationReview({ registration, accounts, user, onClose, onDo
     const domains=(detail?.domains||[]).filter(row=>mapping[row.domain]).map(row=>({domain:row.domain,gamAccountId:Number(mapping[row.domain])}));
     if(domains.length!==(detail?.domains||[]).length)return message.warning('请为每个已有申请域名匹配一个 GAM 账号');
     if(sharePercent===null||sharePercent===undefined)return message.warning('请明确填写渠道结算比例');
-    if(!signatureData||!reviewerTitle.trim()||!reviewerAccepted)return message.warning('请填写甲方签署职务、完成手写签名并确认签署授权');
+    const fixedSignature=detail?.contractVersion==='junglelabs-electronic-v2';
+    if(fixedSignature&&!signatureTemplate)return message.warning('请先由最高管理员设置 Haijun Lyu 的甲方签名模板');
+    if(!signatureData||!reviewerTitle.trim()||!reviewerAccepted)return message.warning('请完成甲方签署确认');
     setSaving(true);
     try{
       await api('/api/admin/channel-registrations/'+registration.id+'/approve',{method:'POST',body:JSON.stringify({
         channelName,sharePercent,effectiveFrom:effectiveFrom.format('YYYY-MM-DD'),domains,reviewNote,
-        reviewerSignatureName:user?.name||'',reviewerSignatureTitle:reviewerTitle,reviewerSignatureData:signatureData,reviewerAccepted
+        reviewerSignatureName:user?.name||'',reviewerSignatureTitle:reviewerTitle,reviewerSignatureData:signatureData,reviewerAccepted,contractVersion:detail?.contractVersion
       })});
       message.success('平台签署完成，渠道账号已开通；网站可随后在运营后台关联');
       onDone();
@@ -220,10 +265,16 @@ function ChannelRegistrationReview({ registration, accounts, user, onClose, onDo
         <pre className="contract-preview admin-contract-preview">{detail.contractText}</pre>
       </Card>
       {registration.status==='signed'&&<Card size="small" title="甲方复核签署">
-        <label className="registration-admin-field">甲方授权签署人<Input value={user?.name||''} disabled/></label>
-        <label className="registration-admin-field">甲方签署职务<Input value={reviewerTitle} onChange={event=>setReviewerTitle(event.target.value)}/></label>
-        <SignaturePad title="甲方授权代表手写签名" onChange={setSignatureData}/>
-        <Checkbox checked={reviewerAccepted} onChange={event=>setReviewerAccepted(event.target.checked)}>本人确认有权代表协议所列甲方签署此协议。</Checkbox>
+        <label className="registration-admin-field">审核操作人<Input value={user?.name||''} disabled/></label>
+        {detail.contractVersion==='junglelabs-electronic-v2' ? <>
+          {signatureTemplate ? <div className="party-signature-preview"><div><Text strong>甲方固定签署人：{signatureTemplate.signerName} · {signatureTemplate.signerTitle}</Text><img src={signatureTemplate.signatureData} alt="Haijun Lyu 甲方签名"/></div></div> :
+            <Alert type="warning" showIcon message="未配置 Haijun Lyu 甲方签名模板" description={user?.isSuperAdmin?<PartyASignatureSettings user={user} onSaved={template=>{setSignatureTemplate(template);setSignatureData(template?.signatureData||'');setReviewerTitle(template?.signerTitle||'')}}/>:'请联系最高管理员设置甲方签名模板。'}/>}
+          <Checkbox checked={reviewerAccepted} onChange={event=>setReviewerAccepted(event.target.checked)}>我已核对本次合同主体和内容，并确认获授权使用 Haijun Lyu 的甲方签名。</Checkbox>
+        </> : <>
+          <label className="registration-admin-field">甲方签署职务<Input value={reviewerTitle} onChange={event=>setReviewerTitle(event.target.value)}/></label>
+          <SignaturePad title="甲方授权代表手写签名" onChange={setSignatureData}/>
+          <Checkbox checked={reviewerAccepted} onChange={event=>setReviewerAccepted(event.target.checked)}>本人确认有权代表协议所列甲方签署此协议。</Checkbox>
+        </>}
         <Alert style={{marginTop:12}} type="warning" showIcon message="平台签署后渠道账户才能查看业务数据；若尚未关联网站，报表仍为空。"/>
       </Card>}
     </Space>}</Spin>
@@ -423,7 +474,7 @@ function Channels({ user }) {
     </Space>}
   ];
   return <Space direction="vertical" size={16} className="page-stack channels-workspace">
-    <div className="page-heading"><div><Title level={2}>渠道管理</Title><Text type="secondary">创建渠道时选择 GAM 账号，自动关联该账号的域名、广告单元、报表和飞书汇报</Text></div><Button type="primary" icon={<PlusOutlined/>} onClick={()=>show(null)}>新建渠道</Button></div>
+    <div className="page-heading"><div><Title level={2}>渠道管理</Title><Text type="secondary">创建渠道时选择 GAM 账号，自动关联该账号的域名、广告单元、报表和飞书汇报</Text></div><Space><PartyASignatureSettings user={user}/><Button type="primary" icon={<PlusOutlined/>} onClick={()=>show(null)}>新建渠道</Button></Space></div>
     <Card className="channel-review-card" title={<Space><FileProtectOutlined/>渠道注册与合同审核<Tag color="blue">待签约 {registrations.filter(row=>row.status==='registered').length}</Tag><Tag color="gold">待复核 {registrations.filter(row=>row.status==='signed').length}</Tag></Space>} extra={<Button icon={<ReloadOutlined/>} loading={registrationLoading} onClick={()=>void loadRegistrations()}>刷新申请</Button>}>
       <Alert type="info" showIcon style={{marginBottom:16}} message="注册资料和合同状态与渠道后台同步；审核开通后，点击该行的“分配链接”选择对应网站。"/>
       <Table rowKey="id" dataSource={registrations} loading={registrationLoading} pagination={{pageSize:8,showSizeChanger:false}} scroll={{x:1050}} columns={[

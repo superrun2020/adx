@@ -88,6 +88,13 @@ func TestChannelRegistrationRemainsPendingUntilReview(t *testing.T) {
 		t.Fatalf("unsigned contract status=%d body=%s", contract.Code, contract.Body.String())
 	}
 	signature := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII="
+	_, companySignatureHash, err := parseRegistrationSignature(signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.db.Exec("INSERT INTO contract_signature_templates(id,signer_name,signer_title,signature_data,signature_hash,updated_by) VALUES(1,'Haijun Lyu','VP',?,?, 'admin@example.test')", signature, companySignatureHash); err != nil {
+		t.Fatal(err)
+	}
 	sign := call(http.MethodPost, "/api/channel/contract/sign", map[string]any{
 		"registrationNumber": "REG-12345", "country": "Hong Kong", "registeredAddress": "1 Example Street, Central",
 		"phone": "+852 5555 1234", "signatureName": "Jordan Example", "signatureTitle": "Director",
@@ -108,7 +115,7 @@ func TestChannelRegistrationRemainsPendingUntilReview(t *testing.T) {
 	approval, _ := json.Marshal(map[string]any{
 		"channelName": "Example Media", "sharePercent": 75, "effectiveFrom": "2026-11-23", "domains": []any{},
 		"reviewerSignatureName": "平台管理员", "reviewerSignatureTitle": "运营负责人",
-		"reviewerSignatureData": signature, "reviewerAccepted": true,
+		"reviewerSignatureData": signature, "reviewerAccepted": true, "contractVersion": channelAgreementVersion,
 	})
 	adminRequest := httptest.NewRequest(http.MethodPost, "/api/admin/channel-registrations/1/approve", bytes.NewReader(approval))
 	adminRequest.SetPathValue("id", strconv.FormatInt(registrationID, 10))
@@ -119,6 +126,13 @@ func TestChannelRegistrationRemainsPendingUntilReview(t *testing.T) {
 		t.Fatalf("no-domain approval status=%d body=%s", adminResponse.Code, adminResponse.Body.String())
 	}
 	adminList("approved")
+	var fixedSigner, fixedTitle, fixedHash string
+	if err := a.db.QueryRow("SELECT counter_signer,counter_signer_title,counter_signature_hash FROM channel_registration_contracts WHERE registration_id=?", registrationID).Scan(&fixedSigner, &fixedTitle, &fixedHash); err != nil {
+		t.Fatal(err)
+	}
+	if fixedSigner != "Haijun Lyu" || fixedTitle != "VP" || fixedHash != companySignatureHash {
+		t.Fatalf("wrong fixed party-A signature: signer=%q title=%q hash=%q", fixedSigner, fixedTitle, fixedHash)
+	}
 	finalPDF := call(http.MethodGet, "/api/channel/contract/pdf", nil)
 	if finalPDF.Code != http.StatusOK || !bytes.HasPrefix(finalPDF.Body.Bytes(), []byte("%PDF-")) || finalPDF.Header().Get("Content-Type") != "application/pdf" {
 		t.Fatalf("final PDF status=%d contentType=%q", finalPDF.Code, finalPDF.Header().Get("Content-Type"))
@@ -205,6 +219,9 @@ func TestRegistrationApprovalActivatesOnlyMappedChannelAndStoresCounterSignature
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err = a.db.Exec("INSERT INTO contract_signature_templates(id,signer_name,signer_title,signature_data,signature_hash,updated_by) VALUES(1,'Haijun Lyu','VP',?,?, 'admin@example.test')", signature, signatureHash); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = a.db.Exec("UPDATE channel_registration_contracts SET contract_hash=?,signature_data=?,signature_hash=? WHERE registration_id=1", contractTextHash("signed contract"), signature, signatureHash); err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +230,7 @@ func TestRegistrationApprovalActivatesOnlyMappedChannelAndStoresCounterSignature
 		"domains":               []any{map[string]any{"domain": "example.com", "gamAccountId": 1}},
 		"reviewerSignatureName": "Platform Operator", "reviewerSignatureTitle": "运营负责人",
 		"reviewerSignatureData": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII=",
-		"reviewerAccepted":      true, "reviewNote": "",
+		"reviewerAccepted":      true, "reviewNote": "", "contractVersion": channelAgreementVersion,
 	}
 	body, err := json.Marshal(input)
 	if err != nil {
@@ -364,5 +381,34 @@ func TestChannelDomainsIncludeOperationsLinkAssignments(t *testing.T) {
 	a.channelDomains(response, request)
 	if response.Code != http.StatusOK || bytes.Contains(response.Body.Bytes(), []byte("news.example.com")) {
 		t.Fatalf("transferred site still visible: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestPartyASignatureTemplateIsRestrictedAndHashed(t *testing.T) {
+	a := testApp(t)
+	signature := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII="
+	payload, _ := json.Marshal(map[string]any{"signerName": "Haijun Lyu", "signerTitle": "VP", "signatureData": signature})
+	request := httptest.NewRequest(http.MethodPut, "/api/admin/contract-signature", bytes.NewReader(payload))
+	request = request.WithContext(context.WithValue(request.Context(), userKey{}, user{ID: 2, Email: "admin@example.test", Name: "Admin", Role: "admin"}))
+	response := httptest.NewRecorder()
+	a.updateContractSignatureTemplate(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("non-superadmin updated signature template: %d", response.Code)
+	}
+
+	request = httptest.NewRequest(http.MethodPut, "/api/admin/contract-signature", bytes.NewReader(payload))
+	request = request.WithContext(context.WithValue(request.Context(), userKey{}, user{ID: 1, Email: "root@example.test", Name: "Root", Role: "admin", IsSuperAdmin: true}))
+	response = httptest.NewRecorder()
+	a.updateContractSignatureTemplate(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("superadmin update status=%d %s", response.Code, response.Body.String())
+	}
+	_, digest, err := parseRegistrationSignature(signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, found := a.one("SELECT signer_name signerName,signer_title signerTitle,signature_hash signatureHash FROM contract_signature_templates WHERE id=1")
+	if !found || fieldString(item, "signerName") != "Haijun Lyu" || fieldString(item, "signerTitle") != "VP" || fieldString(item, "signatureHash") != digest {
+		t.Fatalf("invalid saved signer template: %#v", item)
 	}
 }

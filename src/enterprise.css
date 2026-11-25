@@ -834,3 +834,92 @@ body {
   .app-shell .ant-menu-dark .ant-menu-item { height:36px; line-height:36px; margin-block:2px }
   .app-shell .sidebar-profile { margin-top:6px; padding-block:10px }
 }
+
+/* Dialogs keep their content usable without visible vertical or horizontal scroll bars. */
+.ant-modal-wrap,
+.ant-drawer-content-wrapper,
+.ant-drawer-body {
+  scrollbar-width: none;
+}
+.ant-modal-wrap::-webkit-scrollbar,
+.ant-modal::-webkit-scrollbar,
+.ant-modal-content::-webkit-scrollbar,
+.ant-modal-body::-webkit-scrollbar,
+.ant-drawer-content-wrapper::-webkit-scrollbar,
+.ant-drawer-body::-webkit-scrollbar,
+.ant-modal *::-webkit-scrollbar,
+.ant-drawer *::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+.ant-modal {
+  max-width: calc(100vw - 24px);
+}
+.ant-modal-content {
+  max-height: calc(100dvh - 32px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ant-modal-header,
+.ant-modal-footer {
+  flex: 0 0 auto;
+}
+.ant-modal-body {
+  min-width: 0;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  scrollbar-width: none;
+}
+.ant-modal-body .ant-table-content,
+.ant-modal-body .ant-table-body {
+  scrollbar-width: none;
+}
+.ant-drawer-content {
+  max-height: 100dvh;
+}
+.ant-drawer-body {
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.party-signature-template,
+.party-signature-preview > div {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid var(--workspace-border);
+  border-radius: 10px;
+  background: #fbfcfe;
+}
+.party-signature-template img,
+.party-signature-preview img {
+  display: block;
+  width: min(100%, 480px);
+  height: 120px;
+  object-fit: contain;
+  object-position: left center;
+  background: #fff;
+}
+.party-signature-upload {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  gap: 8px;
+  padding: 8px 14px;
+  border: 1px dashed #b7c7de;
+  border-radius: 8px;
+  color: var(--workspace-accent);
+  cursor: pointer;
+}
+.party-signature-upload input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}

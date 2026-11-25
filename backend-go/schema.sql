@@ -262,3 +262,13 @@ CREATE INDEX IF NOT EXISTS idx_revenue_source_domain ON revenue_facts(source_fil
 CREATE INDEX IF NOT EXISTS idx_revenue_scope_date ON revenue_facts(channel_id, report_date);
 CREATE INDEX IF NOT EXISTS idx_gam_channel_assignments_date ON gam_channel_assignments(soap_account_id,effective_from DESC);
 CREATE INDEX IF NOT EXISTS idx_gam_domain_channel_assignments_date ON gam_domain_channel_assignments(effective_from DESC);
+
+CREATE TABLE IF NOT EXISTS contract_signature_templates (
+  id INTEGER PRIMARY KEY CHECK(id=1),
+  signer_name TEXT NOT NULL,
+  signer_title TEXT NOT NULL,
+  signature_data TEXT NOT NULL,
+  signature_hash TEXT NOT NULL,
+  updated_by TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

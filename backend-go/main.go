@@ -143,6 +143,8 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("POST /api/admin/domain-share-rules", a.auth("admin", a.createDomainShareRule))
 	mux.HandleFunc("PUT /api/admin/domain-share-rules/{id}", a.auth("admin", a.updateDomainShareRule))
 	mux.HandleFunc("GET /api/admin/channels", a.auth("admin", a.channels))
+	mux.HandleFunc("GET /api/admin/contract-signature", a.auth("admin", a.getContractSignatureTemplate))
+	mux.HandleFunc("PUT /api/admin/contract-signature", a.auth("admin", a.updateContractSignatureTemplate))
 	mux.HandleFunc("GET /api/admin/channel-registrations", a.auth("admin", a.channelRegistrations))
 	mux.HandleFunc("DELETE /api/admin/channel-registrations/pending/{id}", a.auth("admin", a.deletePendingChannelRegistration))
 	mux.HandleFunc("GET /api/admin/channel-registrations/{id}", a.auth("admin", a.channelRegistrationDetail))

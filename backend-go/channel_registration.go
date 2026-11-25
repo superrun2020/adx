@@ -386,6 +386,39 @@ func parseApprovedRegistrationDomains(input map[string]any) ([]approvedRegistrat
 	return out, nil
 }
 
+func (a *app) getContractSignatureTemplate(w http.ResponseWriter, r *http.Request) {
+	item, found := a.one("SELECT signer_name signerName,signer_title signerTitle,signature_data signatureData,signature_hash signatureHash,updated_at updatedAt FROM contract_signature_templates WHERE id=1")
+	writeJSON(w, 200, map[string]any{"ok": true, "configured": found, "item": item})
+}
+
+func (a *app) updateContractSignatureTemplate(w http.ResponseWriter, r *http.Request) {
+	if !currentUser(r).IsSuperAdmin {
+		writeError(w, http.StatusForbidden, "super_admin_required")
+		return
+	}
+	input, ok := bodyMap(w, r)
+	if !ok {
+		return
+	}
+	signerName := strings.TrimSpace(fieldString(input, "signerName"))
+	signerTitle := strings.TrimSpace(fieldString(input, "signerTitle"))
+	signatureData, signatureHash, err := parseRegistrationSignature(fieldString(input, "signatureData"))
+	if signerName != "Haijun Lyu" || signerTitle != "VP" || err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_party_a_signature_template")
+		return
+	}
+	_, err = a.db.ExecContext(r.Context(), "INSERT INTO contract_signature_templates(id,signer_name,signer_title,signature_data,signature_hash,updated_by) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET signer_name=excluded.signer_name,signer_title=excluded.signer_title,signature_data=excluded.signature_data,signature_hash=excluded.signature_hash,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP",
+		signerName, signerTitle, signatureData, signatureHash, currentUser(r).Email)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	a.audit(currentUser(r).Email, "contract.party_a_signature_configure", "contract_signature_template", 1,
+		marshalText(map[string]string{"signerName": signerName, "signerTitle": signerTitle, "signatureHash": signatureHash}), clientIP(r))
+	item, _ := a.one("SELECT signer_name signerName,signer_title signerTitle,signature_data signatureData,signature_hash signatureHash,updated_at updatedAt FROM contract_signature_templates WHERE id=1")
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "configured": true, "item": item})
+}
+
 func (a *app) approveChannelRegistration(w http.ResponseWriter, r *http.Request) {
 	input, ok := bodyMap(w, r)
 	if !ok {
@@ -409,11 +442,6 @@ func (a *app) approveChannelRegistration(w http.ResponseWriter, r *http.Request)
 		writeError(w, 400, "invalid_channel_registration_approval")
 		return
 	}
-	reviewerSignature, reviewerSignatureHash, err := parseRegistrationSignature(fieldString(input, "reviewerSignatureData"))
-	if err != nil {
-		writeError(w, 400, "invalid_reviewer_signature")
-		return
-	}
 	reg, found := a.one("SELECT r.id,r.user_id,r.company_name,r.contact_name,u.email,r.status,u.status user_status FROM channel_registrations r JOIN users u ON u.id=r.user_id WHERE r.id=?", id)
 	if !found {
 		writeError(w, 404, "channel_registration_not_found")
@@ -423,6 +451,9 @@ func (a *app) approveChannelRegistration(w http.ResponseWriter, r *http.Request)
 		writeError(w, 409, "channel_registration_not_reviewable")
 		return
 	}
+	reviewerSignature := fieldString(input, "reviewerSignatureData")
+	reviewerSignatureHash := ""
+	counterSignerName := currentUser(r).Name
 	requestedRows, err := queryMaps(a.db, "SELECT id,domain,adx_txt FROM channel_registration_domains WHERE registration_id=?", id)
 	if err != nil {
 		writeError(w, 500, "channel_registration_domains_unavailable")
@@ -439,6 +470,32 @@ func (a *app) approveChannelRegistration(w http.ResponseWriter, r *http.Request)
 	for _, chosen := range domains {
 		if _, exists := requested[strings.ToLower(chosen.Domain)]; !exists {
 			writeError(w, 400, "approval_domain_not_requested")
+			return
+		}
+	}
+	signed, signedErr := firstMap(a.db, "SELECT id,version,contract_text,contract_hash,signer_name,signer_title,signer_email,signature_data,signature_hash,signed_at FROM channel_registration_contracts WHERE registration_id=? ORDER BY id DESC LIMIT 1", id)
+	if signedErr != nil || signed == nil {
+		writeError(w, 409, "channel_registration_contract_not_signed")
+		return
+	}
+	if fieldString(signed, "version") == channelAgreementVersion {
+		template, configured := a.one("SELECT signer_name signerName,signer_title signerTitle,signature_data signatureData,signature_hash signatureHash FROM contract_signature_templates WHERE id=1")
+		if !configured {
+			writeError(w, 409, "party_a_signature_template_not_configured")
+			return
+		}
+		counterSignerName = fieldString(template, "signerName")
+		reviewerTitle = fieldString(template, "signerTitle")
+		reviewerSignature, reviewerSignatureHash = fieldString(template, "signatureData"), fieldString(template, "signatureHash")
+		_, computedHash, signatureErr := parseRegistrationSignature(reviewerSignature)
+		if signatureErr != nil || computedHash != reviewerSignatureHash {
+			writeError(w, 409, "party_a_signature_template_integrity_failed")
+			return
+		}
+	} else {
+		reviewerSignature, reviewerSignatureHash, err = parseRegistrationSignature(reviewerSignature)
+		if err != nil {
+			writeError(w, 400, "invalid_reviewer_signature")
 			return
 		}
 	}
@@ -493,18 +550,13 @@ func (a *app) approveChannelRegistration(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	signed, signedErr := firstMap(tx, "SELECT id,version,contract_text,contract_hash,signer_name,signer_title,signer_email,signature_data,signature_hash,signed_at FROM channel_registration_contracts WHERE registration_id=? ORDER BY id DESC LIMIT 1", id)
-	if signedErr != nil || signed == nil {
-		writeError(w, 409, "channel_registration_contract_not_signed")
-		return
-	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	pdfBytes, pdfErr := buildSignedContractPDF(signedContractPDF{
 		RegistrationID: id, CompanyName: fieldString(reg, "company_name"), Version: fieldString(signed, "version"),
 		Text: signed["contract_text"].(string), TextHash: fieldString(signed, "contract_hash"),
 		SignerName: fieldString(signed, "signer_name"), SignerTitle: fieldString(signed, "signer_title"), SignerEmail: fieldString(signed, "signer_email"),
 		SignatureData: fieldString(signed, "signature_data"), SignatureHash: fieldString(signed, "signature_hash"), SignedAt: fieldString(signed, "signed_at"),
-		CounterSigner: currentUser(r).Name, CounterSignerTitle: reviewerTitle, CounterSignatureData: reviewerSignature,
+		CounterSigner: counterSignerName, CounterSignerTitle: reviewerTitle, CounterSignatureData: reviewerSignature,
 		CounterSignatureHash: reviewerSignatureHash, CountersignedAt: now,
 	})
 	if pdfErr != nil {
@@ -552,7 +604,7 @@ func (a *app) approveChannelRegistration(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if _, err = tx.ExecContext(r.Context(), "UPDATE channel_registration_contracts SET counter_signer=?,counter_signer_title=?,counter_signature_data=?,counter_signature_hash=?,countersigned_at=?,signed_pdf=?,signed_pdf_sha256=?,signed_pdf_created_at=CURRENT_TIMESTAMP WHERE id=?",
-		currentUser(r).Name, reviewerTitle, reviewerSignature, reviewerSignatureHash, now, pdfBytes, hex.EncodeToString(pdfDigest[:]), signed["id"]); err != nil {
+		counterSignerName, reviewerTitle, reviewerSignature, reviewerSignatureHash, now, pdfBytes, hex.EncodeToString(pdfDigest[:]), signed["id"]); err != nil {
 		writeError(w, 500, "channel_contract_countersign_failed")
 		return
 	}
@@ -571,7 +623,7 @@ func (a *app) approveChannelRegistration(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	a.audit(currentUser(r).Email, "channel.registration_approved", "channel_registration", id,
-		marshalText(map[string]any{"channelId": channelID, "domains": domains, "sharePercent": share, "effectiveFrom": effective, "contractVersion": signed["version"]}), clientIP(r))
+		marshalText(map[string]any{"channelId": channelID, "domains": domains, "sharePercent": share, "effectiveFrom": effective, "contractVersion": signed["version"], "counterSigner": counterSignerName, "counterSignatureHash": reviewerSignatureHash}), clientIP(r))
 	if contractEmailConfigured() {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

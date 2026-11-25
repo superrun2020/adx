@@ -40,6 +40,7 @@ export function allowedAdminRequest(user, path, method) {
   else if (path.startsWith('/api/admin/gam-accounts') || path.startsWith('/api/admin/gam-sync/')) views = ['gam'];
   else if (path.startsWith('/api/admin/gam-ad-units') || path.startsWith('/api/admin/ad-units')) views = ['ad-units'];
   else if (path === '/api/admin/channels' && method === 'GET') views = ['channels','settlement','gam','reports'];
+  else if (path === '/api/admin/contract-signature') views = ['channels'];
   else if (path.startsWith('/api/admin/channels')) views = ['channels'];
   else if (path === '/api/admin/upstream-accounts' && method === 'GET') views = ['settlement','gam','reports'];
   else if (['/api/admin/upstream-accounts','/api/admin/ad-unit-domains','/api/admin/share-rules','/api/admin/domain-share-rules'].some(prefix => path.startsWith(prefix))) views = ['settlement'];
