@@ -758,6 +758,76 @@ body {
 .app-shell .ant-alert-success .ant-alert-icon { color:#268064 }
 .app-shell .ant-alert-success .ant-alert-message { color:#245b48 }
 .app-shell .ant-alert-success .ant-alert-description { color:#527264 }
+.dashboard-charts { width:100% }
+.dashboard-chart-notes {
+  display:flex;
+  flex-wrap:wrap;
+  align-items:baseline;
+  justify-content:space-between;
+  column-gap:20px;
+  row-gap:4px;
+}
+.dashboard-breakdown {
+  --matched-color:#3159b8;
+  --unmatched-color:#dbe4f3;
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  justify-content:center;
+  align-content:center;
+  gap:20px clamp(16px, 2vw, 36px);
+  min-height:100%;
+}
+.dashboard-donut {
+  width:clamp(124px, 11vw, 176px);
+  aspect-ratio:1;
+  flex:none;
+  display:grid;
+  place-items:center;
+  border-radius:50%;
+  background:conic-gradient(var(--matched-color) var(--match-share), var(--unmatched-color) 0);
+}
+.dashboard-donut-center {
+  width:72%;
+  aspect-ratio:1;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  border-radius:50%;
+  background:#fff;
+  color:#607087;
+}
+.dashboard-donut-center strong {
+  color:#233a62;
+  font-size:clamp(20px, 1.6vw, 28px);
+  font-variant-numeric:tabular-nums;
+  line-height:1.25;
+}
+.dashboard-breakdown-legend {
+  flex:1 1 178px;
+  max-width:300px;
+  margin:0;
+}
+.dashboard-breakdown-legend > div {
+  display:flex;
+  flex-wrap:wrap;
+  justify-content:space-between;
+  gap:2px 10px;
+  padding:10px 0;
+  border-bottom:1px solid var(--report-grid);
+}
+.dashboard-breakdown-legend > div:last-child { border:0 }
+.dashboard-breakdown-legend dt { display:flex; align-items:center; gap:7px }
+.dashboard-breakdown-legend dd { margin:0; font-weight:600; font-variant-numeric:tabular-nums }
+.dashboard-breakdown-legend dd span { margin-inline-start:4px; color:#607087; font-weight:400 }
+.dashboard-dot { width:8px; height:8px; border-radius:50%; flex:none; background:var(--matched-color) }
+.dashboard-dot.is-unmatched { background:var(--unmatched-color) }
+@media (max-width:620px) {
+  .dashboard-charts .ant-col .chart { height:auto; min-height:260px }
+  .dashboard-charts .ant-col .revenue-chart { height:260px }
+  .dashboard-breakdown { min-height:260px }
+}
 @media (max-height:900px) {
   .app-shell .side-brand { height:68px; padding-block:12px }
   .app-shell .ant-menu-dark .ant-menu-item-group-title { padding:12px 24px 5px }

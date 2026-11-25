@@ -8,6 +8,15 @@ let loading;
 let activeLocale;
 const originals = new WeakMap();
 const overrides = {
+  '每日收入趋势':'Daily revenue trend',
+  '每日指标对比':'Daily metric comparison',
+  '柱状图指标':'Bar chart metric',
+  '请求匹配分布':'Request match breakdown',
+  '已匹配请求':'Matched requests',
+  '未匹配请求':'Unmatched requests',
+  '总请求量':'Total requests',
+  '所选区间暂无请求构成数据':'No request breakdown for the selected dates',
+  '所选区间暂无数据':'No data for the selected dates',
   '申请时间（北京时间）':'Application time (Beijing)',
   '可搜索并多选，每次最多分配 50 个链接。':'Search and select up to 50 links at a time.',
   '保存后，所选域名在对应 GAM 账号下的历史报表和回退记录对目标渠道可见。':'Saving gives the destination channel access to historical reports and rollback records for the selected domains in their respective GAM accounts.',

@@ -156,23 +156,61 @@ function DashboardTopLinks({ user, refreshKey }) {
   </Space>;
 }
 
+function MatchBreakdown({ summary, formatCount, formatPercent }) {
+  const requests = Number(summary?.requests);
+  const matched = Number(summary?.matched);
+  if (!(requests > 0) || !Number.isFinite(matched) || matched < 0 || matched > requests) {
+    return <div className="revenue-empty">所选区间暂无请求构成数据</div>;
+  }
+
+  const share = matched / requests;
+  return <div className="dashboard-breakdown" data-chart-type="donut">
+    <div className="dashboard-donut" style={{'--match-share': formatPercent(share)}} aria-hidden="true">
+      <div className="dashboard-donut-center"><strong>{formatPercent(share)}</strong><span>匹配率</span></div>
+    </div>
+    <dl className="dashboard-breakdown-legend">
+      <div><dt><i className="dashboard-dot" aria-hidden="true"/>已匹配请求</dt><dd>{formatCount(matched)} <span>{formatPercent(share)}</span></dd></div>
+      <div><dt><i className="dashboard-dot is-unmatched" aria-hidden="true"/>未匹配请求</dt><dd>{formatCount(requests - matched)} <span>{formatPercent(1 - share)}</span></dd></div>
+      <div><dt>总请求量</dt><dd>{formatCount(requests)}</dd></div>
+    </dl>
+  </div>;
+}
+
 function DashboardCharts({ data, admin }) {
-  const [traffic, setTraffic] = useState('impressions');
-  const [quality, setQuality] = useState('matchRate');
+  const [barMetric, setBarMetric] = useState('matchRate');
   const locale = useLocale();
-  const trafficOptions = [{value:'requests',label:'请求量'}, {value:'impressions',label:'展示量'}, {value:'clicks',label:'点击量'}];
-  const qualityOptions = [{value:'matchRate',label:'匹配率'}, {value:'clickRate',label:'点击率'}, {value:'ecpm',label:'eCPM'}];
-  const labelFor = (options, key) => options.find(option => option.value === key)?.label;
-  const formatCount = value => Number(value).toLocaleString(locale === 'en' ? 'en-US' : 'zh-CN', {maximumFractionDigits:0});
-  const formatQuality = value => quality === 'ecpm' ? money(value) : Number(value).toFixed(2) + '%';
-  return <>
-    <Card title="所选区间每日收益趋势" extra={data?.lastSync ? '最近同步 ' + data.lastSync : '尚未同步'}><div className="chart"><RevenueChart data={data?.trend || []} formatMoney={money} label={admin ? '原始流水' : '渠道结算收入'} color="#3159b8"/></div></Card>
+  const countFormatter = new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'zh-CN', {maximumFractionDigits:0});
+  const formatCount = value => countFormatter.format(value);
+  const formatPercent = value => (value * 100).toFixed(2) + '%';
+  const barOptions = [
+    {value:'matchRate',label:'匹配率',format:value => formatPercent(value / 100)},
+    {value:'requests',label:'请求量',format:formatCount},
+    {value:'impressions',label:'展示量',format:formatCount},
+    {value:'clicks',label:'点击量',format:formatCount},
+    {value:'clickRate',label:'点击率',format:value => formatPercent(value / 100)},
+    {value:'ecpm',label:'eCPM',format:money}
+  ];
+  const selectedMetric = barOptions.find(option => option.value === barMetric) || barOptions[0];
+  const revenueLabel = admin ? '原始流水' : '渠道结算收入';
+  return <Space direction="vertical" size={16} className="dashboard-charts">
+    <Card title="每日收入趋势" extra={<Text type="secondary">{revenueLabel}</Text>}>
+      <div className="chart"><RevenueChart data={data?.trend} formatMoney={money} label={revenueLabel} color="#3159b8"/></div>
+    </Card>
     <Row gutter={[16,16]}>
-      <Col xs={24} xl={12}><Card title="每日流量趋势" extra={<Select aria-label="流量指标" value={traffic} onChange={setTraffic} options={trafficOptions} style={{minWidth:115}}/>}><div className="chart"><RevenueChart data={data?.trend || []} metric={traffic} label={labelFor(trafficOptions, traffic)} formatMoney={formatCount} color="#358c9d"/></div></Card></Col>
-      <Col xs={24} xl={12}><Card title="每日投放质量趋势" extra={<Select aria-label="质量指标" value={quality} onChange={setQuality} options={qualityOptions} style={{minWidth:115}}/>}><div className="chart"><RevenueChart data={data?.trend || []} metric={quality} label={labelFor(qualityOptions, quality)} formatMoney={formatQuality} color="#8065b8"/></div></Card></Col>
+      <Col xs={24} xl={13}><Card title="每日指标对比" extra={<Select aria-label="柱状图指标" value={barMetric}
+        onChange={setBarMetric} options={barOptions} style={{minWidth:115}}/>}>
+        <div className="chart"><RevenueChart data={data?.trend} type="bar" metric={selectedMetric.value} formatMoney={selectedMetric.format}
+          label={selectedMetric.label} color="#358c9d"/></div>
+      </Card></Col>
+      <Col xs={24} xl={11}><Card title="请求匹配分布">
+        <div className="chart"><MatchBreakdown summary={data?.summary} formatCount={formatCount} formatPercent={formatPercent}/></div>
+      </Card></Col>
     </Row>
-    <Text type="secondary">图表跟随顶部日期筛选；匹配率＝匹配请求 ÷ 请求量，点击率＝点击量 ÷ 展示量。eCPM 按当前可见收入计算，每千次展示的收入以 USD 计。缺失日期不补零；当天数据尚未完整。</Text>
-  </>;
+    <div className="dashboard-chart-notes">
+      <Text type="secondary">图表跟随顶部日期筛选；匹配率＝匹配请求 ÷ 请求量，点击率＝点击量 ÷ 展示量。eCPM 按当前可见收入计算，每千次展示的收入以 USD 计。缺失日期不补零；当天数据尚未完整。</Text>
+      <Text type="secondary">{data?.lastSync ? '最近同步 ' + data.lastSync : '尚未同步'}</Text>
+    </div>
+  </Space>;
 }
 
 function Dashboard({ range, setRange, admin, user, initialDashboard }) {
