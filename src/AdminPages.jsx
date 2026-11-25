@@ -24,6 +24,19 @@ const { Title, Text } = Typography;
 const Table = NumericSortableTable;
 const money = value => '$' + Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const number = value => Number(value || 0).toLocaleString('zh-CN');
+const applicationTimeFormatter = new Intl.DateTimeFormat('sv-SE', {
+  timeZone:'Asia/Shanghai', year:'numeric', month:'2-digit', day:'2-digit',
+  hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23'
+});
+
+function formatApplicationTime(value) {
+  if (!value) return '—';
+  const iso = value.replace(' ', 'T');
+  // SQLite CURRENT_TIMESTAMP stores UTC without a zone suffix.
+  const date = new Date(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(iso) ? iso : iso + 'Z');
+  return Number.isNaN(date.valueOf()) ? '—' : applicationTimeFormatter.format(date);
+}
+
 async function api(path, options = {}) {
   const response = await sessionFetch(path, {
     credentials: 'include', ...options,
@@ -227,16 +240,28 @@ function Channels({ user }) {
   const [domainIssues,setDomainIssues]=useState([]),[domainBusy,setDomainBusy]=useState(true);
   const [linkOptions,setLinkOptions]=useState([]);
   const [assignTo,setAssignTo]=useState(null);
-  const [linkKey,setLinkKey]=useState(null);
-  const [linkTxt,setLinkTxt]=useState('');
+  const [selectedLinks,setSelectedLinks]=useState([]);
+  const [linkTxt,setLinkTxt]=useState({});
   const [assignBusy,setAssignBusy]=useState(false);
   const [domainModalChannel,setDomainModalChannel]=useState(null);
   const [registrations,setRegistrations]=useState([]);
   const [registrationLoading,setRegistrationLoading]=useState(false);
   const [reviewingRegistration,setReviewingRegistration]=useState(null);
   const domainRequest=useRef(null);
+  const registrationRequest=useRef(0);
   const load=()=>Promise.all([api('/api/admin/channels'),api('/api/admin/gam-accounts')]).then(([r,gam])=>{const rows=r.items || [];setItems(rows);setGamAccounts(gam.items || []);setDomainModalChannel(current=>current&&rows.some(row=>row.id===current.id)?current:null);if(cacheKey)channelRowsCache.set(cacheKey,rows);}).catch(e=>message.error(e.message));
-  const loadRegistrations=async()=>{setRegistrationLoading(true);try{setRegistrations((await api('/api/admin/channel-registrations')).items||[])}catch(error){message.error('渠道注册申请读取失败：'+error.message)}finally{setRegistrationLoading(false)}};
+  const loadRegistrations=async()=>{
+    const request=++registrationRequest.current;
+    setRegistrationLoading(true);
+    try{
+      const result=await api('/api/admin/channel-registrations');
+      if(request===registrationRequest.current)setRegistrations(result.items||[]);
+    }catch(error){
+      if(request===registrationRequest.current)message.error('渠道注册申请读取失败：'+error.message);
+    }finally{
+      if(request===registrationRequest.current)setRegistrationLoading(false);
+    }
+  };
   const loadDomains=async()=>{
     domainRequest.current?.abort();
     const controller=new AbortController(); domainRequest.current=controller;
@@ -294,17 +319,23 @@ function Channels({ user }) {
   useEffect(()=>{let active=true;const channelLoad=load();void loadRegistrations();if(cacheKey&&channelRowsCache.has(cacheKey))void loadDomains();else void channelLoad.finally(()=>{if(active)void loadDomains();});return()=>{active=false;domainRequest.current?.abort();}},[]);
   const save=async values=>{try{const payload={...values,effectiveFrom:values.effectiveFrom?.format('YYYY-MM-DD')};await api(editing?`/api/admin/channels/${editing.id}`:'/api/admin/channels',{method:editing?'PUT':'POST',body:JSON.stringify(payload)});message.success('渠道和账号归属已更新');setOpen(false);await load();void loadDomains()}catch(e){message.error(e.message)}};
   const show=item=>{setEditing(item||null);form.resetFields();form.setFieldsValue(item?{...item,gamAccountIds:accountIdsFor(item),effectiveFrom:dayjs()}:{sharePercent:80,status:'active',effectiveFrom:dayjs(),gamAccountIds:[]});setOpen(true)};
-  const selectedLink=linkOptions.find(row=>row.key===linkKey);
-  const openAssignment=channel=>{setAssignTo(channel);setLinkKey(null);setLinkTxt('');};
+  const openAssignment=channel=>{setAssignTo(channel);setSelectedLinks([]);setLinkTxt({});};
   const saveAssignment=async()=>{
-    if(!selectedLink||!assignTo)return;
+    if(!selectedLinks.length||!assignTo||assignBusy)return;
     setAssignBusy(true);
     try{
+      const links=selectedLinks.map(row=>({
+        gamAccountId:row.accountId,domain:row.domain,siteName:row.siteName,adxTxt:linkTxt[row.key]
+      }));
       await api('/api/admin/channels/'+assignTo.id+'/link',{method:'PUT',body:JSON.stringify({
-        gamAccountId:selectedLink.accountId,domain:selectedLink.domain,siteName:selectedLink.siteName,adxTxt:linkTxt
+        links
       })});
       message.success('网站分配已保存');setAssignTo(null);void loadDomains();void loadRegistrations();
-    }catch(error){message.error(error.message)}finally{setAssignBusy(false)}
+    }catch(error){
+      const index=Number(error.message.match(/\(item (\d+)\)$/)?.[1]);
+      const link=selectedLinks[index-1];
+      message.error(link ? `${link.domain} (${link.networkCode}) · ${error.message}` : error.message);
+    }finally{setAssignBusy(false)}
   };
   const deleteChannel=row=>Modal.confirm({
     title:'删除渠道 '+row.name+'？',
@@ -318,6 +349,27 @@ function Channels({ user }) {
         message.error(error.message==='channel_has_gam_accounts'?'此渠道仍关联 GAM 账号，请先将账号转移到其他渠道后删除':error.message);
         throw error;
       }
+    }
+  });
+  const deletePendingRegistration=row=>Modal.confirm({
+    title:'删除待签署申请？',
+    content:<><div>{row.companyName} · {row.email}</div><p>确认后会删除此注册账号并退出已有登录。该邮箱可以重新注册。</p></>,
+    okText:'删除申请',okButtonProps:{danger:true},cancelText:'取消',
+    onOk:async()=>{
+      try{
+        await api('/api/admin/channel-registrations/pending/'+row.userId,{method:'DELETE'});
+      }catch(error){
+        if(error.message==='channel_registration_not_deletable'){
+          message.warning('申请已签署或已移除，列表已刷新。');
+          await loadRegistrations();
+          return;
+        }
+        message.error(error.message);
+        throw error;
+      }
+      setRegistrations(previous=>previous.filter(item=>item.id!==row.id));
+      message.success('待签署申请已删除');
+      await loadRegistrations();
     }
   });
   const resetPassword=row=>{
@@ -382,9 +434,12 @@ function Channels({ user }) {
           <span>{row.assignedDomains||'—'}</span>
           <span>{row.channelName||'待开通渠道'}{Number(row.gamAccountCount)>0?' · '+row.gamAccountCount+' 个 GAM 账号':''}</span>
         </div>},
-        {title:'申请时间',dataIndex:'createdAt',width:140,render:value=><span className="table-timestamp">{value}</span>},
+        {title:'申请时间（北京时间）',dataIndex:'createdAt',width:155,render:value=><span className="table-timestamp">{formatApplicationTime(value)}</span>},
         {title:'状态',dataIndex:'status',width:110,render:value=><Tag color={value==='approved'?'green':value==='rejected'?'red':value==='registered'?'blue':'gold'}>{value==='approved'?'已开通':value==='rejected'?'已拒绝':value==='registered'?'待渠道签约':'待平台复核'}</Tag>},
-        {title:'操作',width:245,render:(_,row)=>row.status==='registered'?<Text type="secondary">等待签署</Text>:<Space className="table-actions" size={4} wrap>
+        {title:'操作',width:245,render:(_,row)=>row.status==='registered'?<Space className="table-actions" size={4} wrap>
+          <Text type="secondary">等待签署</Text>
+          <Button size="small" type="text" danger onClick={()=>deletePendingRegistration(row)}>删除申请</Button>
+        </Space>:<Space className="table-actions" size={4} wrap>
           <Button size="small" type="text" onClick={()=>setReviewingRegistration(row)}>{row.status==='signed'?'复核并签署':'查看合同'}</Button>
           {row.status==='approved'&&row.channelId&&<>
             <Button size="small" onClick={()=>openAssignment({id:Number(row.channelId),name:row.channelName||row.companyName})}>分配链接</Button>
@@ -400,15 +455,30 @@ function Channels({ user }) {
     </Card>
     <Card className="channel-directory-card" title="现有渠道"><Table rowKey="id" dataSource={items} numericKeys={['sharePercent']} columns={columns} scroll={{x:1200}}/></Card>
     <ChannelRegistrationReview registration={reviewingRegistration} accounts={gamAccounts} user={user} onClose={()=>setReviewingRegistration(null)} onDone={()=>{setReviewingRegistration(null);void loadRegistrations();void load();void loadDomains()}}/>
-    <Modal open={Boolean(assignTo)} title={<Space>分配链接<Tag>{assignTo?.name}</Tag></Space>} okText="保存分配"
-      onOk={saveAssignment} okButtonProps={{disabled:!selectedLink}} confirmLoading={assignBusy} onCancel={()=>{if(!assignBusy)setAssignTo(null)}}>
+    <Modal open={Boolean(assignTo)} title={<Space>分配链接<Tag>{assignTo?.name}</Tag></Space>} okText="保存分配" width={680}
+      onOk={saveAssignment} okButtonProps={{disabled:!selectedLinks.length}} cancelButtonProps={{disabled:assignBusy}} confirmLoading={assignBusy} onCancel={()=>{if(!assignBusy)setAssignTo(null)}}>
       <Form layout="vertical">
-        <Form.Item label="网站与 GAM 账号"><Select showSearch optionFilterProp="label" placeholder="搜索域名或 GAM 账号"
-          value={linkKey} loading={domainBusy} options={linkOptions} onChange={(key,row)=>{setLinkKey(key);setLinkTxt(row.txt)}}/></Form.Item>
-        {selectedLink&&<Alert showIcon style={{marginBottom:16}} type={selectedLink.owner&&selectedLink.owner!==assignTo?.id?'warning':'info'}
-          message={<Space><span>当前归属</span><b>{ownerNames.get(selectedLink.owner)||'未分配'}</b></Space>}
-          description="保存后，所选域名在此 GAM 账号下的历史报表和回退记录对目标渠道可见。"/>}
-        <Form.Item label="网站广告授权 TXT"><Input.TextArea rows={4} maxLength={16000} value={linkTxt} onChange={e=>setLinkTxt(e.target.value)} placeholder="粘贴对应账号的 TXT，每行一条"/></Form.Item>
+        <Form.Item label="网站与 GAM 账号" extra="可搜索并多选，每次最多分配 50 个链接。">
+          <Select mode="multiple" optionFilterProp="label" maxCount={50} maxTagCount={3} aria-label="网站与 GAM 账号"
+            placeholder="搜索域名或 GAM 账号" value={selectedLinks.map(row=>row.key)} disabled={assignBusy}
+            loading={domainBusy} options={linkOptions} onChange={(_,rows)=>setSelectedLinks(rows)}/>
+        </Form.Item>
+        {selectedLinks.length>0&&<>
+          <Alert showIcon style={{marginBottom:16}} type={selectedLinks.some(row=>row.owner&&row.owner!==assignTo?.id)?'warning':'info'}
+            message="保存后，所选域名在对应 GAM 账号下的历史报表和回退记录对目标渠道可见。"/>
+          <div style={{maxHeight:'45vh',overflowY:'auto'}}>
+            <Collapse size="small" items={selectedLinks.map(row=>({
+              key:row.key,
+              label:<Space wrap><Text strong>{row.domain}</Text><Text type="secondary">{row.accountName} ({row.networkCode})</Text>
+                <Tag color={row.owner&&row.owner!==assignTo?.id?'orange':undefined}><span>当前归属</span> · {ownerNames.get(row.owner)||'未分配'}</Tag></Space>,
+              children:<Form.Item label="网站广告授权 TXT" style={{marginBottom:0}}>
+                <Input.TextArea rows={3} maxLength={16000} value={linkTxt[row.key]??row.txt??''} disabled={assignBusy}
+                  onChange={event=>setLinkTxt(previous=>({...previous,[row.key]:event.target.value}))}
+                  placeholder="粘贴对应账号的 TXT，每行一条"/>
+              </Form.Item>
+            }))}/>
+          </div>
+        </>}
       </Form>
     </Modal>
     <ChannelDomainModal channel={items.find(item=>item.id===domainModalChannel?.id)||domainModalChannel} domains={domainsByChannel} issues={domainIssues} busy={domainBusy} onClose={()=>setDomainModalChannel(null)}/>

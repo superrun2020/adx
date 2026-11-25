@@ -137,6 +137,53 @@ func TestChannelRegistrationRemainsPendingUntilReview(t *testing.T) {
 	}
 }
 
+func TestDeletePendingChannelRegistration(t *testing.T) {
+	a := testApp(t)
+	for _, statement := range []string{
+		`INSERT INTO users(id,email,name,password_hash,role,status,sidebar_permissions) VALUES
+			(90,'unsigned@example.test','Unsigned','unused','channel','pending',NULL),
+			(91,'signed@example.test','Signed','unused','channel','pending',NULL),
+			(92,'reports@example.test','Reports','unused','admin','active','["reports"]')`,
+		`INSERT INTO channel_registrations(user_id,company_name,contact_name,registration_number,country,registered_address,organization_email,phone,status)
+			VALUES(91,'Example Ltd','Signed','123','UK','Example Street','signed@example.test','12345','signed')`,
+		`INSERT INTO channel_contract_email_codes(user_id,email,contract_hash,code_hash,expires_at,sent_at)
+			VALUES(90,'unsigned@example.test','contract','code',datetime('now','+1 hour'),datetime('now'))`,
+	} {
+		if _, err := a.db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for token, id := range map[string]int64{"admin": 1, "pending": 90, "reports": 92} {
+		if _, err := a.db.Exec("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,datetime('now','+1 hour'))", sha256Hex(token), id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := a.routes()
+	request := func(method, path, token string, want int) {
+		t.Helper()
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		if res.Code != want {
+			t.Fatalf("%s %s as %s returned %d, want %d: %s", method, path, token, res.Code, want, res.Body.String())
+		}
+	}
+	path := "/api/admin/channel-registrations/pending/"
+	request(http.MethodDelete, path+"90", "pending", http.StatusForbidden)
+	request(http.MethodDelete, path+"90", "reports", http.StatusForbidden)
+	request(http.MethodDelete, path+"91", "admin", http.StatusConflict)
+	request(http.MethodDelete, path+"90", "admin", http.StatusOK)
+	request(http.MethodGet, "/api/auth/me", "pending", http.StatusUnauthorized)
+	request(http.MethodDelete, path+"90", "admin", http.StatusConflict)
+	if a.exists("SELECT 1 FROM users WHERE id=90") || a.exists("SELECT 1 FROM sessions WHERE user_id=90") || a.exists("SELECT 1 FROM channel_contract_email_codes WHERE user_id=90") {
+		t.Fatal("deleted user, session or verification code still exists")
+	}
+	if !a.exists("SELECT 1 FROM channel_registrations WHERE user_id=91 AND status='signed'") || !a.exists("SELECT 1 FROM audit_logs WHERE action='channel.registration_deleted' AND target_id=90") {
+		t.Fatal("expected signed registration and deletion audit to be present")
+	}
+}
+
 func TestRegistrationApprovalActivatesOnlyMappedChannelAndStoresCounterSignature(t *testing.T) {
 	a := testApp(t)
 	statements := []string{

@@ -40,3 +40,41 @@ func TestAssignedWebsiteSeparatesNetworksAndTransfersTXT(t *testing.T) {
 		t.Fatal("TXT visible to previous channel")
 	}
 }
+
+func TestBatchChannelLinkAssignmentIsAtomicAndKeepsPerNetworkTXT(t *testing.T) {
+	a := testApp(t)
+	for _, statement := range []string{
+		`INSERT INTO channels(id,name,email,share_percent) VALUES(7,'A','a@example.test',75),(8,'B','b@example.test',75)`,
+		`INSERT INTO soap_accounts(id,name,network_code,credential_ciphertext,status,created_by)
+			VALUES(1,'One','123456','cipher','active','test'),(2,'Two','999999','cipher','active','test')`,
+		`INSERT INTO link_metadata(network_code,domain,channel_id,adx_txt,updated_by)
+			VALUES('123456','news.example.com',7,'old-one','test'),('999999','news.example.com',7,'old-two','test')`,
+	} {
+		if _, err := a.db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := a.db.Exec("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,1,datetime('now','+1 day'))", sha256Hex("batch-session")); err != nil {
+		t.Fatal(err)
+	}
+	handler := a.routes()
+	assign := func(body string, want int) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPut, "/api/admin/channels/8/link", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer batch-session")
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		if res.Code != want {
+			t.Fatalf("batch status %d, want %d: %s", res.Code, want, res.Body.String())
+		}
+	}
+	assign(`{"links":[{"gamAccountId":1,"domain":"news.example.com","adxTxt":"new-one"},{"gamAccountId":2,"domain":"unknown.example.com"}]}`, 400)
+	if a.exists("SELECT 1 FROM link_metadata WHERE channel_id=8 OR adx_txt='new-one'") {
+		t.Fatal("invalid batch partially changed ownership or TXT")
+	}
+	assign(`{"links":[{"gamAccountId":1,"domain":"news.example.com","adxTxt":"new-one"},{"gamAccountId":2,"domain":"news.example.com"}]}`, 200)
+	if !a.exists("SELECT 1 FROM link_metadata WHERE network_code='123456' AND channel_id=8 AND adx_txt='new-one'") ||
+		!a.exists("SELECT 1 FROM link_metadata WHERE network_code='999999' AND channel_id=8 AND adx_txt='old-two'") {
+		t.Fatal("batch did not update both networks with their own TXT")
+	}
+}

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 )
@@ -185,7 +186,48 @@ func (a *app) updateLinkMetadata(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+type channelLinkAssignment struct {
+	network, domain string
+	txt             *string
+}
+
+func (a *app) validateChannelLinkAssignment(r *http.Request, input map[string]any) (channelLinkAssignment, error) {
+	fields, err := a.parseLinkFields(map[string]any{"gamAccountId": input["gamAccountId"], "domain": input["domain"]})
+	if err != nil {
+		return channelLinkAssignment{}, err
+	}
+	assignment := channelLinkAssignment{network: fields.network, domain: fields.domain}
+	if value, provided := input["adxTxt"]; provided {
+		txt, ok := value.(string)
+		if !ok || len(strings.TrimSpace(txt)) > 16000 {
+			return channelLinkAssignment{}, errors.New("invalid_link_txt")
+		}
+		trimmed := strings.TrimSpace(txt)
+		assignment.txt = &trimmed
+	}
+	known := a.exists("SELECT 1 FROM link_metadata WHERE network_code=? AND domain=? UNION ALL SELECT 1 FROM revenue_facts WHERE domain=? COLLATE NOCASE AND source_file LIKE ? LIMIT 1", fields.network, fields.domain, fields.domain, "gam-rest:"+fields.network+":%")
+	if !known {
+		siteName := fieldString(input, "siteName")
+		if siteName == "" {
+			return channelLinkAssignment{}, errors.New("invalid_gam_site_domain")
+		}
+		token, err := a.tokenFor(r.Context(), fields.account)
+		if err != nil {
+			return channelLinkAssignment{}, err
+		}
+		site, err := a.getGamSite(r, fields.network, token, siteName)
+		if err != nil {
+			return channelLinkAssignment{}, err
+		}
+		if site["name"] != siteName || normalizedDomain(importString(site["url"])) != fields.domain {
+			return channelLinkAssignment{}, errors.New("invalid_gam_site_domain")
+		}
+	}
+	return assignment, nil
+}
+
 func (a *app) assignChannelLink(w http.ResponseWriter, r *http.Request) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
 	input, ok := bodyMap(w, r)
 	if !ok {
 		return nil
@@ -194,38 +236,62 @@ func (a *app) assignChannelLink(w http.ResponseWriter, r *http.Request) error {
 	if !a.exists("SELECT 1 FROM channels WHERE id=? AND status='active'", channelID) {
 		return errors.New("invalid_channel_id")
 	}
-	fields, err := a.parseLinkFields(map[string]any{"gamAccountId": input["gamAccountId"], "domain": input["domain"]})
+	inputs := []any{input}
+	if links, batch := input["links"]; batch {
+		inputs = array(links)
+		if len(inputs) < 1 || len(inputs) > 50 {
+			return errors.New("invalid_link_batch_size")
+		}
+	}
+	assignments := make([]channelLinkAssignment, 0, len(inputs))
+	seen := make(map[string]bool, len(inputs))
+	for index, value := range inputs {
+		assignment, err := a.validateChannelLinkAssignment(r, object(value))
+		if err != nil {
+			if len(inputs) == 1 {
+				return err
+			}
+			return fmt.Errorf("%w (item %d)", err, index+1)
+		}
+		key := assignment.network + ":" + assignment.domain
+		if seen[key] {
+			return fmt.Errorf("duplicate_link_assignment (item %d)", index+1)
+		}
+		seen[key] = true
+		assignments = append(assignments, assignment)
+	}
+
+	tx, err := a.db.BeginTx(r.Context(), nil)
 	if err != nil {
 		return err
 	}
-	txt := strings.TrimSpace(fieldString(input, "adxTxt"))
-	if len(txt) > 16000 {
-		return errors.New("invalid_link_txt")
-	}
-	known := a.exists("SELECT 1 FROM link_metadata WHERE network_code=? AND domain=? UNION ALL SELECT 1 FROM revenue_facts WHERE domain=? COLLATE NOCASE AND source_file LIKE ? LIMIT 1", fields.network, fields.domain, fields.domain, "gam-rest:"+fields.network+":%")
-	if !known {
-		siteName := fieldString(input, "siteName")
-		if siteName == "" {
-			return errors.New("invalid_gam_site_domain")
-		}
-		token, err := a.tokenFor(r.Context(), fields.account)
+	defer tx.Rollback()
+	actor := currentUser(r).Email
+	for _, assignment := range assignments {
+		result, err := tx.ExecContext(r.Context(), `INSERT INTO link_metadata(network_code,domain,channel_id,channel_assigned,adx_txt,updated_by)
+			SELECT ?,?,c.id,1,COALESCE(?,''),? FROM channels c WHERE c.id=? AND c.status='active'
+			ON CONFLICT(network_code,domain) DO UPDATE SET channel_id=excluded.channel_id,channel_assigned=1,
+			adx_txt=COALESCE(?,link_metadata.adx_txt),updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`,
+			assignment.network, assignment.domain, assignment.txt, actor, channelID, assignment.txt)
 		if err != nil {
 			return err
 		}
-		site, err := a.getGamSite(r, fields.network, token, siteName)
+		written, err := result.RowsAffected()
 		if err != nil {
 			return err
 		}
-		if site["name"] != siteName || normalizedDomain(importString(site["url"])) != fields.domain {
-			return errors.New("invalid_gam_site_domain")
+		if written != 1 {
+			return errors.New("invalid_channel_id")
+		}
+		if _, err = tx.ExecContext(r.Context(), `INSERT INTO audit_logs(actor_email,action,target_type,target_id,detail,ip)
+			VALUES(?,'channel.link_assigned','channel',?,?,?)`, actor, channelID, assignment.network+":"+assignment.domain, clientIP(r)); err != nil {
+			return err
 		}
 	}
-	_, err = a.db.ExecContext(r.Context(), `INSERT INTO link_metadata(network_code,domain,channel_id,channel_assigned,adx_txt,updated_by) VALUES(?,?,?,1,?,?)
- ON CONFLICT(network_code,domain) DO UPDATE SET channel_id=excluded.channel_id,channel_assigned=1,adx_txt=excluded.adx_txt,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`, fields.network, fields.domain, channelID, txt, currentUser(r).Email)
-	if err != nil {
+	if err := tx.Commit(); err != nil {
 		return err
 	}
-	a.audit(currentUser(r).Email, "channel.link_assigned", "channel", channelID, fields.network+":"+fields.domain, clientIP(r))
-	writeJSON(w, 200, map[string]any{"ok": true})
+	a.invalidateReportCache()
+	writeJSON(w, 200, map[string]any{"ok": true, "assigned": len(assignments)})
 	return nil
 }

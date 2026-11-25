@@ -8,6 +8,14 @@ let loading;
 let activeLocale;
 const originals = new WeakMap();
 const overrides = {
+  '申请时间（北京时间）':'Application time (Beijing)',
+  '可搜索并多选，每次最多分配 50 个链接。':'Search and select up to 50 links at a time.',
+  '保存后，所选域名在对应 GAM 账号下的历史报表和回退记录对目标渠道可见。':'Saving gives the destination channel access to historical reports and rollback records for the selected domains in their respective GAM accounts.',
+  '删除待签署申请？':'Delete unsigned application?',
+  '删除申请':'Delete application',
+  '确认后会删除此注册账号并退出已有登录。该邮箱可以重新注册。':'This deletes the account and ends its current sessions. The email address can be used to register again.',
+  '申请已签署或已移除，列表已刷新。':'The application was signed or removed. The list has been refreshed.',
+  '待签署申请已删除':'Unsigned application deleted',
   '请求量':'Requests','点击量':'Clicks',
   '每日流量趋势':'Daily traffic trend','每日投放质量趋势':'Daily delivery quality trend',
   '流量指标':'Traffic metric','质量指标':'Quality metric',

@@ -299,6 +299,47 @@ func (a *app) channelRegistrations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true, "items": items})
 }
 
+func (a *app) deletePendingChannelRegistration(w http.ResponseWriter, r *http.Request) {
+	id := pathID(r)
+	if id == 0 {
+		writeError(w, 400, "invalid_channel_registration")
+		return
+	}
+	tx, err := a.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	defer tx.Rollback()
+	// Users awaiting their first signature have no registration row yet.
+	// The same statement checks eligibility and deletes the user, so a signature
+	// committed while the admin had the list open prevents deletion.
+	var deletedID int64
+	err = tx.QueryRowContext(r.Context(), `DELETE FROM users
+		WHERE id=? AND role='channel' AND status='pending' AND channel_id IS NULL
+		AND NOT EXISTS (SELECT 1 FROM channel_registrations WHERE user_id=users.id)
+		RETURNING id`, id).Scan(&deletedID)
+	if err == sql.ErrNoRows {
+		writeError(w, 409, "channel_registration_not_deletable")
+		return
+	}
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	// The user foreign keys also remove sessions and outstanding email codes.
+	if _, err = tx.ExecContext(r.Context(), `INSERT INTO audit_logs(actor_email,action,target_type,target_id,detail,ip)
+		VALUES(?,'channel.registration_deleted','user',?,'{}',?)`, currentUser(r).Email, deletedID, clientIP(r)); err != nil {
+		serverError(w, err)
+		return
+	}
+	if err = tx.Commit(); err != nil {
+		serverError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
 func (a *app) channelRegistrationDetail(w http.ResponseWriter, r *http.Request) {
 	id := pathID(r)
 	registration, found := a.one("SELECT r.*,u.email,u.status userStatus,co.version contractVersion,co.contract_text contractText,co.contract_hash contractHash,co.signer_name signerName,co.signer_title signerTitle,co.signature_data signatureData,co.signature_hash signatureHash,co.signed_at signedAt,co.signer_ip signerIP,co.user_agent userAgent,co.counter_signer counterSigner,co.counter_signature_data counterSignatureData,co.countersigned_at countersignedAt,co.signed_pdf_sha256 signedPdfSha256 FROM channel_registrations r JOIN users u ON u.id=r.user_id LEFT JOIN channel_registration_contracts co ON co.registration_id=r.id WHERE r.id=?", id)

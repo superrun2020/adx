@@ -144,6 +144,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("PUT /api/admin/domain-share-rules/{id}", a.auth("admin", a.updateDomainShareRule))
 	mux.HandleFunc("GET /api/admin/channels", a.auth("admin", a.channels))
 	mux.HandleFunc("GET /api/admin/channel-registrations", a.auth("admin", a.channelRegistrations))
+	mux.HandleFunc("DELETE /api/admin/channel-registrations/pending/{id}", a.auth("admin", a.deletePendingChannelRegistration))
 	mux.HandleFunc("GET /api/admin/channel-registrations/{id}", a.auth("admin", a.channelRegistrationDetail))
 	mux.HandleFunc("GET /api/admin/channel-registrations/{id}/pdf", a.auth("admin", a.adminContractPDF))
 	mux.HandleFunc("POST /api/admin/channel-registrations/{id}/approve", a.auth("admin", a.approveChannelRegistration))
