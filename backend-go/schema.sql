@@ -272,3 +272,5 @@ CREATE TABLE IF NOT EXISTS contract_signature_templates (
   updated_by TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+UPDATE contract_signature_templates SET signer_title='Director', updated_at=CURRENT_TIMESTAMP
+WHERE id=1 AND signer_name='Haijun Lyu' AND signer_title='VP';

@@ -167,7 +167,7 @@ function PartyASignatureSettings({ user, onSaved }) {
     if(!signatureData)return message.error('签名文件读取失败');
     setSaving(true);
     try{
-      const result=await api('/api/admin/contract-signature',{method:'PUT',body:JSON.stringify({signerName:'Haijun Lyu',signerTitle:'VP',signatureData})});
+      const result=await api('/api/admin/contract-signature',{method:'PUT',body:JSON.stringify({signerName:'Haijun Lyu',signerTitle:'Director',signatureData})});
       setTemplate(result.item);onSaved?.(result.item);message.success('Haijun Lyu 甲方签名模板已保存');
     }catch(error){message.error('甲方签名模板保存失败：'+error.message)}
     finally{setSaving(false)}
@@ -177,7 +177,7 @@ function PartyASignatureSettings({ user, onSaved }) {
     <Modal title="JUNGLELABS LTD 甲方签名" open={open} onCancel={()=>setOpen(false)} footer={<Button onClick={()=>setOpen(false)}>关闭</Button>} width={600}>
       <Spin spinning={loading||saving}>
         <Space direction="vertical" style={{width:'100%'}} size={12}>
-          <Alert type="info" showIcon message="固定签署人：Haijun Lyu · VP" description="此模板用于 JUNGLELABS LTD 当前版合同。上传后只保存在运营后台数据库，不进入源码仓库。" />
+          <Alert type="info" showIcon message="固定签署人：Haijun Lyu · Director" description="此模板用于 JUNGLELABS LTD 当前版合同。上传后只保存在运营后台数据库，不进入源码仓库。" />
           {template?.signatureData&&<div className="party-signature-template"><img src={template.signatureData} alt="Haijun Lyu 甲方签名"/><Text type="secondary">SHA-256：{template.signatureHash}</Text></div>}
           {user?.isSuperAdmin&&<label className="party-signature-upload"><UploadOutlined/> {template?'替换签名 PNG':'上传 PDF 中提取的签名 PNG'}<input type="file" accept="image/png" onChange={saveFile}/></label>}
           {!user?.isSuperAdmin&&<Text type="secondary">仅最高管理员可以首次配置或替换固定签名。</Text>}

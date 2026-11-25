@@ -92,7 +92,7 @@ func TestChannelRegistrationRemainsPendingUntilReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.db.Exec("INSERT INTO contract_signature_templates(id,signer_name,signer_title,signature_data,signature_hash,updated_by) VALUES(1,'Haijun Lyu','VP',?,?, 'admin@example.test')", signature, companySignatureHash); err != nil {
+	if _, err := a.db.Exec("INSERT INTO contract_signature_templates(id,signer_name,signer_title,signature_data,signature_hash,updated_by) VALUES(1,'Haijun Lyu','Director',?,?, 'admin@example.test')", signature, companySignatureHash); err != nil {
 		t.Fatal(err)
 	}
 	sign := call(http.MethodPost, "/api/channel/contract/sign", map[string]any{
@@ -130,7 +130,7 @@ func TestChannelRegistrationRemainsPendingUntilReview(t *testing.T) {
 	if err := a.db.QueryRow("SELECT counter_signer,counter_signer_title,counter_signature_hash FROM channel_registration_contracts WHERE registration_id=?", registrationID).Scan(&fixedSigner, &fixedTitle, &fixedHash); err != nil {
 		t.Fatal(err)
 	}
-	if fixedSigner != "Haijun Lyu" || fixedTitle != "VP" || fixedHash != companySignatureHash {
+	if fixedSigner != "Haijun Lyu" || fixedTitle != "Director" || fixedHash != companySignatureHash {
 		t.Fatalf("wrong fixed party-A signature: signer=%q title=%q hash=%q", fixedSigner, fixedTitle, fixedHash)
 	}
 	finalPDF := call(http.MethodGet, "/api/channel/contract/pdf", nil)
@@ -219,7 +219,7 @@ func TestRegistrationApprovalActivatesOnlyMappedChannelAndStoresCounterSignature
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = a.db.Exec("INSERT INTO contract_signature_templates(id,signer_name,signer_title,signature_data,signature_hash,updated_by) VALUES(1,'Haijun Lyu','VP',?,?, 'admin@example.test')", signature, signatureHash); err != nil {
+	if _, err = a.db.Exec("INSERT INTO contract_signature_templates(id,signer_name,signer_title,signature_data,signature_hash,updated_by) VALUES(1,'Haijun Lyu','Director',?,?, 'admin@example.test')", signature, signatureHash); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = a.db.Exec("UPDATE channel_registration_contracts SET contract_hash=?,signature_data=?,signature_hash=? WHERE registration_id=1", contractTextHash("signed contract"), signature, signatureHash); err != nil {
@@ -387,7 +387,7 @@ func TestChannelDomainsIncludeOperationsLinkAssignments(t *testing.T) {
 func TestPartyASignatureTemplateIsRestrictedAndHashed(t *testing.T) {
 	a := testApp(t)
 	signature := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII="
-	payload, _ := json.Marshal(map[string]any{"signerName": "Haijun Lyu", "signerTitle": "VP", "signatureData": signature})
+	payload, _ := json.Marshal(map[string]any{"signerName": "Haijun Lyu", "signerTitle": "Director", "signatureData": signature})
 	request := httptest.NewRequest(http.MethodPut, "/api/admin/contract-signature", bytes.NewReader(payload))
 	request = request.WithContext(context.WithValue(request.Context(), userKey{}, user{ID: 2, Email: "admin@example.test", Name: "Admin", Role: "admin"}))
 	response := httptest.NewRecorder()
@@ -408,7 +408,7 @@ func TestPartyASignatureTemplateIsRestrictedAndHashed(t *testing.T) {
 		t.Fatal(err)
 	}
 	item, found := a.one("SELECT signer_name signerName,signer_title signerTitle,signature_hash signatureHash FROM contract_signature_templates WHERE id=1")
-	if !found || fieldString(item, "signerName") != "Haijun Lyu" || fieldString(item, "signerTitle") != "VP" || fieldString(item, "signatureHash") != digest {
+	if !found || fieldString(item, "signerName") != "Haijun Lyu" || fieldString(item, "signerTitle") != "Director" || fieldString(item, "signatureHash") != digest {
 		t.Fatalf("invalid saved signer template: %#v", item)
 	}
 }

@@ -403,7 +403,7 @@ func (a *app) updateContractSignatureTemplate(w http.ResponseWriter, r *http.Req
 	signerName := strings.TrimSpace(fieldString(input, "signerName"))
 	signerTitle := strings.TrimSpace(fieldString(input, "signerTitle"))
 	signatureData, signatureHash, err := parseRegistrationSignature(fieldString(input, "signatureData"))
-	if signerName != "Haijun Lyu" || signerTitle != "VP" || err != nil {
+	if signerName != "Haijun Lyu" || signerTitle != "Director" || err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_party_a_signature_template")
 		return
 	}
